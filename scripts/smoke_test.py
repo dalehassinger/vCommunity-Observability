@@ -23,6 +23,9 @@ cfg = Config(
 app = create_app(cfg, start_scheduler=False)
 core = app.state.core
 for mod in core.modules.values():
+    if mod.problems:
+        print(f"  skip {mod.name}: {mod.problems[0]}")
+        continue
     for result in core.run_module(mod):
         assert result["status"] == "ok", (mod.name, result)
 
@@ -31,13 +34,18 @@ auth = {"Authorization": "Bearer test-token"}
 assert client.get("/api/core/modules").status_code == 401, "API must require a token"
 mods = client.get("/api/core/modules", headers=auth).json()
 print("modules:", [m["name"] for m in mods["items"]])
+# Modules with runtime problems (no pwsh) stay listed but their APIs/dashboards 404.
+runnable = {m.name for m in core.modules.values() if not m.problems}
 for m in mods["items"]:
+    if m["name"] not in runnable:
+        print(f"  skip api {m['name']}: not runnable here")
+        continue
     for ep in m["endpoints"]:
         r = client.get(ep, headers={"X-API-Key": "test-token"})
         assert r.status_code == 200, (ep, r.text)
         print(f"  {ep}: {r.json()['count']} items")
 inv = "/dash/vcenter-inventory/inventory"
-pages = ["/", "/modules", "/docs", "/dash/datastore-capacity/overview", "/dash/host-health/overview",
+pages = ["/", "/modules", "/docs", "/dash/datastore-capacity/overview",
          inv, inv + "?type=vcenter&tab=hosts", inv + "?type=vcenter&tab=vms",
          inv + "?type=cluster&name=CL-01", inv + "?type=cluster&name=CL-02&tab=hosts", inv + "?type=cluster&name=CL-01&tab=vms",
          inv + "?type=host&name=esx9-01.vcrocs.local", inv + "?type=host&name=esx9-01.vcrocs.local&tab=vms",
@@ -47,11 +55,20 @@ pages = ["/", "/modules", "/docs", "/dash/datastore-capacity/overview", "/dash/h
          "/dash/github-status/status", "/dash/dbh-insights/insights", "/dash/dbh-insights/sheets",
          "/dash/dbh-insights/sheets?sheet=vhost", "/dash/dbh-insights/sheets?sheet=cluster_capacity",
          "/dash/dbh-insights/sheets?sheet=nope"]
+if "host-health" in runnable:
+    pages.insert(4, "/dash/host-health/overview")
 for page in pages:
     r = client.get(page)
-    assert r.status_code == 200 and "Query failed" not in r.text and "alert-danger" not in r.text, (page, r.status_code, r.text[:300])
+    assert r.status_code == 200 and "Query failed" not in r.text, (page, r.status_code, r.text[:300])
+    # /modules lists runtime problems (e.g. missing pwsh) as alert-danger; other pages must be clean.
+    if page != "/modules":
+        assert "alert-danger" not in r.text, (page, r.text[:300])
     print(f"  page {page}: ok")
-assert "/api/host-health/hosts" in client.get("/openapi.json").json()["paths"]
+openapi_paths = client.get("/openapi.json").json()["paths"]
+if "host-health" in runnable:
+    assert "/api/host-health/hosts" in openapi_paths
+else:
+    assert "/api/datastore-capacity/datastores" in openapi_paths
 # Module on/off: switching off hides the dashboard and API, switching on restores them.
 r = client.put("/api/core/modules/github-status/enabled?enabled=false", headers=auth)
 assert r.status_code == 200 and r.json()["enabled"] is False, r.text
@@ -70,7 +87,9 @@ assert list(core.modules)[:2] == [names[1], names[0]], list(core.modules)
 r = client.put("/api/core/modules/order", headers=auth, json=["github-status", "vcenter-inventory"])
 assert r.status_code == 200 and r.json()["order"][:2] == ["github-status", "vcenter-inventory"], r.text
 home = client.get("/").text
-assert home.index("GitHub Status") < home.index("vSphere Inventory") < home.index("Host Health"), "sidebar order"
+assert home.index("GitHub Status") < home.index("vSphere Inventory"), "sidebar order"
+if "Host Health" in home:
+    assert home.index("vSphere Inventory") < home.index("Host Health"), "sidebar order"
 assert core.storage.module_order()[:2] == ["github-status", "vcenter-inventory"]
 assert client.put("/api/core/modules/order", headers=auth, json=["nope"]).status_code == 400
 print("  module order: ok")
@@ -121,7 +140,9 @@ assert '"title": "SYN-SSD-04"' in client.get("/dash/dbh-impact/impact?target=dat
 print("  dbh-topology and dbh-impact: ok")
 # Settings page: edit a connection and intervals from the UI.
 assert client.get("/settings").status_code == 200
+assert "vCenter connections" in client.get("/settings").text
 core.cfg.connections["vcenter"]["password"] = "from-env"
+core.cfg.connections["vcenter"]["instances"][0]["password"] = "from-env"
 form = {"host": "vc2.lab.local", "user": "svc@vsphere.local", "password": "", "verify_ssl": "1", "action": "save"}
 assert "Not saved" in client.post("/settings/connections/vcenter", data=form).text, "token required"
 assert core.cfg.connections["vcenter"]["host"] == "mock"
@@ -134,19 +155,56 @@ assert core.cfg.connections["vcenter"]["password"] == "NewPass1!"
 from core.runner import _env  # noqa: E402
 env = _env(core.cfg, core.modules["dbh-insights"], core.modules["dbh-insights"].collectors[0])
 assert env["VCO_VCENTER_HOST"] == "vc2.lab.local" and env["VCO_VCENTER_PASSWORD"] == "NewPass1!"
+assert "VCO_VCENTERS" in env and "vc2.lab.local" in env["VCO_VCENTERS"]
 r = client.post("/settings/connections/vcenter", data={**form, "action": "test", "token": "test-token"})
 assert "Sample data mode" in r.text, r.text[:400]
 page = client.get("/settings").text
 assert "NewPass1!" not in page and "edited here" in page, "password must never be echoed"
-assert core.storage.connection_settings()["vcenter"]["host"] == "vc2.lab.local"
+assert core.storage.vcenter_instances()[0]["host"] == "vc2.lab.local"
 client.post("/settings/connections/vcenter/reset", data={"token": "test-token"})
-assert core.cfg.connections["vcenter"]["host"] == "mock" and not core.storage.connection_settings()
+assert core.cfg.connections["vcenter"]["host"] == "mock"
+assert not core.storage.vcenter_instances() and not core.storage.connection_settings()
 r = client.post("/settings/intervals", data={"dbh-insights:sheets": "45", "token": "test-token"})
 assert "1 changed" in r.text and core.modules["dbh-insights"].collectors[0].interval_minutes == 45
 assert core.storage.collector_intervals()[("dbh-insights", "sheets")] == 45
 r = client.post("/settings/intervals", data={"dbh-insights:sheets": "0", "token": "test-token"})
 assert "use 1 to 10080" in r.text
 print("  settings: ok")
+# Multi-vCenter: add a second instance, re-collect, assert identity columns and namespaced morefs.
+add = {"is_new": "1", "id": "lab2", "label": "Lab Two", "host": "vcsa-lab2.example.com",
+       "user": "admin@vsphere.local", "password": "Lab2Pass!", "verify_ssl": "1", "action": "save",
+       "token": "test-token"}
+assert "Not saved" in client.post("/settings/vcenters", data={k: v for k, v in add.items() if k != "token"}).text
+r = client.post("/settings/vcenters", data=add, follow_redirects=False)
+assert r.status_code == 303, r.text
+ids = [i["id"] for i in core.vcenter_list()]
+assert ids == ["default", "lab2"], ids
+env = _env(core.cfg, core.modules["datastore-capacity"], core.modules["datastore-capacity"].collectors[0])
+vcs = __import__("json").loads(env["VCO_VCENTERS"])
+assert [v["id"] for v in vcs] == ["default", "lab2"] and vcs[1]["password"] == "Lab2Pass!"
+for mod_name in ("datastore-capacity", "vcenter-inventory", "dbh-topology", "dbh-impact", "dbh-insights"):
+    for result in core.run_module(core.modules[mod_name]):
+        assert result["status"] == "ok", (mod_name, result)
+ds = core.storage.query("datastore-capacity", "SELECT vcenter, COUNT(*) AS n FROM datastores GROUP BY vcenter ORDER BY vcenter")
+assert {r["vcenter"]: r["n"] for r in ds} == {"default": 5, "lab2": 5}, ds
+hosts = core.storage.query("vcenter-inventory", "SELECT vcenter, COUNT(*) AS n FROM hosts GROUP BY vcenter ORDER BY vcenter")
+assert {r["vcenter"]: r["n"] for r in hosts}["lab2"] >= 1
+fab = core.storage.query("dbh-topology", "SELECT moref FROM fabric_hosts WHERE vcenter = 'lab2' LIMIT 1")
+assert fab and fab[0]["moref"].startswith("lab2:"), fab
+imp = core.storage.query("dbh-impact", "SELECT target FROM impact WHERE vcenter = 'default' AND name = 'esx9-01.vcrocs.local'")
+assert imp and imp[0]["target"] == "host:default:host-11", imp
+sheets = core.storage.query("dbh-insights", "SELECT vcenter, COUNT(*) AS n FROM sheets GROUP BY vcenter ORDER BY vcenter")
+assert {r["vcenter"]: r["n"] for r in sheets} == {"default": 28, "lab2": 28}, sheets
+# Per-module selection: only lab2.
+core.modules["datastore-capacity"].settings["vcenters"] = ["lab2"]
+env = _env(core.cfg, core.modules["datastore-capacity"], core.modules["datastore-capacity"].collectors[0])
+assert [v["id"] for v in __import__("json").loads(env["VCO_VCENTERS"])] == ["lab2"]
+core.modules["datastore-capacity"].settings.pop("vcenters", None)
+assert "lab2: removed" in client.post("/settings/vcenters/lab2/delete", data={"token": "test-token"}).text
+assert [i["id"] for i in core.vcenter_list()] == ["default"]
+client.post("/settings/vcenters/reset", data={"token": "test-token"})
+assert core.cfg.connections["vcenter"]["host"] == "mock" and not core.storage.vcenter_instances()
+print("  multi-vcenter: ok")
 # Scheduled export: one schedule, shown in the form; saving again updates it.
 os.environ["VCO_EXPORT_DIR"] = str(cfg.data_dir / "exports")
 sched = {"export": "dbh-insights:xlsx", "folder": "dbh", "frequency": "weekly", "weekday": "tue",

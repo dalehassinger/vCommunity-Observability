@@ -88,9 +88,11 @@ def fabric(tables: dict[str, list[dict]]) -> dict[str, Any]:
         if ds and vm:
             ds["vms"].append(vm)
             vm["datastores"].append(ds)
-    server = (tables.get("fabric_source") or [{}])[0].get("server") or "vCenter"
-    return {"server": server, "hosts": sorted(hosts.values(), key=by_name), "clusters": clusters,
-            "datastores": sorted(datastores.values(), key=by_name)}
+    sources = tables.get("fabric_source") or [{}]
+    server = sources[0].get("server") or "vCenter"
+    servers = {r.get("vcenter") or "": r.get("server") or server for r in sources}
+    return {"server": server, "servers": servers, "hosts": sorted(hosts.values(), key=by_name),
+            "clusters": clusters, "datastores": sorted(datastores.values(), key=by_name)}
 
 
 # --------------------------------------------------------------------------- the two questions
@@ -167,7 +169,8 @@ def host_impact(f: dict, host: dict) -> dict:
 
     in_cluster = bool(cluster)
     return {
-        "kind": "host", "moref": host["moref"], "server": f["server"], "title": host["name"],
+        "kind": "host", "moref": host["moref"], "vcenter": host.get("vcenter") or "",
+        "server": f.get("servers", {}).get(host.get("vcenter") or "", f["server"]), "title": host["name"],
         "subtitle": f"Host in {cluster['name']}" if cluster else "Standalone host",
         "severity": severity, "headline": headline, "detail": detail,
         "status": f"{plural(len(vms), 'VM')} registered · {n} running · {size(need_mem)} to restart",
@@ -231,7 +234,8 @@ def datastore_impact(f: dict, ds: dict) -> dict:
                                for h in sorted(ds["hosts"], key=by_name)]})
     accessible = ds["accessible"]
     return {
-        "kind": "datastore", "moref": ds["moref"], "server": f["server"], "title": ds["name"],
+        "kind": "datastore", "moref": ds["moref"], "vcenter": ds.get("vcenter") or "",
+        "server": f.get("servers", {}).get(ds.get("vcenter") or "", f["server"]), "title": ds["name"],
         "subtitle": f"{ds['kind'] or 'Datastore'} · mounted by {plural(len(ds['hosts']), 'host')}",
         "severity": severity, "headline": headline, "detail": detail,
         "status": f"{plural(len(vms), 'VM')} stored here · {n} running · "
@@ -274,8 +278,14 @@ def impact_rows(tables: dict[str, list[dict]]) -> list[dict]:
     rows = []
     for a in answers:
         m = a["metrics"]
+        # Prefer the fabric object's vcenter stamp; fall back to a multi-VC moref prefix.
+        vc = a.get("vcenter")
+        if not vc:
+            moref = a["moref"] or ""
+            vc = moref.split(":", 1)[0] if ":" in moref and not moref.startswith(("host-", "datastore-", "vm-", "domain-")) else ""
         rows.append({
-            "target": f"{a['kind']}:{a['moref']}", "kind": a["kind"], "moref": a["moref"], "name": a["title"],
+            "vcenter": vc, "target": f"{a['kind']}:{a['moref']}", "kind": a["kind"], "moref": a["moref"],
+            "name": a["title"],
             "subtitle": a["subtitle"], "severity": a["severity"], "severity_rank": SEVERITY_RANK[a["severity"]],
             "headline": a["headline"], "detail": a["detail"], "status": a["status"],
             "vms_affected": m["vms_affected"], "vms_running": m["vms_running"],

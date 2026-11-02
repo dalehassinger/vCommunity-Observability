@@ -3,6 +3,9 @@
 Contract for a collector script:
   * Connection details arrive as environment variables, e.g.
     VCO_VCENTER_HOST / VCO_VCENTER_USER / VCO_VCENTER_PASSWORD / VCO_VCENTER_VERIFY_SSL.
+  * When connections includes vcenter, VCO_VCENTERS is also set to a JSON array of
+    every selected instance ({id, label, host, user, password, verify_ssl}). Legacy
+    VCO_VCENTER_* mirrors the first instance.
   * VCO_MOCK=1 asks the script to emit sample data instead of connecting.
   * VCO_SETTINGS holds the module's settings as JSON.
   * The script writes ONE JSON object {"<table>": [ {row}, ... ], ...} to the
@@ -24,6 +27,7 @@ from pathlib import Path
 from .config import Config
 from .modules import Collector, Export, Module
 from .storage import Storage, utcnow
+from .vcenters import normalize_vcenter, public_instance, selected_instances
 
 log = logging.getLogger("vco.runner")
 
@@ -41,7 +45,20 @@ def _env(cfg: Config, mod: Module, c: Collector) -> dict[str, str]:
     env["VCO_SETTINGS"] = json.dumps(mod.settings)
     # Only the connections the collector asked for are passed in.
     for conn_name in c.connections:
-        for key, value in (cfg.connections.get(conn_name) or {}).items():
+        conn = cfg.connections.get(conn_name) or {}
+        if conn_name == "vcenter":
+            instances = selected_instances(normalize_vcenter(conn), mod.settings)
+            pubs = [public_instance(i) for i in instances]
+            env["VCO_VCENTERS"] = json.dumps(pubs)
+            if pubs:
+                for key, value in pubs[0].items():
+                    if key in ("id", "label"):
+                        continue
+                    env[f"VCO_VCENTER_{key.upper()}"] = str(value)
+            continue
+        for key, value in conn.items():
+            if key == "instances" or isinstance(value, (dict, list)):
+                continue
             env[f"VCO_{conn_name.upper()}_{key.upper()}"] = str(value)
     return env
 

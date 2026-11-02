@@ -29,6 +29,7 @@ from . import export_schedule as xs
 from .modules import Module, discover
 from .runner import run_collector, run_export
 from .storage import Storage, utcnow
+from .vcenters import mirror_primary, normalize_vcenter, valid_id
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("vco")
@@ -78,11 +79,29 @@ class Core:
         self.storage = Storage(cfg.data_dir)
         self.modules: dict[str, Module] = discover(cfg.modules_dirs, cfg.modules)
         self.scheduler = BackgroundScheduler(timezone="UTC")
+        # Normalize vcenter to always expose instances[] (file may still be flat).
+        if "vcenter" in cfg.connections:
+            cfg.connections["vcenter"] = mirror_primary(normalize_vcenter(cfg.connections["vcenter"]))
         # Connection details as config.yaml/.env give them, kept for "Reset".
-        self.file_connections = {k: dict(v) for k, v in cfg.connections.items()}
+        self.file_connections = {
+            k: ({**v, "instances": [dict(i) for i in v["instances"]]} if isinstance(v.get("instances"), list) else dict(v))
+            for k, v in cfg.connections.items()
+        }
         for name, values in self.storage.connection_settings().items():
-            if name in cfg.connections:
+            if name in cfg.connections and name != "vcenter":
                 cfg.connections[name].update(values)
+        # UI-managed vCenter list wins over config.yaml when any row was saved.
+        ui_vcs = self.storage.vcenter_instances()
+        if ui_vcs:
+            cfg.connections["vcenter"] = mirror_primary([
+                {**row, "enabled": bool(row.get("enabled", 1))} for row in ui_vcs
+            ])
+        elif "vcenter" in cfg.connections:
+            # Flat field overlays from the old single-card Settings form still apply.
+            saved_vc = self.storage.connection_settings().get("vcenter") or {}
+            if saved_vc:
+                flat = {**{k: v for k, v in cfg.connections["vcenter"].items() if k != "instances"}, **saved_vc}
+                cfg.connections["vcenter"] = mirror_primary(normalize_vcenter(flat))
         intervals = self.storage.collector_intervals()
         # Precedence: module.yaml default < config.yaml < switch set in the UI/API.
         saved = self.storage.module_states()
@@ -148,8 +167,52 @@ class Core:
 
     def reset_connection(self, name: str) -> None:
         self.storage.reset_connection_settings(name)
-        self.cfg.connections[name] = dict(self.file_connections.get(name, {}))
+        raw = self.file_connections.get(name, {})
+        self.cfg.connections[name] = (
+            {**raw, "instances": [dict(i) for i in raw["instances"]]}
+            if isinstance(raw.get("instances"), list) else dict(raw)
+        )
         log.info("connection %s reset to config.yaml", name)
+
+    def apply_vcenters(self, instances: list[dict[str, Any]]) -> None:
+        self.storage.set_vcenter_instances(instances)
+        self.cfg.connections["vcenter"] = mirror_primary(instances)
+        log.info("vCenter instances updated from the UI (%s)", ", ".join(i["id"] for i in instances))
+
+    def upsert_vcenter(self, inst: dict[str, Any]) -> None:
+        self.storage.upsert_vcenter_instance(inst)
+        self.cfg.connections["vcenter"] = mirror_primary([
+            {**row, "enabled": bool(row.get("enabled", 1))} for row in self.storage.vcenter_instances()
+        ])
+        log.info("vCenter instance %s saved", inst["id"])
+
+    def delete_vcenter(self, vid: str) -> None:
+        self.storage.delete_vcenter_instance(vid)
+        rows = self.storage.vcenter_instances()
+        if rows:
+            self.cfg.connections["vcenter"] = mirror_primary([
+                {**row, "enabled": bool(row.get("enabled", 1))} for row in rows
+            ])
+        else:
+            raw = self.file_connections.get("vcenter", {})
+            self.cfg.connections["vcenter"] = (
+                {**raw, "instances": [dict(i) for i in raw["instances"]]}
+                if isinstance(raw.get("instances"), list) else mirror_primary(normalize_vcenter(raw))
+            )
+        log.info("vCenter instance %s deleted", vid)
+
+    def reset_vcenters(self) -> None:
+        self.storage.reset_vcenter_instances()
+        self.storage.reset_connection_settings("vcenter")
+        raw = self.file_connections.get("vcenter", {})
+        self.cfg.connections["vcenter"] = (
+            {**raw, "instances": [dict(i) for i in raw["instances"]]}
+            if isinstance(raw.get("instances"), list) else mirror_primary(normalize_vcenter(raw))
+        )
+        log.info("vCenter instances reset to config.yaml")
+
+    def vcenter_list(self) -> list[dict[str, Any]]:
+        return normalize_vcenter(self.cfg.connections.get("vcenter") or {})
 
     def set_interval(self, mod: Module, c, minutes: int) -> None:
         if minutes == c.interval_minutes:
@@ -480,11 +543,6 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
         return {"export": "dbh-insights:xlsx", "folder": "dbh-insights", "frequency": "weekly", "weekday": "mon",
                 "monthday": "1", "at_time": "06:00", "timezone": xs.default_timezone(), "keep": "12"}
 
-    @app.get("/settings", response_class=HTMLResponse, include_in_schema=False)
-    def settings_page(request: Request):
-        return render_settings(request, request.query_params.get("msg"), request.query_params.get("ok") != "0",
-                               request.query_params.get("where", ""), verified=request.query_params.get("verified") == "1")
-
     def schedule_view(x: dict[str, Any]) -> dict[str, Any]:
         import json
         mod = core.modules.get(x["module"])
@@ -495,10 +553,13 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
                 "param_text": ", ".join(f"{k} {v}" for k, v in params.items())}
 
     def render_settings(request: Request, msg: str | None, ok: bool, where: str,
-                        export_form: dict[str, Any] | None = None, verified: bool = False):
+                        export_form: dict[str, Any] | None = None, verified: bool = False,
+                        edit_vcenter: str | None = None):
         saved = core.storage.connection_settings()
         conns = []
         for name, conn in core.cfg.connections.items():
+            if name == "vcenter":
+                continue
             fields = fields_for(core.file_connections.get(name, conn))
             conns.append({
                 "name": name, "values": conn, "fields": fields, "labels": LABELS,
@@ -506,8 +567,26 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
                 "verify": as_bool(conn.get("verify_ssl", False)),
                 "used_by": [m.name for m in core.modules.values() if any(name in c.connections for c in m.collectors)],
             })
+        vcenters = []
+        for inst in core.vcenter_list():
+            vcenters.append({
+                **inst,
+                "password_set": bool(inst.get("password")),
+                "verify": as_bool(inst.get("verify_ssl", False)),
+                "enabled": bool(inst.get("enabled", True)),
+            })
+        vc_used = [m.name for m in core.modules.values()
+                   if any("vcenter" in c.connections for c in m.collectors)]
+        editing = None
+        if edit_vcenter == "__new__":
+            editing = {"id": "", "label": "", "host": "", "user": "", "verify": False,
+                       "enabled": True, "password_set": False, "is_new": True}
+        elif edit_vcenter:
+            editing = next((dict(v, is_new=False) for v in vcenters if v["id"] == edit_vcenter), None)
         return templates.TemplateResponse(request, "settings.html", {
-            "nav": nav(), "connections": conns, "modules": list(core.modules.values()), "mock": core.cfg.mock,
+            "nav": nav(), "connections": conns, "vcenters": vcenters, "vcenter_used_by": vc_used,
+            "vcenters_from_ui": bool(core.storage.vcenter_instances()) or bool(saved.get("vcenter")),
+            "edit_vcenter": editing, "modules": list(core.modules.values()), "mock": core.cfg.mock,
             "auth": bool(core.cfg.api_tokens), "msg": msg, "ok": ok, "where": where, "active": "/settings",
             "xf": export_form or export_form_defaults(), "verified": verified,
             "intervals_from_ui": core.storage.collector_intervals(),
@@ -518,8 +597,37 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
             "default_tz": xs.default_timezone(), "exports_root": str(xs.exports_root()),
         })
 
+    @app.get("/settings", response_class=HTMLResponse, include_in_schema=False)
+    def settings_page(request: Request):
+        return render_settings(
+            request, request.query_params.get("msg"), request.query_params.get("ok") != "0",
+            request.query_params.get("where", ""), verified=request.query_params.get("verified") == "1",
+            edit_vcenter=request.query_params.get("edit_vcenter"),
+        )
+
     @app.post("/settings/connections/{name}", include_in_schema=False)
     async def save_connection(name: str, request: Request):
+        if name == "vcenter":
+            # Legacy single-card save: update/create the primary (first) instance.
+            form = await read_form(request)
+            if not admin_ok(form.get("token", "")):
+                return denied("vcenters")
+            current = core.vcenter_list()
+            primary = dict(current[0]) if current else {"id": "default", "label": "vCenter", "enabled": True}
+            primary["host"] = str(form.get("host", "")).strip()
+            primary["user"] = str(form.get("user", "")).strip()
+            primary["verify_ssl"] = "true" if form.get("verify_ssl") else "false"
+            if form.get("password"):
+                primary["password"] = str(form["password"])
+            if not primary.get("label"):
+                primary["label"] = primary["host"] or primary["id"]
+            # Prefer the multi-instance table so a later Add works cleanly.
+            others = [dict(i) for i in current[1:]]
+            core.apply_vcenters([primary, *others])
+            if form.get("action") == "test":
+                ok, message = test_connection("vcenter", primary, core.cfg.mock)
+                return settings_redirect(f"vcenter: saved. Test: {message}", ok, "#vcenters")
+            return settings_redirect("vcenter: saved. Collectors use it from their next run.", True, "#vcenters")
         if name not in core.cfg.connections:
             raise HTTPException(404, "Unknown connection")
         form = await read_form(request)
@@ -542,6 +650,12 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
 
     @app.post("/settings/connections/{name}/reset", include_in_schema=False)
     async def reset_connection(name: str, request: Request):
+        if name == "vcenter":
+            form = await read_form(request)
+            if not admin_ok(form.get("token", "")):
+                return denied("vcenters")
+            core.reset_vcenters()
+            return settings_redirect("vCenter: back to the values in config.yaml and .env.", True, "#vcenters")
         if name not in core.cfg.connections:
             raise HTTPException(404, "Unknown connection")
         form = await read_form(request)
@@ -549,6 +663,71 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
             return denied(name)
         core.reset_connection(name)
         return settings_redirect(f"{name}: back to the values in config.yaml and .env.", True, f"#{name}")
+
+    @app.post("/settings/vcenters", include_in_schema=False)
+    async def save_vcenter(request: Request):
+        form = await read_form(request)
+        if not admin_ok(form.get("token", "")):
+            return denied("vcenters")
+        is_new = form.get("is_new") == "1"
+        vid = str(form.get("id", "")).strip()
+        if not valid_id(vid):
+            return settings_redirect(
+                "vCenter id must start with a letter and use only letters, digits, _ or - (max 32).",
+                False, "#vcenters",
+            )
+        existing_ids = {i["id"] for i in core.vcenter_list()}
+        if is_new and vid in existing_ids:
+            return settings_redirect(f"vCenter id '{vid}' already exists.", False, "#vcenters")
+        if not is_new and vid not in existing_ids:
+            return settings_redirect(f"Unknown vCenter id '{vid}'.", False, "#vcenters")
+        inst = {
+            "id": vid,
+            "label": str(form.get("label", "")).strip() or str(form.get("host", "")).strip() or vid,
+            "host": str(form.get("host", "")).strip(),
+            "user": str(form.get("user", "")).strip(),
+            "verify_ssl": "true" if form.get("verify_ssl") else "false",
+            "enabled": form.get("enabled") != "0",
+        }
+        if form.get("password"):
+            inst["password"] = str(form["password"])
+        elif is_new:
+            inst["password"] = ""
+        # First write into the UI table: seed from current list so file instances are preserved.
+        if not core.storage.vcenter_instances():
+            seed = [dict(i) for i in core.vcenter_list() if i["id"] != vid]
+            if seed:
+                core.storage.set_vcenter_instances(seed)
+        core.upsert_vcenter(inst)
+        if form.get("action") == "test":
+            saved = next(i for i in core.vcenter_list() if i["id"] == vid)
+            ok, message = test_connection("vcenter", saved, core.cfg.mock)
+            return settings_redirect(f"{vid}: saved. Test: {message}", ok, "#vcenters")
+        return settings_redirect(f"{vid}: saved. Collectors use it from their next run.", True, "#vcenters")
+
+    @app.post("/settings/vcenters/{vid}/delete", include_in_schema=False)
+    async def delete_vcenter(vid: str, request: Request):
+        form = await read_form(request)
+        if not admin_ok(form.get("token", "")):
+            return denied("vcenters")
+        if len(core.vcenter_list()) <= 1:
+            return settings_redirect("Keep at least one vCenter connection.", False, "#vcenters")
+        if vid not in {i["id"] for i in core.vcenter_list()}:
+            return settings_redirect(f"Unknown vCenter id '{vid}'.", False, "#vcenters")
+        if not core.storage.vcenter_instances():
+            seed = [dict(i) for i in core.vcenter_list() if i["id"] != vid]
+            core.apply_vcenters(seed)
+        else:
+            core.delete_vcenter(vid)
+        return settings_redirect(f"{vid}: removed.", True, "#vcenters")
+
+    @app.post("/settings/vcenters/reset", include_in_schema=False)
+    async def reset_vcenters(request: Request):
+        form = await read_form(request)
+        if not admin_ok(form.get("token", "")):
+            return denied("vcenters")
+        core.reset_vcenters()
+        return settings_redirect("vCenter: back to the values in config.yaml and .env.", True, "#vcenters")
 
     @app.post("/settings/intervals", include_in_schema=False)
     async def save_intervals(request: Request):

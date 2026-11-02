@@ -12,6 +12,8 @@ from typing import Any
 
 import yaml
 
+from .vcenters import mirror_primary, normalize_vcenter
+
 log = logging.getLogger("vco.config")
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -20,6 +22,9 @@ def _resolve_env(section: dict[str, Any]) -> dict[str, Any]:
     """Turn {"password_env": "VCO_X"} into {"password": os.environ["VCO_X"]}."""
     out: dict[str, Any] = {}
     for key, value in (section or {}).items():
+        if key == "instances" and isinstance(value, list):
+            out[key] = [_resolve_env(item) if isinstance(item, dict) else item for item in value]
+            continue
         if key.endswith("_env") and isinstance(value, str):
             name = key[: -len("_env")]
             if not ENV_NAME.match(value):
@@ -56,6 +61,8 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     connections = {
         name: _resolve_env(conn) for name, conn in (raw.get("connections") or {}).items()
     }
+    if "vcenter" in connections:
+        connections["vcenter"] = mirror_primary(normalize_vcenter(connections["vcenter"]))
 
     tokens: list[str] = []
     for entry in (raw.get("api") or {}).get("tokens", []) or []:

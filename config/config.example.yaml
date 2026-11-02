@@ -15,11 +15,25 @@ modules_dirs:
 mock: false               # true (or VCO_MOCK=1) = built-in sample data, no vCenter needed
 
 connections:
+  # One vCenter (flat form). Or use instances: to list several; Settings can also add more.
   vcenter:
     host: vcsa91.vcrocs.local
     user: administrator@vcrocs.local
     password_env: VCO_VCENTER_PASSWORD
     verify_ssl: false
+    # instances:
+    #   - id: wld
+    #     label: Workload
+    #     host: vcsa-wld.example.com
+    #     user: administrator@vsphere.local
+    #     password_env: VCO_VCENTER_WLD_PASSWORD
+    #     verify_ssl: false
+    #   - id: mgmt
+    #     label: Management
+    #     host: vcsa-mgmt.example.com
+    #     user: administrator@vsphere.local
+    #     password_env: VCO_VCENTER_MGMT_PASSWORD
+    #     verify_ssl: false
   vcfops:                 # VCF Operations, for modules that use its REST API
     host: vcfops.vcrocs.local
     user: admin
@@ -44,15 +58,16 @@ modules:                  # per-module defaults; the on/off switch on the Module
     enabled: true
     settings:
       url: https://www.githubstatus.com   # any Atlassian Statuspage site works
-  dbh-insights:           # DBH Insights sheets (vInfo, vHost, ...) and XLSX export; uses the vcenter connection
+  dbh-insights:           # DBH Insights sheets (vInfo, vHost, ...) and XLSX export; uses every vCenter (or settings.vcenters)
     enabled: true
     settings:
-      vcenter_name: vcsa91.vcrocs.local   # shown in the "VI SDK Server" column
-  dbh-topology:           # DBH Topology map (hosts by cluster, datastores, mounts); uses the vcenter connection
+      vcenter_name: vcsa91.vcrocs.local   # shown in the "VI SDK Server" column when only one vCenter is selected
+      # vcenters: [wld, mgmt]            # optional: limit to these connection ids; omit = all
+  dbh-topology:           # DBH Topology map (hosts by cluster, datastores, mounts); uses every vCenter (or settings.vcenters)
     enabled: true
     settings:
       vcenter_name: vcsa91.vcrocs.local
-  dbh-impact:             # DBH Impact: what stops if a host or datastore fails; uses the vcenter connection
+  dbh-impact:             # DBH Impact: what stops if a host or datastore fails; uses every vCenter (or settings.vcenters)
     enabled: true
     settings:
       vcenter_name: vcsa91.vcrocs.local

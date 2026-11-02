@@ -16,6 +16,7 @@ tables:
   hosts:
     mode: snapshot
     columns:
+      vcenter: text
       name: text
       cluster: text
       connection_state: text
