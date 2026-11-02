@@ -1,0 +1,271 @@
+{% extends "base.html" %}
+{% block title %}Settings · vCommunity-Observability{% endblock %}
+{% block head %}
+<style>
+  .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; margin-bottom: 16px; }
+  .form-row { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 10px; align-items: center; margin-bottom: 10px; }
+  .form-row label { font-size: 13px; color: var(--subtle); font-weight: 600; }
+  .form-row input[type=text], .form-row input[type=password], .form-row input[type=number], .form-row input[type=time], .token-row input {
+    font: inherit; font-size: 13px; padding: 6px 9px; border: 1px solid var(--border); border-radius: 3px;
+    background: var(--surface); color: var(--text); width: 100%; box-sizing: border-box; }
+  .form-row input:focus, .token-row input:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+  .form-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; align-items: center; }
+  .hint { font-size: 12px; color: var(--subtle); margin-top: 3px; }
+  .src { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 3px; background: var(--info-bg); color: var(--primary); margin-left: 6px; }
+  .token-row { display: flex; gap: 10px; align-items: center; margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border); }
+  .token-row label { font-size: 13px; font-weight: 600; color: var(--subtle); white-space: nowrap; }
+  .save-ok { display: flex; gap: 12px; align-items: flex-start; background: var(--ok-bg); border: 1px solid var(--ok); border-left-width: 4px; border-radius: 3px; padding: 12px 14px; margin-bottom: 14px; animation: save-ok-in .35s ease-out; }
+  .save-ok-icon { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--ok); color: #fff; display: grid; place-items: center; font-weight: 700; }
+  .save-ok-title { font-weight: 700; color: var(--ok); margin-bottom: 2px; }
+  .save-ok-checks { margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--subtle); }
+  .save-ok-checks code { font-size: 12px; overflow-wrap: anywhere; }
+  @keyframes save-ok-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+  .alert-ok { background: var(--ok-bg); color: var(--ok); border: 1px solid var(--ok); padding: 10px 14px; border-radius: 3px; margin-bottom: 14px; }
+  table.intervals input { width: 90px; text-align: right; font: inherit; font-size: 13px; padding: 4px 7px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); color: var(--text); }
+  .reset-form { display: inline; margin: 0; }
+  .form-row select { font: inherit; font-size: 13px; padding: 6px 9px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); color: var(--text); max-width: 100%; }
+  #exports .form-row { max-width: 720px; }
+  .sched-status { display: grid; grid-template-columns: 1.4fr 1fr 1.6fr auto; gap: 16px; align-items: start; padding: 12px 14px; margin-bottom: 18px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; }
+  .sched-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .sched-folder { font-size: 12px; overflow-wrap: anywhere; }
+  .sched-form.is-editing { border: 1px solid var(--primary); border-radius: 4px; padding: 14px; margin-bottom: 4px; }
+  .sched-form-title { margin: 0 0 12px; font-size: 14px; }
+  @media (max-width: 900px) { .sched-status { grid-template-columns: 1fr; } }
+</style>
+{% endblock %}
+{% block body %}
+<div class="page-head">
+  <div>
+    <h1>Settings</h1>
+    <p class="subtle">Changes here are saved in <code>data/_core.db</code> and win over <code>config.yaml</code> and <code>.env</code>. Collectors pick them up on their next run, no restart needed.</p>
+  </div>
+</div>
+
+{% if msg and not where %}<div class="{{ 'alert-ok' if ok else 'alert alert-danger' }}">{{ msg }}</div>{% endif %}
+{% if mock %}<div class="alert alert-danger">Sample data mode is on (mock: true or VCO_MOCK=1), so collectors don't connect to anything. Turn it off to use these connections.</div>{% endif %}
+
+{% macro card_msg(name) %}{% if msg and where == name %}<div class="{{ 'alert-ok' if ok else 'alert alert-danger' }}">{{ msg }}</div>{% endif %}{% endmacro %}
+{% macro token_field() %}
+  {% if auth %}<div class="token-row"><label>API token</label><input type="password" name="token" autocomplete="off" placeholder="Required to save: the token from .env (VCO_API_TOKEN_...)"></div>{% endif %}
+{% endmacro %}
+
+<div class="settings-grid">
+{% for c in connections %}
+  <section class="card" id="{{ c.name }}">
+    <div class="card-header">{{ 'vCenter' if c.name == 'vcenter' else 'VCF Operations' if c.name == 'vcfops' else c.name }} connection
+      {% if c.from_ui %}<span class="src">edited here</span>{% endif %}</div>
+    <div class="card-block">
+      {{ card_msg(c.name) }}
+      <form method="post" action="/settings/connections/{{ c.name }}" autocomplete="off">
+        {% for f in c.fields %}
+        <div class="form-row">
+          <label for="{{ c.name }}-{{ f }}">{{ c.labels.get(f, f|replace('_', ' ')|capitalize) }}</label>
+          <div>
+          {% if f == 'password' %}
+            <input type="password" id="{{ c.name }}-{{ f }}" name="password" autocomplete="new-password" placeholder="{{ 'Saved. Leave blank to keep it' if c.password_set else 'Not set' }}">
+          {% elif f == 'verify_ssl' %}
+            <label class="switch" style="font-weight:400"><input type="checkbox" id="{{ c.name }}-{{ f }}" name="verify_ssl" value="1" {{ 'checked' if c.verify }}><span></span></label>
+            <div class="hint">Leave off for self-signed lab certificates.</div>
+          {% else %}
+            <input type="text" id="{{ c.name }}-{{ f }}" name="{{ f }}" value="{{ c['values'].get(f, '') }}">
+          {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+        <div class="hint">Used by: {{ c.used_by|join(', ') if c.used_by else 'no module yet' }}</div>
+        {{ token_field() }}
+        <div class="form-actions">
+          <button class="btn btn-primary" name="action" value="save">Save</button>
+          <button class="btn btn-outline" name="action" value="test">Save and test</button>
+        </div>
+      </form>
+      {% if c.from_ui %}
+      <form class="reset-form" method="post" action="/settings/connections/{{ c.name }}/reset" style="display:block;margin-top:10px">
+        {% if auth %}<input type="hidden" name="token" class="token-copy">{% endif %}
+        <button class="btn btn-outline" style="height:26px;font-size:11px">Reset to config.yaml</button>
+        <span class="hint">Edited here: {{ c.from_ui|join(', ') }}</span>
+      </form>
+      {% endif %}
+    </div>
+  </section>
+{% endfor %}
+</div>
+
+<section class="card" id="intervals">
+  <div class="card-header">How often data is collected</div>
+  <div class="card-block">
+    {{ card_msg('intervals') }}
+    <form method="post" action="/settings/intervals">
+      <div class="table-wrap"><table class="datagrid intervals">
+        <thead><tr><th>Module</th><th>Collector</th><th>Status</th><th class="num">Every (minutes)</th><th>Default</th></tr></thead>
+        <tbody>
+        {% for m in modules %}{% for col in m.collectors %}
+          <tr><td>{{ m.name }}</td><td>{{ col.name }}</td>
+            <td>{% if m.available %}<span class="label label-ok">on</span>{% else %}<span class="label">off</span>{% endif %}</td>
+            <td class="num"><input type="number" min="1" max="10080" name="{{ m.name }}:{{ col.name }}" value="{{ col.interval_minutes }}"></td>
+            <td class="subtle">{{ 'set here' if (m.name, col.name) in intervals_from_ui else 'from module.yaml' }}</td></tr>
+        {% endfor %}{% endfor %}
+        </tbody>
+      </table></div>
+      <div class="hint">1 to 10080 minutes. A new interval starts counting from the moment you save.</div>
+      {{ token_field() }}
+      <div class="form-actions"><button class="btn btn-primary">Save intervals</button></div>
+    </form>
+  </div>
+</section>
+
+<section class="card" id="exports" style="margin-top:16px">
+  <div class="card-header">Scheduled export</div>
+  <div class="card-block">
+    {% set cur = schedules[0] if schedules else none %}
+    {% if verified and ok and where == 'exports' and cur %}
+    <div class="save-ok" role="status" id="save-ok">
+      <div class="save-ok-icon" aria-hidden="true">✓</div>
+      <div>
+        <div class="save-ok-title">Schedule saved and verified</div>
+        <div>{{ msg }}</div>
+        <ul class="save-ok-checks">
+          <li>✓ Read back from the database: every value matches what you entered</li>
+          <li>✓ Folder is writable: <code>{{ cur.folder_path }}</code></li>
+          {% if cur.enabled %}<li>✓ Scheduler has it. Next run <b>{{ cur.next }}</b></li>{% else %}<li>Schedule is paused, so it won't run until you resume it</li>{% endif %}
+        </ul>
+      </div>
+    </div>
+    {% else %}{{ card_msg('exports') }}{% endif %}
+    {% set editing = (not cur) or editing_export %}
+    {% if cur %}
+    <div class="sched-status">
+      <div><div class="hint">Schedule</div><b>{{ cur.when }}</b>{% if not cur.enabled %} <span class="label">paused</span>{% endif %}
+        <div class="hint" style="margin-top:6px">Export</div><b>{{ cur.module }}: {{ cur.export_title }}</b>{% if cur.param_text %} <span class="subtle">({{ cur.param_text }})</span>{% endif %}</div>
+      <div><div class="hint">Next run</div><b>{{ cur.next or '—' }}</b>
+        <div class="hint" style="margin-top:6px">Folder</div><code class="sched-folder" title="{{ cur.folder_path }}">exports/{{ cur.folder if cur.folder != '.' else '' }}</code><div class="hint">keeps newest {{ cur.keep or 'all' }}</div></div>
+      <div><div class="hint">Last run</div>{% if cur.last_run %}<span class="label label-{{ 'ok' if cur.last_status == 'ok' else 'crit' }}">{{ cur.last_status }}</span> {{ cur.last_run }} UTC<div class="hint">{{ cur.last_message }}</div>{% else %}<b>never</b>{% endif %}</div>
+      <div class="sched-actions">
+        <button type="button" class="btn btn-primary" id="x-edit" style="height:26px;font-size:11px" {{ 'hidden' if editing }}>Edit</button>
+        {% for action, label in [('run', 'Run now'), ('toggle', 'Resume' if not cur.enabled else 'Pause'), ('delete', 'Remove')] %}
+        <form class="row-form" method="post" action="/settings/exports/{{ cur.id }}/{{ action }}" style="margin:0" {% if action == 'delete' %}onsubmit="return confirm('Remove the schedule? Files already written are kept.')"{% endif %}>
+          <input type="hidden" name="token" class="token-copy"><button class="btn btn-outline" style="height:26px;font-size:11px">{{ label }}</button></form>
+        {% endfor %}
+      </div>
+    </div>
+    {% else %}
+    <p class="subtle" style="margin-top:0">No export is scheduled yet. Fill in the form and click Create schedule.</p>
+    {% endif %}
+
+    <form method="post" action="/settings/exports" id="add-export" class="sched-form{{ ' is-editing' if cur }}" {{ 'hidden' if not editing }}>
+      {% if cur %}<h4 class="sched-form-title">Edit schedule</h4>{% endif %}
+      <div class="form-row"><label for="x-export">Export</label>
+        <select id="x-export" name="export">{% for m, e in export_choices %}{% set v = m.name ~ ':' ~ e.name %}<option value="{{ v }}" data-params="{{ e.params|join(',') }}" {{ 'selected' if v == xf.export }}>{{ m.name }}: {{ e.title }}</option>{% endfor %}</select></div>
+      {% set all_params = [] %}{% for m, e in export_choices %}{% for p in e.params %}{% if p not in all_params %}{% set _ = all_params.append(p) %}{% endif %}{% endfor %}{% endfor %}
+      {% for p in all_params %}
+      <div class="form-row param-row" data-param="{{ p }}"><label for="x-param-{{ p }}">{{ p|capitalize }}</label>
+        <div><input type="text" id="x-param-{{ p }}" name="param_{{ p }}" value="{{ xf.get('param_' ~ p, '') }}" placeholder="{{ 'for example vInfo' if p == 'sheet' else '' }}"></div></div>
+      {% endfor %}
+      <div class="form-row"><label for="x-folder">Folder</label>
+        <div><div class="folder-pick"><input type="text" id="x-folder" name="folder" value="{{ xf.folder }}" placeholder="dbh-insights">
+          <button type="button" class="btn btn-outline" id="x-browse">Browse…</button></div>
+        <div class="hint">Inside {{ exports_root }} (./exports next to docker-compose.yml on your computer).</div></div></div>
+      <div class="form-row"><label for="x-frequency">How often</label>
+        <select id="x-frequency" name="frequency">{% for k, v in frequencies.items() %}<option value="{{ k }}" {{ 'selected' if k == xf.frequency }}>{{ v }}</option>{% endfor %}</select></div>
+      <div class="form-row when-weekly"><label for="x-weekday">Day of week</label>
+        <select id="x-weekday" name="weekday">{% for k, v in weekdays %}<option value="{{ k }}" {{ 'selected' if k == xf.weekday }}>{{ v }}</option>{% endfor %}</select></div>
+      <div class="form-row when-monthly"><label for="x-monthday">Day of month</label>
+        <select id="x-monthday" name="monthday">{% for d in range(1, 29) %}<option value="{{ d }}" {{ 'selected' if d|string == xf.monthday|string }}>{{ d }}</option>{% endfor %}<option value="last" {{ 'selected' if xf.monthday == 'last' }}>Last day of the month</option></select></div>
+      <div class="form-row"><label for="x-time">Time</label><div><input type="time" id="x-time" name="at_time" value="{{ xf.at_time }}" style="width:auto"></div></div>
+      <div class="form-row"><label for="x-tz">Time zone</label>
+        <select id="x-tz" name="timezone">{% for tz in timezones %}<option {{ 'selected' if tz == xf.timezone }}>{{ tz }}</option>{% endfor %}</select></div>
+      <div class="form-row"><label for="x-keep">Keep newest</label>
+        <div><input type="number" id="x-keep" name="keep" value="{{ xf.keep }}" min="0" style="width:110px"> <span class="hint">files; older ones are deleted. 0 keeps all.</span></div></div>
+      <div class="form-actions"><button class="btn btn-primary">{{ 'Save changes' if cur else 'Create schedule' }}</button>
+        {% if cur %}<a class="btn btn-outline" href="/settings#exports" id="x-cancel">Cancel</a>{% endif %}</div>
+    </form>
+    {% if auth %}<div class="token-row"><label for="exports-token">API token</label><input type="password" name="token" id="exports-token" form="add-export" autocomplete="off" placeholder="Required to save, edit, run, pause or remove the schedule"></div>{% endif %}
+  </div>
+</section>
+<dialog id="folder-dialog" class="folder-dialog" aria-labelledby="fd-title">
+  <div class="fd-head"><h3 id="fd-title">Choose a folder</h3><button type="button" class="fd-x" data-close aria-label="Close">×</button></div>
+  <div class="fd-path"><button type="button" class="btn btn-outline fd-up" title="Up one folder">↑ Up</button><code class="fd-where"></code></div>
+  <ul class="fd-list" role="listbox"></ul>
+  <div class="fd-new"><input type="text" class="fd-name" placeholder="New folder name" maxlength="64"><button type="button" class="btn btn-outline fd-create">New folder</button></div>
+  <p class="fd-msg" role="status"></p>
+  <div class="fd-actions"><button type="button" class="btn btn-outline" data-close>Cancel</button><button type="button" class="btn btn-primary fd-select">Select this folder</button></div>
+</dialog>
+<script>
+  // Folder picker: browses folders under the exports root on the server (a browser
+  // can't hand a web app a real folder path, and the container only sees /app/exports).
+  (() => {
+    const dlg = document.getElementById("folder-dialog"), input = document.getElementById("x-folder");
+    if (!dlg || !input) return;
+    const where = dlg.querySelector(".fd-where"), list = dlg.querySelector(".fd-list"), msg = dlg.querySelector(".fd-msg");
+    const up = dlg.querySelector(".fd-up"), name = dlg.querySelector(".fd-name");
+    let cur = { path: "", parent: null, root: "" };
+    const say = (t, bad) => { msg.textContent = t || ""; msg.classList.toggle("bad", !!bad); };
+    const show = (d) => {
+      cur = d; say(d.writable ? "" : "This folder isn't writable. On your computer run: chmod 777 exports", !d.writable);
+      where.textContent = "exports/" + d.path; where.title = d.root + (d.path ? "/" + d.path : "");
+      up.disabled = d.parent === null;
+      list.innerHTML = "";
+      if (!d.dirs.length) { const li = document.createElement("li"); li.className = "fd-empty"; li.textContent = "No sub-folders"; list.append(li); }
+      d.dirs.forEach((n) => {
+        const li = document.createElement("li"), b = document.createElement("button");
+        b.type = "button"; b.textContent = "📁 " + n; b.addEventListener("click", () => go(d.path ? d.path + "/" + n : n));
+        li.append(b); list.append(li);
+      });
+    };
+    const go = async (path) => {
+      const r = await fetch("/settings/folders?path=" + encodeURIComponent(path));
+      const d = await r.json();
+      if (!r.ok) { if (path) return go(""); return say(d.error, true); }
+      show(d);
+    };
+    document.getElementById("x-browse").addEventListener("click", () => {
+      const v = input.value.trim();
+      say(""); go(v.startsWith("/") ? "" : v); dlg.showModal();
+    });
+    up.addEventListener("click", () => cur.parent !== null && go(cur.parent));
+    dlg.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", () => dlg.close()));
+    dlg.querySelector(".fd-select").addEventListener("click", () => { input.value = cur.path || "."; dlg.close(); });
+    dlg.querySelector(".fd-create").addEventListener("click", async () => {
+      const t = document.getElementById("exports-token");
+      const body = new URLSearchParams({ path: cur.path, name: name.value, token: t ? t.value : "" });
+      const r = await fetch("/settings/folders", { method: "POST", body });
+      const d = await r.json();
+      if (!r.ok) return say(d.error, true);
+      name.value = ""; show(d); say("Folder created.");
+    });
+    name.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); dlg.querySelector(".fd-create").click(); } });
+  })();
+  (() => {
+    const f = document.getElementById("add-export");
+    if (!f) return;
+    const edit = document.getElementById("x-edit");
+    edit?.addEventListener("click", () => {
+      f.hidden = false; edit.hidden = true;
+      f.scrollIntoView({ block: "start", behavior: "smooth" }); f.querySelector("select, input")?.focus({ preventScroll: true });
+    });
+    const freq = f.querySelector("#x-frequency"), exp = f.querySelector("#x-export");
+    const sync = () => {
+      f.querySelector(".when-weekly").style.display = freq.value === "weekly" ? "" : "none";
+      f.querySelector(".when-monthly").style.display = freq.value === "monthly" ? "" : "none";
+      const wanted = (exp.selectedOptions[0]?.dataset.params || "").split(",").filter(Boolean);
+      f.querySelectorAll(".param-row").forEach((r) => { r.style.display = wanted.includes(r.dataset.param) ? "" : "none"; });
+    };
+    freq.addEventListener("change", sync); exp.addEventListener("change", sync); sync();
+    {% if where %}document.getElementById({{ where|tojson }})?.scrollIntoView({ block: "start" });{% endif %}
+    // Row buttons (Run now, Pause, Delete) use the token typed in the form below.
+    document.querySelectorAll("#exports .row-form").forEach((rf) => rf.addEventListener("submit", () => {
+      const t = document.getElementById("exports-token");
+      rf.querySelector(".token-copy").value = t ? t.value : "";
+    }));
+  })();
+</script>
+{% if auth %}
+<script>
+  // The reset buttons reuse the token typed into the same card.
+  document.querySelectorAll(".reset-form").forEach((f) => f.addEventListener("submit", () => {
+    const t = f.closest(".card").querySelector("input[name=token]");
+    f.querySelector(".token-copy").value = t ? t.value : "";
+  }));
+</script>
+{% endif %}
+{% endblock %}

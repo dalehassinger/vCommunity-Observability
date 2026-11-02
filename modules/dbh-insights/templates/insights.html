@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block title %}DBH Insights · vCommunity-Observability{% endblock %}
+{% set hosts = data.hosts %}
+{% set clusters = data.clusters %}
+{% set datastores = data.datastores %}
+{% set source = data.source[0] if data.source else none %}
+{# Headline numbers, worked out the way DBH Insights' insights.js does. #}
+{% set n_hosts = hosts|length %}
+{% set n_maint = hosts|selectattr('in_maintenance_mode', 'equalto', 1)|list|length %}
+{% set n_disc = hosts|rejectattr('in_maintenance_mode', 'equalto', 1)|rejectattr('connection_state', 'equalto', 'connected')|list|length %}
+{# Sums skip values vCenter didn't report (None), like the website. #}
+{% set ns = namespace(cores=0, threads=0, dram=0, mem=0, vms_total=0, vms_on=0, vcpus=0, vram=0, cap=0, used=0, free=0) %}
+{% for h in hosts %}
+  {% set ns.cores = ns.cores + (h.num_cores or 0) %}{% set ns.threads = ns.threads + (h.num_cpu_threads or 0) %}
+  {% set ns.dram = ns.dram + (h.dram_gib or h.num_memory_gib or 0) %}{% set ns.mem = ns.mem + (h.num_memory_gib or 0) %}
+  {% set ns.vms_total = ns.vms_total + (h.num_vms_total or 0) %}{% set ns.vms_on = ns.vms_on + (h.num_vms or 0) %}
+  {% set ns.vcpus = ns.vcpus + (h.num_vcpus or 0) %}{% set ns.vram = ns.vram + (h.vram_gib or 0) %}
+{% endfor %}
+{% for d in datastores %}
+  {% set ns.cap = ns.cap + (d.capacity_gib or 0) %}{% set ns.used = ns.used + (d.in_use_gib or 0) %}{% set ns.free = ns.free + (d.free_gib or 0) %}
+{% endfor %}
+{% set cores, vcpus, vms_total, vms_on, vram, cap, used, free = ns.cores, ns.vcpus, ns.vms_total, ns.vms_on, ns.vram, ns.cap, ns.used, ns.free %}
+{% set used_pct = (used / cap * 100) if cap else 0 %}
+{% set ratio = (vcpus / cores) if cores else none %}
+{% macro gib(v) %}{% if v is none %}—{% elif v >= 1024 %}{{ '%.1f'|format(v / 1024) }} TiB{% else %}{{ '%.0f'|format(v) }} GiB{% endif %}{% endmacro %}
+{% macro level(pct) %}{{ 'crit' if pct >= 90 else 'warn' if pct >= 75 else 'ok' }}{% endmacro %}
+
+{% block head %}
+<style>
+  .dbh-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .dbh-kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 14px 16px; box-shadow: var(--shadow); }
+  .dbh-kpi .v { font-size: 28px; font-weight: 300; line-height: 1.1; }
+  .dbh-kpi .l { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--subtle); margin-bottom: 4px; font-weight: 600; }
+  .dbh-kpi .s { font-size: 12px; color: var(--subtle); margin-top: 4px; }
+  .dbh-kpi .s .warn { color: var(--warn); } .dbh-kpi .s .crit { color: var(--crit); }
+  .dbh-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }
+  .gauge-big { display: flex; align-items: center; gap: 18px; }
+  .gauge-big .pct { font-size: 32px; font-weight: 300; }
+  .sheet-links { display: flex; flex-wrap: wrap; gap: 6px; }
+  .sheet-links a { font-size: 12.5px; padding: 3px 9px; border: 1px solid var(--border); border-radius: 12px; text-decoration: none; color: var(--text); background: var(--surface-2); }
+  .sheet-links a:hover { border-color: var(--primary); color: var(--primary); }
+  .sheet-links a.failed { border-color: var(--crit); color: var(--crit); }
+  .sheet-links small { color: var(--subtle); margin-left: 4px; }
+  @media (max-width: 1100px) { .dbh-grid { grid-template-columns: 1fr; } }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb"><a href="/">Dashboards</a> / {{ mod.name }}</div>
+    <h1>DBH Insights</h1>
+    <p class="subtle">{% if source %}{{ source.vi_sdk_server }} · {{ source.full_name }} · {% endif %}collected {{ last_collected ~ ' UTC' if last_collected else 'never' }}</p>
+  </div>
+  <div class="page-actions">
+    <a class="btn btn-outline" href="/dash/{{ mod.name }}/sheets">Open sheets</a>
+    <a class="btn btn-primary" href="/export/{{ mod.name }}/xlsx">Export XLSX</a>
+    <form method="post" action="/modules/{{ mod.name }}/run"><button class="btn btn-outline">Refresh</button></form>
+  </div>
+</div>
+
+{% for r in run_errors %}<div class="alert alert-danger"><b>{{ r.collector }}</b> collector failed: {{ r.message }}</div>{% endfor %}
+{% for e in query_errors %}<div class="alert alert-danger">{{ e }}</div>{% endfor %}
+
+{% if not hosts and not datastores %}
+<div class="alert alert-danger">No DBH Insights data yet. Click Refresh, or check the collector message on the Modules page.</div>
+{% else %}
+<div class="dbh-kpis">
+  <div class="dbh-kpi"><div class="l">Hosts</div><div class="v">{{ n_hosts }}</div>
+    <div class="s">{{ clusters|rejectattr('cluster', 'equalto', '(standalone hosts)')|list|length }} clusters{% if n_maint %} · <span class="warn">{{ n_maint }} in maintenance</span>{% endif %}{% if n_disc %} · <span class="crit">{{ n_disc }} disconnected</span>{% endif %}</div></div>
+  <div class="dbh-kpi"><div class="l">CPU cores</div><div class="v">{{ cores|int }}</div><div class="s">{{ ns.threads|int }} threads</div></div>
+  <div class="dbh-kpi"><div class="l">Physical memory</div><div class="v">{{ gib(ns.dram) }}</div><div class="s">DRAM{% if ns.mem > ns.dram %} · {{ gib(ns.mem) }} with NVMe tier{% endif %}</div></div>
+  <div class="dbh-kpi"><div class="l">Storage</div><div class="v">{{ gib(cap) }}</div><div class="s">{{ gib(free) }} free on {{ datastores|length }} datastores</div></div>
+  <div class="dbh-kpi"><div class="l">Virtual machines</div><div class="v">{{ vms_total|int }}</div><div class="s">{{ vms_on|int }} powered on · {{ gib(vram) }} vRAM</div></div>
+  <div class="dbh-kpi"><div class="l">vCPU : core</div><div class="v">{{ '%.2f'|format(ratio) if ratio is not none else '—' }}</div><div class="s">{{ vcpus|int }} vCPUs on {{ cores|int }} cores</div></div>
+</div>
+
+<div class="dbh-grid">
+  <section class="card">
+    <div class="card-header">Storage utilisation</div>
+    <div class="card-block gauge-big">
+      <svg class="gauge {{ level(used_pct) }}" viewBox="0 0 36 36" width="96" height="96" aria-hidden="true">
+        <circle class="gauge-track" cx="18" cy="18" r="15.9" />
+        <circle class="gauge-fill" cx="18" cy="18" r="15.9" stroke-dasharray="{{ '%.1f'|format(used_pct) }} 100" />
+      </svg>
+      <div><div class="pct">{{ '%.1f'|format(used_pct) }}%</div><div class="subtle">{{ gib(used) }} used of {{ gib(cap) }}</div></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-header">Capacity by datastore type</div>
+    <div class="card-block">
+      {% for kind, group in datastores|groupby('type', default='Other') %}
+      {% set k = namespace(cap=0, used=0) %}{% for d in group %}{% set k.cap = k.cap + (d.capacity_gib or 0) %}{% set k.used = k.used + (d.in_use_gib or 0) %}{% endfor %}
+      {% set kcap, kused = k.cap, k.used %}
+      {% set kpct = (kused / kcap * 100) if kcap else 0 %}
+      <div class="bar-row">
+        <span class="bar-label" title="{{ kind }}">{{ kind or 'Other' }} <small class="subtle">({{ group|length }})</small></span>
+        <span class="bar-track"><span class="bar-fill {{ level(kpct) }}" style="width: {{ '%.1f'|format(kpct) }}%"></span></span>
+        <span class="bar-value">{{ gib(kcap) }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-header">Fullest datastores</div>
+    <div class="card-block">
+      {% for ds in (datastores|selectattr('free_pct', 'ne', none)|sort(attribute='free_pct'))[:8] %}
+      {% set pct = 100 - ds.free_pct %}
+      <div class="bar-row">
+        <span class="bar-label" title="{{ ds.name }}">{{ ds.name }}</span>
+        <span class="bar-track"><span class="bar-fill {{ level(pct) }}" style="width: {{ '%.1f'|format(pct) }}%"></span></span>
+        <span class="bar-value">{{ '%.1f'|format(pct) }}%</span>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+
+<section class="card" style="margin-bottom:16px">
+  <div class="card-header">Cluster capacity</div>
+  <div class="table-wrap"><table class="datagrid">
+    <thead><tr><th>Cluster</th><th>HA</th><th>DRS</th><th class="num">Hosts</th><th class="num">Cores</th><th class="num">DRAM</th>
+      <th class="num">VMs on / total</th><th class="num">vCPU : core</th><th class="num">Running vRAM % of DRAM</th><th>N+1 memory</th><th class="num">Datastore free</th></tr></thead>
+    <tbody>
+    {% for c in clusters %}
+      <tr><td><a href="/dash/{{ mod.name }}/sheets?sheet=cluster_capacity">{{ c.cluster }}</a></td>
+        <td>{{ '—' if c.ha_enabled is none else ('On' if c.ha_enabled else 'Off') }}</td>
+        <td>{{ '—' if c.drs_enabled is none else ('On' if c.drs_enabled else 'Off') }}</td>
+        <td class="num">{{ c.num_hosts_available|int }} / {{ c.num_hosts|int }}</td><td class="num">{{ c.num_cores|int }}</td>
+        <td class="num">{{ gib(c.dram_gib) }}</td><td class="num">{{ c.num_powered_on|int }} / {{ c.num_vms|int }}</td>
+        <td class="num">{{ c.vcpus_per_core if c.vcpus_per_core is not none else '—' }}</td>
+        <td class="num">{% if c.running_vram_pct_of_dram is not none %}<span class="label label-{{ level(c.running_vram_pct_of_dram) }}">{{ c.running_vram_pct_of_dram }}%</span>{% else %}—{% endif %}</td>
+        <td>{% if c.n_plus_1_memory_est %}<span class="label label-ok">Yes</span>{% else %}<span class="label label-crit">No</span>{% endif %}</td>
+        <td class="num">{{ c.datastore_free_pct if c.datastore_free_pct is not none else '—' }}%</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<div class="dbh-grid" style="grid-template-columns: minmax(0, 1fr) minmax(0, 2fr)">
+  <section class="card">
+    <div class="card-header">Health findings</div>
+    <div class="card-block">
+      {% for h in data.health %}
+      <div class="bar-row"><a class="bar-label" href="/dash/{{ mod.name }}/sheets?sheet=vhealth">{{ h.message_type }}</a>
+        <span class="bar-track"><span class="bar-fill warn" style="width: {{ [h.findings * 10, 100]|min }}%"></span></span>
+        <span class="bar-value">{{ h.findings }}</span></div>
+      {% else %}<p class="subtle">No findings.</p>{% endfor %}
+    </div>
+  </section>
+  <section class="card">
+    <div class="card-header">Sheets</div>
+    <div class="card-block sheet-links">
+      {% for s in data.sheets %}<a href="/dash/{{ mod.name }}/sheets?sheet={{ s.table_name }}" class="{{ 'failed' if s.error }}" title="{{ s.error or s.grp }}">{{ s.sheet }}<small>{{ '!' if s.error else s.row_count }}</small></a>{% endfor %}
+    </div>
+  </section>
+</div>
+{% endif %}
+{% endblock %}

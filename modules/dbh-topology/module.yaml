@@ -1,0 +1,86 @@
+# DBH Insights Topology as a vCommunity-Observability module.
+# Port of the Topology view in https://github.com/DBH-Insights/DBH-Insights
+# (collect/js/insights.js fetchTopology + collect/js/report.js): hosts grouped by
+# cluster, datastores beside them, and a line for every mount. Hover a host or
+# datastore to isolate its connections; download the map as a standalone HTML file.
+name: dbh-topology
+version: 0.1.0
+core_api: 1
+description: DBH Insights Topology map. Hosts by cluster, datastores and every mount between them.
+
+settings_help:
+  vcenter_name: Name shown for the vCenter (default is the vCenter host)
+
+collectors:
+  - name: fabric
+    script: collect_topology.py
+    interval_minutes: 30
+    timeout_seconds: 600
+    connections: [vcenter]
+    tables: [fabric_source, fabric_clusters, fabric_hosts, fabric_datastores, fabric_mounts]
+
+tables:
+  fabric_source:
+    columns: {server: text, datacenters: text}
+  fabric_clusters:
+    columns: {moref: text, name: text, ha_enabled: integer, drs_enabled: integer}
+  fabric_hosts:
+    columns:
+      moref: text
+      name: text
+      cluster_moref: text
+      cluster: text
+      connection_state: text
+      in_maintenance: integer
+      cores: integer
+      memory_gib: real     # includes memory tiers (NVMe) when tiering is on
+      dram_gib: real
+  fabric_datastores:
+    columns:
+      moref: text
+      name: text
+      kind: text
+      capacity_gib: real
+      free_gib: real
+      used_gib: real
+      used_pct: real
+      vm_count: integer
+      mount_count: integer
+      accessible: integer
+  fabric_mounts:
+    columns: {datastore_moref: text, host_moref: text}
+
+api:
+  - path: /hosts
+    description: Hosts with their cluster, state, cores, memory and how many datastores each mounts
+    query: >-
+      SELECT h.name, h.cluster, h.connection_state, h.in_maintenance, h.cores, h.dram_gib, h.memory_gib,
+             COUNT(m.datastore_moref) AS datastores_mounted, h.collected_at
+      FROM fabric_hosts h LEFT JOIN fabric_mounts m ON m.host_moref = h.moref
+      GROUP BY h.moref ORDER BY h.cluster, h.name
+  - path: /datastores
+    description: Datastores with capacity, use and how many hosts mount each
+    query: SELECT name, kind, capacity_gib, used_gib, free_gib, used_pct, vm_count, mount_count, accessible, collected_at FROM fabric_datastores ORDER BY name
+  - path: /mounts
+    description: One row per host-to-datastore mount (the lines on the map)
+    query: >-
+      SELECT h.name AS host, h.cluster, d.name AS datastore, d.kind
+      FROM fabric_mounts m JOIN fabric_hosts h ON h.moref = m.host_moref JOIN fabric_datastores d ON d.moref = m.datastore_moref
+      ORDER BY h.name, d.name
+  - path: /single-host-datastores
+    description: Datastores only one host can reach (they go offline with that host)
+    query: >-
+      SELECT d.name AS datastore, d.kind, d.used_gib, d.vm_count, h.name AS host, h.cluster
+      FROM fabric_datastores d JOIN fabric_mounts m ON m.datastore_moref = d.moref JOIN fabric_hosts h ON h.moref = m.host_moref
+      WHERE d.mount_count = 1 ORDER BY d.name
+
+dashboards:
+  - slug: topology
+    title: DBH Topology
+    template: topology.html
+    queries:
+      source: SELECT * FROM fabric_source
+      clusters: SELECT * FROM fabric_clusters ORDER BY name
+      hosts: SELECT * FROM fabric_hosts ORDER BY name
+      datastores: SELECT * FROM fabric_datastores ORDER BY name
+      mounts: SELECT datastore_moref, host_moref FROM fabric_mounts

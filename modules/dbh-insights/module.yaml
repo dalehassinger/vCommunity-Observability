@@ -1,0 +1,663 @@
+# DBH Insights as a vCommunity-Observability module.
+# Port of https://github.com/DBH-Insights/DBH-Insights (collect/js/sheets.js and xlsx.js):
+# the same 27 inventory sheets plus Cluster Capacity, collected with pyVmomi on a
+# schedule instead of from the browser, stored in SQLite, served as REST endpoints
+# for MP Builder, and exported as the same XLSX workbook.
+#
+# The tables: section is generated from sheets.py. After changing a sheet, run
+#   python sheets.py --tables
+# and paste the result over it (scripts/smoke_test.py checks they match).
+name: dbh-insights
+version: 0.1.0
+core_api: 1
+description: DBH Insights inventory sheets (vInfo, vHost, vDisk... 27 in all) with Insights, Sheets and XLSX export.
+
+settings_help:
+  vcenter_name: Name shown in the "VI SDK Server" column (default is the vCenter host)
+
+collectors:
+  - name: sheets
+    script: collect_dbh.py
+    interval_minutes: 30
+    timeout_seconds: 900
+    connections: [vcenter]
+    tables: [sheets, sheet_columns, vinfo, vcpu, vmemory, vdisk, vpartition, vnetwork, vsnapshot, vcd, vusb, vtools, vhost, vcluster, vrp, vdatastore, vhealth, vhba, vnic, vswitch, vport, vsc_vmk, dvswitch, dvport, vhost_performance, vinfo_performance, vsource, vlicense, vmetadata, cluster_capacity]
+
+exports:
+  - name: xlsx
+    title: Export XLSX
+    script: export_dbh.py
+    filename: dbh-insights-{timestamp}.xlsx
+    media_type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+  - name: csv
+    title: Export one sheet as CSV
+    script: export_dbh.py
+    params: [sheet]
+    filename: dbh-insights-{sheet}-{timestamp}.csv
+    media_type: text/csv; charset=utf-8
+
+tables:
+  sheets:
+    columns:
+      position: integer
+      sheet: text
+      table_name: text
+      grp: text
+      row_count: integer
+      error: text
+  sheet_columns:
+    columns:
+      sheet: text
+      table_name: text
+      position: integer
+      column_name: text
+      label: text
+      kind: text
+      total: text
+  vinfo:
+    columns:
+      vm: text
+      powerstate: text
+      template: integer
+      dns_name: text
+      cpus: real
+      cores_p_s: real
+      memory: real
+      cpu_usage_pct: real
+      memory_usage_pct: real
+      provisioned_gib: real
+      in_use_gib: real
+      primary_ip_address: text
+      os_according_to_the_configuration_file: text
+      os_according_to_the_vmware_tools: text
+      tools_version_status: text
+      tools_running_status: text
+      host: text
+      creation_date: text
+      hw_version: text
+      firmware: text
+      efi_secure_boot: integer
+      path: text
+      annotation: text
+      change_version: text
+      vm_uuid: text
+      vi_sdk_server: text
+  vcpu:
+    columns:
+      vm: text
+      powerstate: text
+      template: integer
+      cpus: real
+      sockets: real
+      cores_p_s: real
+      overall_mhz: real
+      max_mhz: real
+      cpu_usage_pct: real
+      level: text
+      shares: real
+      reservation: real
+      limit_value: real
+      entitlement: real
+      drs_entitlement: real
+      hot_add: integer
+      hot_remove: integer
+      host: text
+      annotation: text
+      vi_sdk_server: text
+  vmemory:
+    columns:
+      vm: text
+      powerstate: text
+      template: integer
+      size_mib: real
+      consumed_mib: real
+      active_mib: real
+      memory_usage_pct: real
+      private_mib: real
+      shared_mib: real
+      swapped_mib: real
+      ballooned_mib: real
+      compressed_mib: real
+      consumed_overhead_mib: real
+      entitlement: real
+      drs_entitlement: real
+      level: text
+      shares: real
+      reservation: real
+      limit_value: real
+      hot_add: integer
+      host: text
+      annotation: text
+      vi_sdk_server: text
+  vdisk:
+    columns:
+      vm: text
+      powerstate: text
+      template: integer
+      disk: text
+      disk_key: real
+      disk_uuid: text
+      disk_path: text
+      capacity_mib: real
+      raw: integer
+      disk_mode: text
+      sharing_mode: text
+      thin: integer
+      eagerly_scrub: integer
+      split: integer
+      write_through: integer
+      level: text
+      shares: real
+      reservation: real
+      limit_value: real
+      controller: text
+      unit_num: real
+      raw_lun_id: text
+      raw_comp_mode: text
+      host: text
+      annotation: text
+      vi_sdk_server: text
+  vpartition:
+    columns:
+      vm: text
+      powerstate: text
+      disk: text
+      capacity_mib: real
+      consumed_mib: real
+      free_mib: real
+      free_pct: real
+      host: text
+      annotation: text
+      vi_sdk_server: text
+  vnetwork:
+    columns:
+      vm: text
+      powerstate: text
+      template: integer
+      nic_label: text
+      adapter: text
+      network: text
+      connected: integer
+      starts_connected: integer
+      mac_address: text
+      type: text
+      host: text
+      annotation: text
+      vi_sdk_server: text
+  vsnapshot:
+    columns:
+      vm: text
+      powerstate: text
+      name: text
+      description: text
+      date_time: text
+      filename: text
+      size_mib_vmsn: real
+      size_mib_total: real
+      quiesced: integer
+      state: text
+      is_current: integer
+      host: text
+      annotation: text
+      vi_sdk_server: text
+  vcd:
+    columns:
+      vm: text
+      powerstate: text
+      device: text
+      connected: integer
+      starts_connected: integer
+      allow_guest_control: integer
+      backing: text
+      device_iso: text
+      host: text
+      annotation: text
+      vi_sdk_server: text
+  vusb:
+    columns:
+      vm: text
+      powerstate: text
+      device: text
+      type: text
+      connected: integer
+      auto_connect: integer
+      summary: text
+      host: text
+      annotation: text
+      vi_sdk_server: text
+  vtools:
+    columns:
+      vm: text
+      powerstate: text
+      tools_status: text
+      tools_version_status: text
+      tools_running_status: text
+      tools_version: text
+      upgrade_policy: text
+      sync_time_with_host: integer
+      run_after_power_on: integer
+      run_after_resume: integer
+      guest_state: text
+      guest_id: text
+      guest_family: text
+      dns_name: text
+      host: text
+      annotation: text
+      vi_sdk_server: text
+  vhost:
+    columns:
+      host: text
+      cluster: text
+      config_status: text
+      in_maintenance_mode: integer
+      connection_state: text
+      power_state: text
+      cpu_model: text
+      speed: real
+      ht_available: integer
+      ht_active: integer
+      num_cpu: real
+      cores_per_cpu: real
+      num_cores: real
+      num_cpu_threads: real
+      cpu_usage_pct: real
+      num_memory_gib: real
+      memory_tiering_type: text
+      dram_gib: real
+      nvme_tier_gib: real
+      memory_usage_pct: real
+      num_nics: real
+      num_hbas: real
+      num_vms_total: real
+      num_vms: real
+      vms_per_core: real
+      num_vcpus: real
+      vcpus_per_core: real
+      vram_gib: real
+      vmotion_support: integer
+      storage_vmotion_support: integer
+      current_evc: text
+      max_evc: text
+      current_cpu_power_man_policy: text
+      esx_version: text
+      boot_time: text
+      dns_servers: text
+      dhcp: integer
+      domain: text
+      dns_search_order: text
+      ntp_server_s: text
+      ntpd_running: integer
+      time_zone: text
+      gmt_offset: real
+      vendor: text
+      model: text
+      serial_number: text
+      service_tag: text
+      bios_version: text
+      bios_date: text
+      uuid: text
+      vi_sdk_server: text
+  vcluster:
+    columns:
+      name: text
+      numhosts: real
+      numcpucores: real
+      numcputhreads: real
+      dram_gib: real
+      totalmemory_gib: real
+      ha_enabled: integer
+      drs_enabled: integer
+      num_vms: real
+      num_vcpus: real
+      vcpus_per_core: real
+      vi_sdk_server: text
+  vrp:
+    columns:
+      resource_pool: text
+      cluster: text
+      status: text
+      num_vms: real
+      cpu_limit_mhz: real
+      cpu_reservation_mhz: real
+      cpu_level: text
+      cpu_shares: real
+      cpu_usage_mhz: real
+      memory_limit_mib: real
+      memory_reservation_mib: real
+      memory_level: text
+      memory_shares: real
+      memory_consumed_mib: real
+      memory_active_mib: real
+      vi_sdk_server: text
+  vdatastore:
+    columns:
+      name: text
+      type: text
+      accessible: integer
+      num_vms: real
+      capacity_gib: real
+      in_use_gib: real
+      free_gib: real
+      free_pct: real
+      num_hosts: real
+      hosts: text
+      vi_sdk_server: text
+  vhealth:
+    columns:
+      name: text
+      message: text
+      message_type: text
+      vi_sdk_server: text
+  vhba:
+    columns:
+      host: text
+      device: text
+      type: text
+      status: text
+      model: text
+      driver: text
+      driver_version: text
+      firmware: text
+      pci: text
+      protocol: text
+      wwn_iscsi_name: text
+      vi_sdk_server: text
+  vnic:
+    columns:
+      host: text
+      network_device: text
+      driver: text
+      driver_version: text
+      firmware: text
+      pci: text
+      speed_mb: real
+      duplex: integer
+      mac_address: text
+      wake_on_lan: integer
+      vi_sdk_server: text
+  vswitch:
+    columns:
+      host: text
+      switch: text
+      num_ports: real
+      free_ports: real
+      mtu: real
+      promiscuous_mode: integer
+      mac_changes: integer
+      forged_transmits: integer
+      uplinks: text
+      vi_sdk_server: text
+  vport:
+    columns:
+      host: text
+      port_group: text
+      switch: text
+      vlan: real
+      promiscuous_mode: integer
+      mac_changes: integer
+      forged_transmits: integer
+      vi_sdk_server: text
+  vsc_vmk:
+    columns:
+      host: text
+      device: text
+      port_group: text
+      mac_address: text
+      dhcp: integer
+      ip_address: text
+      subnet_mask: text
+      gateway: text
+      mtu: real
+      tso: integer
+      stack: text
+      vi_sdk_server: text
+  dvswitch:
+    columns:
+      switch: text
+      vendor: text
+      version: text
+      num_ports: real
+      max_ports: real
+      num_hosts: real
+      created: text
+      uuid: text
+      vi_sdk_server: text
+  dvport:
+    columns:
+      port_group: text
+      switch: text
+      num_ports: real
+      type: text
+      vlan: text
+      promiscuous_mode: integer
+      mac_changes: integer
+      forged_transmits: integer
+      vi_sdk_server: text
+  vhost_performance:
+    columns:
+      host: text
+      cpu_usage_pct: real
+      cpu_usage_mhz: real
+      memory_usage_pct: real
+      memory_consumed_gib: real
+      network_kbps: real
+      disk_kbps: real
+      sampled: text
+      vi_sdk_server: text
+  vinfo_performance:
+    columns:
+      vm: text
+      powerstate: text
+      cpu_usage_pct: real
+      cpu_usage_mhz: real
+      memory_usage_pct: real
+      memory_active_mib: real
+      memory_consumed_mib: real
+      network_kbps: real
+      disk_kbps: real
+      host: text
+      sampled: text
+      vi_sdk_server: text
+  vsource:
+    columns:
+      name: text
+      full_name: text
+      vendor: text
+      version: text
+      build: text
+      api_version: text
+      api_type: text
+      os_type: text
+      instance_uuid: text
+      license_product: text
+      vi_sdk_server: text
+  vlicense:
+    columns:
+      name: text
+      key_value: text
+      edition: text
+      cost_unit: text
+      total: real
+      used: real
+      available: real
+      expires: text
+      vi_sdk_server: text
+  vmetadata:
+    columns:
+      tool: text
+      tool_version: text
+      collected: text
+      vcenter: text
+      vcenter_version: text
+      username: text
+      vi_sdk_server: text
+  cluster_capacity:
+    columns:
+      cluster: text
+      ha_enabled: integer
+      drs_enabled: integer
+      num_hosts: real
+      num_hosts_available: real
+      num_cores: real
+      dram_gib: real
+      num_vms: real
+      num_powered_on: real
+      num_powered_off: real
+      num_templates: real
+      num_vcpus: real
+      running_vcpus: real
+      vcpus_per_core: real
+      running_vcpus_per_core: real
+      vram_gib: real
+      running_vram_gib: real
+      running_vram_pct_of_dram: real
+      n_plus_1_memory_est: integer
+      vm_provisioned_gib: real
+      vm_in_use_gib: real
+      num_datastores: real
+      datastore_capacity_gib: real
+      datastore_free_gib: real
+      datastore_free_pct: real
+      vi_sdk_server: text
+api:
+- path: /sheets
+  query: SELECT position, sheet, grp AS sheet_group, table_name, row_count, error, collected_at FROM sheets ORDER BY position
+  description: Every sheet with its row count and any collection error
+- path: /vinfo
+  table: vinfo
+  description: vInfo sheet (Virtual machines)
+- path: /vcpu
+  table: vcpu
+  description: vCPU sheet (Virtual machines)
+- path: /vmemory
+  table: vmemory
+  description: vMemory sheet (Virtual machines)
+- path: /vdisk
+  table: vdisk
+  description: vDisk sheet (Virtual machines)
+- path: /vpartition
+  table: vpartition
+  description: vPartition sheet (Virtual machines)
+- path: /vnetwork
+  table: vnetwork
+  description: vNetwork sheet (Virtual machines)
+- path: /vsnapshot
+  table: vsnapshot
+  description: vSnapshot sheet (Virtual machines)
+- path: /vcd
+  table: vcd
+  description: vCD sheet (Virtual machines)
+- path: /vusb
+  table: vusb
+  description: vUSB sheet (Virtual machines)
+- path: /vtools
+  table: vtools
+  description: vTools sheet (Virtual machines)
+- path: /vhost
+  table: vhost
+  description: vHost sheet (Inventory)
+- path: /vcluster
+  table: vcluster
+  description: vCluster sheet (Inventory)
+- path: /vrp
+  table: vrp
+  description: vRP sheet (Inventory)
+- path: /vdatastore
+  table: vdatastore
+  description: vDatastore sheet (Inventory)
+- path: /vhealth
+  table: vhealth
+  description: vHealth sheet (Health)
+- path: /vhba
+  table: vhba
+  description: vHBA sheet (Host network & storage)
+- path: /vnic
+  table: vnic
+  description: vNIC sheet (Host network & storage)
+- path: /vswitch
+  table: vswitch
+  description: vSwitch sheet (Host network & storage)
+- path: /vport
+  table: vport
+  description: vPort sheet (Host network & storage)
+- path: /vsc-vmk
+  table: vsc_vmk
+  description: vSC_VMK sheet (Host network & storage)
+- path: /dvswitch
+  table: dvswitch
+  description: dvSwitch sheet (Distributed switch)
+- path: /dvport
+  table: dvport
+  description: dvPort sheet (Distributed switch)
+- path: /vhost-performance
+  table: vhost_performance
+  description: vHost Performance sheet (Performance)
+- path: /vinfo-performance
+  table: vinfo_performance
+  description: vInfo Performance sheet (Performance)
+- path: /vsource
+  table: vsource
+  description: vSource sheet (System)
+- path: /vlicense
+  table: vlicense
+  description: vLicense sheet (System)
+- path: /vmetadata
+  table: vmetadata
+  description: vMetaData sheet (System)
+- path: /cluster-capacity
+  table: cluster_capacity
+  description: Cluster Capacity sheet (Overview)
+- path: /vhealth/by-type
+  query: SELECT message_type, COUNT(*) AS findings FROM vhealth GROUP BY message_type ORDER BY findings DESC
+  description: vHealth findings counted by type
+- path: /vinfo/powered-off
+  query: SELECT * FROM vinfo WHERE powerstate = 'poweredOff' AND template = 0
+  description: Powered-off VMs (not templates)
+- path: /vdatastore/low-free
+  query: SELECT * FROM vdatastore WHERE free_pct < 20 ORDER BY free_pct
+  description: Datastores under 20% free
+dashboards:
+- slug: insights
+  title: DBH Insights
+  template: insights.html
+  queries:
+    hosts: SELECT * FROM vhost
+    clusters: SELECT * FROM cluster_capacity
+    datastores: SELECT * FROM vdatastore
+    source: SELECT * FROM vsource
+    health: SELECT message_type, COUNT(*) AS findings FROM vhealth GROUP BY message_type ORDER BY findings DESC
+    sheets: SELECT * FROM sheets ORDER BY position
+- slug: sheets
+  title: DBH Sheets
+  template: sheets.html
+  queries:
+    sheets: SELECT * FROM sheets ORDER BY position
+    columns: SELECT * FROM sheet_columns ORDER BY table_name, position
+    vinfo: SELECT * FROM "vinfo"
+    vcpu: SELECT * FROM "vcpu"
+    vmemory: SELECT * FROM "vmemory"
+    vdisk: SELECT * FROM "vdisk"
+    vpartition: SELECT * FROM "vpartition"
+    vnetwork: SELECT * FROM "vnetwork"
+    vsnapshot: SELECT * FROM "vsnapshot"
+    vcd: SELECT * FROM "vcd"
+    vusb: SELECT * FROM "vusb"
+    vtools: SELECT * FROM "vtools"
+    vhost: SELECT * FROM "vhost"
+    vcluster: SELECT * FROM "vcluster"
+    vrp: SELECT * FROM "vrp"
+    vdatastore: SELECT * FROM "vdatastore"
+    vhealth: SELECT * FROM "vhealth"
+    vhba: SELECT * FROM "vhba"
+    vnic: SELECT * FROM "vnic"
+    vswitch: SELECT * FROM "vswitch"
+    vport: SELECT * FROM "vport"
+    vsc_vmk: SELECT * FROM "vsc_vmk"
+    dvswitch: SELECT * FROM "dvswitch"
+    dvport: SELECT * FROM "dvport"
+    vhost_performance: SELECT * FROM "vhost_performance"
+    vinfo_performance: SELECT * FROM "vinfo_performance"
+    vsource: SELECT * FROM "vsource"
+    vlicense: SELECT * FROM "vlicense"
+    vmetadata: SELECT * FROM "vmetadata"
+    cluster_capacity: SELECT * FROM "cluster_capacity"

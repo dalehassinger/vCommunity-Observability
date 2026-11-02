@@ -1,0 +1,103 @@
+# Example module 1: written in Python (pyVmomi).
+name: datastore-capacity
+version: 0.1.0
+core_api: 1
+description: Datastore capacity, provisioning and estimated runway from vCenter.
+
+collectors:
+  - name: datastores
+    script: collect_datastores.py
+    interval_minutes: 15
+    timeout_seconds: 300
+    connections: [vcenter]
+    tables: [datastores, datastore_history]
+
+tables:
+  datastores:            # current state, replaced on every run
+    mode: snapshot
+    columns: &ds_columns
+      name: text
+      datacenter: text
+      type: text
+      capacity_gb: real
+      free_gb: real
+      used_gb: real
+      used_pct: real
+      provisioned_gb: real
+      provisioned_pct: real
+      vm_count: integer
+      accessible: integer
+  datastore_history:     # every sample kept for 90 days, used for runway
+    mode: append
+    retention_days: 90
+    columns: *ds_columns
+
+api:
+  - path: /datastores
+    table: datastores
+    description: All datastores with capacity and provisioning
+  - path: /datastores/critical
+    description: Datastores at or above 80% used
+    query: SELECT * FROM datastores WHERE used_pct >= 80 ORDER BY used_pct DESC
+  - path: /runway
+    description: Estimated days until full, based on growth over the last 30 days
+    query: &runway |
+      WITH first AS (
+        SELECT h.name, h.used_gb AS first_used, h.collected_at AS first_at
+        FROM datastore_history h
+        WHERE h.collected_at = (
+          SELECT MIN(collected_at) FROM datastore_history
+          WHERE name = h.name AND collected_at >= datetime('now', '-30 days'))
+      ), growth AS (
+        SELECT d.name, d.capacity_gb, d.free_gb, d.used_pct, d.collected_at,
+          CASE WHEN julianday(d.collected_at) - julianday(f.first_at) >= 1.0 / 24
+               THEN ROUND((d.used_gb - f.first_used) / (julianday(d.collected_at) - julianday(f.first_at)), 2)
+          END AS growth_gb_per_day
+        FROM datastores d LEFT JOIN first f ON f.name = d.name
+      )
+      SELECT name, capacity_gb, free_gb, used_pct, growth_gb_per_day,
+        CASE WHEN growth_gb_per_day > 0 THEN CAST(free_gb / growth_gb_per_day AS INTEGER) END AS runway_days,
+        collected_at
+      FROM growth ORDER BY runway_days IS NULL, runway_days
+
+dashboards:
+  - slug: overview
+    title: Datastore Capacity
+    description: Current capacity from vCenter. Runway needs at least an hour of history.
+    widgets:
+      - type: kpi
+        title: Datastores
+        label: total
+        query: SELECT COUNT(*) FROM datastores
+      - type: kpi
+        title: Total capacity
+        label: across all datastores
+        unit: TB
+        query: SELECT ROUND(SUM(capacity_gb) / 1024, 1) FROM datastores
+      - type: kpi
+        title: Free
+        label: lowest free % of any datastore
+        unit: "%"
+        max: 100
+        warn: 25
+        crit: 10
+        lower_is_worse: true
+        query: SELECT ROUND(MIN(100 - used_pct), 1) FROM datastores
+      - type: kpi
+        title: Over 80% used
+        label: datastores
+        warn: 1
+        crit: 3
+        query: SELECT COUNT(*) FROM datastores WHERE used_pct >= 80
+      - type: bar
+        title: Used %
+        wide: true
+        unit: "%"
+        max: 100
+        warn: 75
+        crit: 90
+        query: SELECT name AS label, used_pct AS value FROM datastores ORDER BY used_pct DESC
+      - type: table
+        title: Runway
+        highlight: {column: runway_days, warn: 60, crit: 30, lower_is_worse: true}
+        query: *runway

@@ -1,0 +1,26 @@
+services:
+  vco:
+    build:
+      context: .
+      target: core-pwsh        # use "core" if you only run Python modules
+      args:
+        PWSH_VERSION: ${PWSH_VERSION:-7.6.9}  # set PWSH_VERSION in .env to pin another PowerShell build
+        # Set DOTNET_HWINTRINSIC=0 in .env if PowerShell fails with "Illegal instruction"
+        # (seen in some Mac VMs, e.g. Rancher Desktop). 1 is the normal default.
+        DOTNET_EnableHWIntrinsic: ${DOTNET_HWINTRINSIC:-1}
+    image: vcommunity-observability:core-pwsh-0.1.0
+    container_name: vco
+    ports:
+      - "8080:8080"
+    env_file: .env
+    volumes:
+      - ./data:/app/data                                  # SQLite files survive upgrades
+      - ./exports:/app/exports                            # scheduled exports land here (Settings page)
+      - ./extra-modules:/modules                          # drop new or patched modules here
+      - ./config/config.yaml:/app/config/config.yaml:ro
+    environment:
+      VCO_CONFIG: /app/config/config.yaml
+      VCO_EXPORT_DIR: /app/exports
+      # TZ: America/New_York                              # default time zone offered for scheduled exports
+    restart: unless-stopped
+    init: true               # tiny init (tini) reaps finished collector subprocesses and passes stop signals

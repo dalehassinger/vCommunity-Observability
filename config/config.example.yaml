@@ -1,0 +1,58 @@
+# vCommunity-Observability configuration.
+# Copy to config/config.yaml. Secrets never go in this file: any key ending in
+# "_env" holds the NAME of an environment variable (set in .env), not the secret.
+# Example: password_env: VCO_VCENTER_PASSWORD   <- correct
+#          password_env: 'MyP@ss'               <- wrong, the password goes in .env
+
+data_dir: data            # SQLite files (mount as a volume in Docker)
+
+# Folders scanned for modules. Later folders win, so a module dropped into
+# /modules overrides the built-in copy (how a patched module is shipped).
+modules_dirs:
+  - modules               # built-in example modules
+  - /modules              # extra or patched modules (Docker volume)
+
+mock: false               # true (or VCO_MOCK=1) = built-in sample data, no vCenter needed
+
+connections:
+  vcenter:
+    host: vcsa91.vcrocs.local
+    user: administrator@vcrocs.local
+    password_env: VCO_VCENTER_PASSWORD
+    verify_ssl: false
+  vcfops:                 # VCF Operations, for modules that use its REST API
+    host: vcfops.vcrocs.local
+    user: admin
+    password_env: VCO_VCFOPS_PASSWORD
+    auth_source: local
+    verify_ssl: false
+
+api:
+  tokens:                 # MP Builder sends one of these as "Authorization: Bearer <token>" or "X-API-Key"
+    - name: mpbuilder
+      token_env: VCO_API_TOKEN_MPBUILDER
+
+modules:                  # per-module defaults; the on/off switch on the Modules page wins over these
+  host-health:
+    enabled: true
+  datastore-capacity:
+    enabled: true
+    settings: {}
+  vcenter-inventory:
+    enabled: true
+  github-status:          # needs internet (or HTTPS_PROXY); set enabled: false at dark sites
+    enabled: true
+    settings:
+      url: https://www.githubstatus.com   # any Atlassian Statuspage site works
+  dbh-insights:           # DBH Insights sheets (vInfo, vHost, ...) and XLSX export; uses the vcenter connection
+    enabled: true
+    settings:
+      vcenter_name: vcsa91.vcrocs.local   # shown in the "VI SDK Server" column
+  dbh-topology:           # DBH Topology map (hosts by cluster, datastores, mounts); uses the vcenter connection
+    enabled: true
+    settings:
+      vcenter_name: vcsa91.vcrocs.local
+  dbh-impact:             # DBH Impact: what stops if a host or datastore fails; uses the vcenter connection
+    enabled: true
+    settings:
+      vcenter_name: vcsa91.vcrocs.local

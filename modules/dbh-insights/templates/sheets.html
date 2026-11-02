@@ -1,0 +1,257 @@
+{% extends "base.html" %}
+{% set group_order = ['Overview', 'Inventory', 'Virtual machines', 'Host network & storage', 'Distributed switch', 'Performance', 'Health', 'System'] %}
+{% set all_sheets = data.sheets %}
+{% set current = (all_sheets|selectattr('table_name', 'equalto', q.sheet)|first) if q.sheet else none %}
+{% set current = current or (all_sheets|selectattr('table_name', 'equalto', 'vinfo')|first) or (all_sheets|first) %}
+{% block title %}{{ current.sheet if current else 'Sheets' }} · DBH Insights{% endblock %}
+
+{% block head %}
+<style>
+  .dbh-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 16px; align-items: start; }
+  .dbh-nav { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 6px 0; position: sticky; top: 64px; max-height: calc(100vh - 80px); overflow: auto; }
+  .dbh-nav h4 { margin: 10px 14px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--subtle); font-weight: 600; }
+  .dbh-nav a { display: flex; justify-content: space-between; gap: 8px; padding: 4px 14px; color: var(--text); font-size: 13px; text-decoration: none; }
+  .dbh-nav a:hover { background: var(--surface-2); }
+  .dbh-nav a.active { background: var(--nav-active-bg); font-weight: 600; box-shadow: inset 3px 0 0 var(--primary); }
+  .dbh-nav a small { color: var(--subtle); font-weight: 400; }
+  .dbh-nav a.failed small { color: var(--crit); }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .toolbar input, .toolbar select { font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); color: var(--text); }
+  .toolbar input[type=search] { min-width: 220px; flex: 1; max-width: 360px; }
+  .toolbar .spacer { flex: 1; }
+  .sheet-table { max-height: calc(100vh - 290px); overflow: auto; }
+  .sheet-table table { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; font-size: 12.5px; }
+  .sheet-table th, .sheet-table td { padding: 5px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; max-width: 420px; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+  .sheet-table thead th { position: sticky; top: 0; background: var(--surface-2); z-index: 2; cursor: pointer; user-select: none; font-weight: 600; }
+  .sheet-table thead th:hover { color: var(--primary); }
+  .sheet-table thead th .arrow { font-size: 9px; margin-left: 4px; color: var(--primary); }
+  .sheet-table th:first-child, .sheet-table td:first-child { position: sticky; left: 0; background: var(--surface); z-index: 1; }
+  .sheet-table thead th:first-child { z-index: 3; background: var(--surface-2); }
+  .sheet-table td.num, .sheet-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .sheet-table tfoot td { position: sticky; bottom: 0; background: var(--surface-2); font-weight: 600; border-top: 2px solid var(--border); }
+  .sheet-table td.blank { color: var(--subtle); }
+  .sheet-table td.yes { color: var(--ok); } .sheet-table td.no { color: var(--subtle); }
+  .pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; padding: 8px 12px; font-size: 13px; }
+  .pager button { font: inherit; padding: 3px 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 3px; cursor: pointer; }
+  .pager button:disabled { opacity: .4; cursor: default; }
+  @media (max-width: 900px) { .dbh-layout { grid-template-columns: 1fr; } .dbh-nav { position: static; max-height: none; } }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb"><a href="/">Dashboards</a> / <a href="/dash/{{ mod.name }}/insights">DBH Insights</a> / Sheets</div>
+    <h1>{{ current.sheet if current else 'Sheets' }}</h1>
+    <p class="subtle">{% if current %}{{ current.grp }} · {{ current.row_count }} rows · {% endif %}collected {{ last_collected ~ ' UTC' if last_collected else 'never' }}</p>
+  </div>
+  <div class="page-actions">
+    {% if current %}<a class="btn btn-outline" href="/export/{{ mod.name }}/csv?sheet={{ current.sheet|urlencode }}">CSV</a>{% endif %}
+    <a class="btn btn-primary" href="/export/{{ mod.name }}/xlsx">Export XLSX</a>
+    <form method="post" action="/modules/{{ mod.name }}/run"><button class="btn btn-outline">Refresh</button></form>
+  </div>
+</div>
+
+{% for r in run_errors %}<div class="alert alert-danger"><b>{{ r.collector }}</b> collector failed: {{ r.message }}</div>{% endfor %}
+
+{% if not all_sheets %}
+<div class="alert alert-danger">No sheets collected yet. Click Refresh, or check the collector message on the Modules page.</div>
+{% else %}
+<div class="dbh-layout">
+  <nav class="dbh-nav" aria-label="Sheets">
+    {% for g in group_order + (all_sheets|map(attribute='grp')|reject('in', group_order)|unique|list) %}
+      {% set members = all_sheets|selectattr('grp', 'equalto', g)|list %}
+      {% if members %}<h4>{{ g }}</h4>
+        {% for s in members %}<a href="?sheet={{ s.table_name }}" class="{{ 'active' if current and s.table_name == current.table_name else '' }} {{ 'failed' if s.error else '' }}" title="{{ s.error or '' }}">{{ s.sheet }}<small>{{ '!' if s.error else s.row_count }}</small></a>{% endfor %}
+      {% endif %}
+    {% endfor %}
+  </nav>
+
+  <section class="card">
+    {% if current.error %}<div class="alert alert-danger" style="margin:12px">This sheet failed to collect: {{ current.error }}</div>{% endif %}
+    <div class="toolbar">
+      <input type="search" id="filter" placeholder="Filter rows…" aria-label="Filter rows">
+      <select id="groupBy" aria-label="Group by"></select>
+      <span class="spacer"></span>
+      <span class="subtle" id="count"></span>
+      <label class="subtle">Rows per page
+        <select id="pageSize">{% for n in [5, 10, 25, 50, 100, 250, 500, 0] %}<option value="{{ n }}" {{ 'selected' if n == 25 }}>{{ n or 'All' }}</option>{% endfor %}</select>
+      </label>
+    </div>
+    <div class="sheet-table"><table><thead></thead><tbody></tbody><tfoot></tfoot></table></div>
+    <div class="pager"><button id="prev">‹ Prev</button><span id="pageInfo"></span><button id="next">Next ›</button></div>
+  </section>
+</div>
+
+{% set cols = data.columns|selectattr('table_name', 'equalto', current.table_name)|list %}
+<script id="sheet-data" type="application/json">{{ {
+  'name': current.sheet,
+  'columns': cols|map(attribute='label')|list,
+  'kinds': cols|map(attribute='kind')|list,
+  'totals': cols|map(attribute='total')|list,
+  'names': cols|map(attribute='column_name')|list,
+  'rows': data[current.table_name]
+}|tojson }}</script>
+<script>
+(() => {
+  // Sort, filter, paging, totals row and group-by, ported from DBH Insights' app.js.
+  const src = JSON.parse(document.getElementById("sheet-data").textContent);
+  const columns = src.columns.map((label, i) => {
+    const raw = src.totals[i] || "sum";
+    let total = raw;
+    if (raw.startsWith("ratio:")) {
+      const [top, bottom, scale] = raw.slice(6).split("|");
+      total = { ratio: [top, bottom], scale: Number(scale) || 1 };
+    }
+    return { label, kind: src.kinds[i], total };
+  });
+  const rows = src.rows.map((r) => src.names.map((n, i) => {
+    const v = r[n];
+    if (v === null || v === undefined) return null;
+    return columns[i].kind === "bool" ? Boolean(v) : v;
+  }));
+
+  const $ = (id) => document.getElementById(id);
+  const key = (k) => `dbh:${k}:${src.name}`;
+  const pref = (k, fallback) => { try { return localStorage.getItem(key(k)) ?? fallback; } catch { return fallback; } };
+  const save = (k, v) => { try { localStorage.setItem(key(k), v); } catch {} };
+  const round2 = (v) => Math.round(v * 100) / 100;
+  const isBlank = (v) => v === null || v === undefined || v === "";
+  const cellText = (v) => isBlank(v) ? "" : typeof v === "boolean" ? (v ? "True" : "False") : typeof v === "number" ? v.toLocaleString(undefined, { maximumFractionDigits: 2 }) : String(v);
+  const state = { sort: { index: null, ascending: true }, page: 0 };
+
+  function computeTotals(cols, list) {
+    const sums = cols.map(() => 0), counts = cols.map(() => 0);
+    for (const row of list) cols.forEach((c, i) => {
+      const v = row[i];
+      if (c.kind === "number" && typeof v === "number" && Number.isFinite(v)) { sums[i] += v; counts[i] += 1; }
+      else if (c.kind === "bool" && v === true) counts[i] += 1;
+    });
+    const indexOf = new Map(cols.map((c, i) => [c.label, i]));
+    return cols.map((c, i) => {
+      if (c.kind === "bool") return { value: counts[i], mode: "true" };
+      if (c.kind !== "number") return null;
+      const rule = c.total ?? "sum";
+      if (rule === "none") return null;
+      if (rule === "avg") return counts[i] ? { value: sums[i] / counts[i], mode: "avg" } : null;
+      if (rule.ratio) {
+        const [top, bottom] = rule.ratio.map((l) => indexOf.get(l));
+        if (top === undefined || bottom === undefined || !sums[bottom]) return null;
+        return { value: (sums[top] / sums[bottom]) * (rule.scale ?? 1), mode: "ratio" };
+      }
+      return counts[i] ? { value: sums[i], mode: "sum" } : null;
+    });
+  }
+
+  const groupable = columns.map((c, i) => ({ c, i })).filter(({ c }) => c.kind !== "number" || c.total === "none");
+  const groupSel = $("groupBy");
+  groupSel.replaceChildren(new Option("No grouping", ""), ...groupable.map(({ c }) => new Option(`Group by ${c.label}`, c.label)));
+  const savedGroup = pref("groupBy", "");
+  groupSel.value = groupable.some(({ c }) => c.label === savedGroup) ? savedGroup : "";
+  groupSel.disabled = !groupable.length;
+  $("pageSize").value = pref("pageSize", "25");
+
+  function filtered() {
+    const terms = $("filter").value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length) return rows;
+    return rows.filter((r) => { const line = r.map(cellText).join(" ").toLowerCase(); return terms.every((t) => line.includes(t)); });
+  }
+
+  function view() {
+    const raw = filtered();
+    const totals = computeTotals(columns, raw);
+    const g = groupSel.value ? columns.findIndex((c) => c.label === groupSel.value) : -1;
+    if (g < 0) return { columns, rows: raw, totals, grouped: false, rawCount: raw.length };
+    const keyCol = columns[g];
+    const measures = columns.map((c, i) => ({ c, i })).filter(({ c }) => c.kind === "number" && (c.total ?? "sum") !== "none");
+    const cols = [{ label: keyCol.label, kind: keyCol.kind === "number" ? "number" : "text" }, { label: "Count", kind: "number", total: "sum" },
+      ...measures.map(({ c }) => (c.total === "avg" ? { ...c, label: `Avg ${c.label}` } : c))];
+    const groups = new Map();
+    for (const r of raw) {
+      const v = r[g];
+      const name = isBlank(v) ? "(blank)" : keyCol.kind === "bool" ? cellText(v) : v;
+      if (!groups.has(name)) groups.set(name, []);
+      groups.get(name).push(r);
+    }
+    const out = [...groups].map(([name, members]) => {
+      const t = computeTotals(columns, members);
+      return [name, members.length, ...measures.map(({ i }) => t[i]?.value ?? null)];
+    });
+    return { columns: cols, rows: out, totals: [null, { value: raw.length, mode: "sum" }, ...measures.map(({ i }) => totals[i])], grouped: true, rawCount: raw.length };
+  }
+
+  function sorted(list, cols) {
+    const { index, ascending } = state.sort;
+    if (index === null || !cols[index]) return list;
+    const dir = ascending ? 1 : -1, numeric = cols[index].kind === "number";
+    return [...list].sort((a, b) => {
+      const x = a[index], y = b[index];
+      if (isBlank(x) && isBlank(y)) return 0;
+      if (isBlank(x)) return 1;   // blanks last in both directions
+      if (isBlank(y)) return -1;
+      if (numeric) return (x - y) * dir;
+      return String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: "base" }) * dir;
+    });
+  }
+
+  function make(tag, cls, text) { const el = document.createElement(tag); if (cls) el.className = cls; if (text !== undefined) el.textContent = text; return el; }
+
+  function render() {
+    const v = view();
+    const all = sorted(v.rows, v.columns);
+    const size = Number($("pageSize").value);
+    const pages = size ? Math.max(1, Math.ceil(all.length / size)) : 1;
+    state.page = Math.min(state.page, pages - 1);
+    const shown = size ? all.slice(state.page * size, state.page * size + size) : all;
+
+    const head = make("tr");
+    v.columns.forEach((c, i) => {
+      const th = make("th", c.kind === "number" ? "num" : "", c.label);
+      if (state.sort.index === i) th.append(make("span", "arrow", state.sort.ascending ? "▲" : "▼"));
+      th.onclick = () => { state.sort = { index: i, ascending: state.sort.index === i ? !state.sort.ascending : true }; render(); };
+      head.append(th);
+    });
+    document.querySelector(".sheet-table thead").replaceChildren(head);
+
+    const body = document.createDocumentFragment();
+    for (const r of shown) {
+      const tr = make("tr");
+      r.forEach((val, i) => {
+        const kind = v.columns[i].kind;
+        const cls = isBlank(val) ? "blank" : kind === "number" ? "num" : typeof val === "boolean" ? (val ? "yes" : "no") : "";
+        const td = make("td", cls, cellText(val));
+        if (typeof val === "string" && val.length > 40) td.title = val;
+        tr.append(td);
+      });
+      body.append(tr);
+    }
+    if (!shown.length) { const tr = make("tr"); const td = make("td", "blank", rows.length ? "No rows match the filter." : "No rows returned."); td.colSpan = v.columns.length; tr.append(td); body.append(tr); }
+    document.querySelector(".sheet-table tbody").replaceChildren(body);
+
+    const foot = make("tr");
+    v.columns.forEach((c, i) => {
+      const t = v.totals[i];
+      let text = i === 0 ? "Total" : "";
+      if (t && i > 0) text = t.mode === "true" ? (t.value ? `${t.value.toLocaleString()} True` : "") : `${t.mode === "avg" && !v.grouped ? "avg " : ""}${cellText(round2(t.value))}`;
+      const td = make("td", c.kind === "number" || t?.mode === "true" ? "num" : "", text);
+      td.title = i === 0 ? "Totals for every row that matches the filter, on all pages" : t?.mode === "avg" ? "Average" : t?.mode === "ratio" ? "Calculated from the column totals" : "";
+      foot.append(td);
+    });
+    document.querySelector(".sheet-table tfoot").replaceChildren(foot);
+
+    $("count").textContent = (v.rawCount === rows.length ? `${rows.length.toLocaleString()} rows` : `${v.rawCount.toLocaleString()} of ${rows.length.toLocaleString()} rows`) + (v.grouped ? ` in ${v.rows.length} groups` : "");
+    $("pageInfo").textContent = `Page ${state.page + 1} of ${pages}`;
+    $("prev").disabled = state.page === 0;
+    $("next").disabled = state.page >= pages - 1;
+  }
+
+  $("filter").addEventListener("input", () => { state.page = 0; render(); });
+  groupSel.addEventListener("change", () => { save("groupBy", groupSel.value); state.sort = { index: null, ascending: true }; state.page = 0; render(); });
+  $("pageSize").addEventListener("change", () => { save("pageSize", $("pageSize").value); state.page = 0; render(); });
+  $("prev").onclick = () => { state.page -= 1; render(); };
+  $("next").onclick = () => { state.page += 1; render(); };
+  render();
+})();
+</script>
+{% endif %}
+{% endblock %}

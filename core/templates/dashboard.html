@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}{{ dash.title }} · vCommunity-Observability{% endblock %}
+{% set statuses = ['green', 'yellow', 'red', 'gray', 'Connected', 'Disconnected', 'NotResponding', 'Maintenance'] %}
+{% block body %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb"><a href="/">Dashboards</a> / {{ mod.name }}</div>
+    <h1>{{ dash.title }}</h1>
+    {% if dash.description %}<p class="subtle">{{ dash.description }}</p>{% endif %}
+  </div>
+  <div class="page-actions">
+    <span class="subtle">Collected {{ last_collected ~ ' UTC' if last_collected else 'never' }}</span>
+    <form method="post" action="/modules/{{ mod.name }}/run"><button class="btn btn-outline">Refresh data</button></form>
+  </div>
+</div>
+
+{% for r in run_errors %}
+<div class="alert alert-danger"><b>{{ r.collector }}</b> collector failed: {{ r.message }}</div>
+{% endfor %}
+
+<div class="widget-grid">
+{% for w in widgets %}
+  <section class="card {{ 'span-all' if w.type == 'table' or w.wide else '' }} {{ 'kpi-card ' ~ (w.level or 'none') if w.type == 'kpi' else '' }}">
+    {% if w.title %}<div class="card-header">{{ w.title }}</div>{% endif %}
+    <div class="card-block">
+    {% if w.error %}
+      <p class="text-danger">Query failed: {{ w.error }}</p>
+    {% elif w.type == 'kpi' %}
+      <div class="kpi-row">
+        {% if w.gauge is defined %}
+        <svg class="gauge {{ w.level }}" viewBox="0 0 36 36" width="64" height="64" aria-hidden="true">
+          <circle class="gauge-track" cx="18" cy="18" r="15.9" />
+          <circle class="gauge-fill" cx="18" cy="18" r="15.9" stroke-dasharray="{{ '%.1f'|format(w.gauge) }} 100" />
+        </svg>
+        {% endif %}
+        <div>
+          <div class="kpi-value {{ w.level }}">{{ '—' if w.value is none else w.value }}{% if w.unit and w.value is not none %}<small>{{ w.unit }}</small>{% endif %}</div>
+          <div class="subtle">{{ w.label }}</div>
+        </div>
+      </div>
+    {% elif w.type == 'bar' %}
+      {% for b in w.bars %}
+      <div class="bar-row">
+        <span class="bar-label" title="{{ b.label }}">{{ b.label }}</span>
+        <span class="bar-track"><span class="bar-fill {{ b.level }}" style="width: {{ '%.1f'|format(b.pct) }}%"></span></span>
+        <span class="bar-value">{{ b.value }}{{ w.unit or '' }}</span>
+      </div>
+      {% else %}<p class="subtle">No data yet.</p>{% endfor %}
+    {% elif w.type == 'table' %}
+      {% if w.rows %}
+      <div class="table-wrap"><table class="datagrid">
+        <thead><tr>{% for c in w.columns %}<th>{{ c|replace('_', ' ') }}</th>{% endfor %}</tr></thead>
+        <tbody>
+        {% for r in w.rows %}{% set lvl = w.levels[loop.index0] if w.levels else '' %}
+          <tr>{% for c in w.columns %}{% set v = r[c] %}
+            <td class="{{ 'num' if v is number else '' }}">
+              {%- if c == w.hl_col and lvl -%}<span class="label label-{{ lvl }}">{{ '—' if v is none else v }}</span>
+              {%- elif v in statuses -%}<span class="status status-{{ v|lower }}"><i></i>{{ v }}</span>
+              {%- else -%}{{ '—' if v is none else v }}{%- endif -%}
+            </td>{% endfor %}</tr>
+        {% endfor %}
+        </tbody>
+      </table></div>
+      {% else %}<p class="subtle">No data yet.</p>{% endif %}
+    {% endif %}
+    </div>
+  </section>
+{% endfor %}
+</div>
+{% endblock %}

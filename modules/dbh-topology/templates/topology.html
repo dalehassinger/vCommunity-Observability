@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+{% block title %}DBH Topology · vCommunity-Observability{% endblock %}
+{% set source = data.source[0] if data.source else none %}
+{% block head %}
+<style>
+  /* Colors follow DBH Insights' report.js, mapped onto the app theme so light and dark both work. */
+  .topo { --vmfs: #0072a3; --nfs: #3c8500; --vsan: #8939ad; --vvol: #c27b00; --other: #6c7a83; --bad: #db2100; }
+  [data-theme="dark"] .topo { --vmfs: #49afd9; --nfs: #60b515; --vsan: #c47bd6; --vvol: #f5c348; --other: #798d99; --bad: #f54f47; }
+  .topo-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 0 12px; color: var(--subtle); font-size: 13px; }
+  .topo-meta b { color: var(--text); font-weight: 600; }
+  .topo-legend { display: flex; gap: 16px; flex-wrap: wrap; color: var(--subtle); font-size: 12px; margin: 0 0 10px; }
+  .topo-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .topo-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .topo-legend .h { margin-left: auto; color: var(--subtle); }
+  .topo-diagram { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 8px; overflow-x: auto; margin-bottom: 18px; box-shadow: var(--shadow); }
+  svg.topology { display: block; max-width: 100%; height: auto; min-width: 640px; font-family: inherit; }
+  .col-head { fill: var(--subtle); font-size: 10px; letter-spacing: .09em; font-weight: 600; }
+  .cluster rect { fill: var(--surface-2); stroke: var(--border); stroke-dasharray: 3 3; }
+  .cluster-label { fill: var(--subtle); font-size: 11px; font-weight: 600; }
+  .node rect.box { fill: var(--surface); stroke: var(--border); }
+  .node-title { fill: var(--text); font-size: 12.5px; font-weight: 600; }
+  .node-sub { fill: var(--subtle); font-size: 11px; }
+  .host .dot { fill: var(--nfs); } .host.maint .dot { fill: var(--vvol); } .host.bad .dot { fill: var(--bad); }
+  .ds.vmfs .kind-bar { fill: var(--vmfs); } .ds.nfs .kind-bar { fill: var(--nfs); } .ds.vsan .kind-bar { fill: var(--vsan); }
+  .ds.vvol .kind-bar { fill: var(--vvol); } .ds.other .kind-bar { fill: var(--other); }
+  .cap-track { fill: var(--track); } .cap-fill { fill: var(--primary); } .cap-fill.warn { fill: var(--warn-fill); } .cap-fill.crit { fill: var(--crit); }
+  .link { fill: none; stroke-width: 1.4; opacity: .45; }
+  .link.vmfs { stroke: var(--vmfs); } .link.nfs { stroke: var(--nfs); } .link.vsan { stroke: var(--vsan); }
+  .link.vvol { stroke: var(--vvol); } .link.other { stroke: var(--other); }
+  svg.topology.focus .link { opacity: .07; } svg.topology.focus .link.on { opacity: 1; stroke-width: 2.4; }
+  svg.topology.focus .node { opacity: .3; } svg.topology.focus .node.on { opacity: 1; }
+  .node { cursor: pointer; }
+  .tag { padding: 1px 7px; border-radius: 9px; font-size: 11px; font-weight: 600; color: #fff; }
+  .tag.vmfs { background: var(--vmfs); } .tag.nfs { background: var(--nfs); } .tag.vsan { background: var(--vsan); }
+  .tag.vvol { background: var(--vvol); } .tag.other { background: var(--other); }
+  [data-theme="dark"] .topo .tag { color: #0b1a21; }
+  .topo .datagrid th.num { text-align: right; }
+  td.hosts { white-space: normal; color: var(--subtle); min-width: 220px; }
+  .topo h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--subtle); margin: 22px 0 8px; }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb"><a href="/">Dashboards</a> / {{ mod.name }}</div>
+    <h1>Host &amp; Storage Topology</h1>
+    <p class="subtle">{% if source %}{{ source.server }} · {% endif %}collected {{ last_collected ~ ' UTC' if last_collected else 'never' }}</p>
+  </div>
+  <div class="page-actions">
+    <button type="button" class="btn btn-outline" id="topo-download">Download HTML</button>
+    <form method="post" action="/modules/{{ mod.name }}/run"><button class="btn btn-outline">Refresh</button></form>
+  </div>
+</div>
+
+{% for r in run_errors %}<div class="alert alert-danger"><b>{{ r.collector }}</b> collector failed: {{ r.message }}</div>{% endfor %}
+{% for e in query_errors %}<div class="alert alert-danger">{{ e }}</div>{% endfor %}
+
+<div class="topo" id="topo">
+  {% if not data.hosts %}
+  <div class="card"><div class="card-block"><p class="subtle" style="margin:0">No topology yet. Click Refresh to collect it, or wait for the next scheduled run.</p></div></div>
+  {% else %}
+  <p class="topo-meta" id="topo-meta"></p>
+  <div class="topo-legend">
+    <span><i style="background:var(--vmfs)"></i>VMFS</span><span><i style="background:var(--nfs)"></i>NFS</span>
+    <span><i style="background:var(--vsan)"></i>vSAN</span><span><i style="background:var(--vvol)"></i>vVol</span>
+    <span><i style="background:var(--other)"></i>Other</span>
+    <span class="h">Lines connect each host to the datastores it has mounted. Hover a host or datastore to isolate its connections.</span>
+  </div>
+  <div class="topo-diagram" id="topo-diagram"></div>
+
+  <h3>Datastores</h3>
+  <div class="card" style="overflow-x:auto"><table class="datagrid" id="topo-ds">
+    <thead><tr><th>Datastore</th><th>Type</th><th class="num">Capacity</th><th class="num">Used</th><th class="num">Free</th><th class="num">Used %</th><th class="num">VMs</th><th class="num">Mounts</th><th>Mounted by</th></tr></thead>
+    <tbody></tbody></table></div>
+
+  <h3>Hosts</h3>
+  <div class="card" style="overflow-x:auto"><table class="datagrid" id="topo-hosts">
+    <thead><tr><th>Host</th><th>Cluster</th><th>State</th><th class="num">Cores</th><th class="num">DRAM</th><th class="num">Memory (incl. tiers)</th><th class="num">Datastores</th><th>Mounted datastores</th></tr></thead>
+    <tbody></tbody></table></div>
+  {% endif %}
+</div>
+
+{% if data.hosts %}
+<script id="topo-data" type="application/json">{{ {"source": source, "clusters": data.clusters, "hosts": data.hosts, "datastores": data.datastores, "mounts": data.mounts, "collected": last_collected}|tojson }}</script>
+<script>
+// Port of DBH Insights' collect/js/report.js. The layout is computed here in the
+// browser from the collected tables; the same SVG goes into the downloaded report.
+(() => {
+  const raw = JSON.parse(document.getElementById("topo-data").textContent);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const gib = (v) => (v === null || v === undefined ? "—" : v >= 1024 ? `${(v / 1024).toFixed(2)} TiB` : `${Number(v).toFixed(1)} GiB`);
+  const f1 = (n) => n.toFixed(1);
+  const kindClass = (kind) => {
+    const k = String(kind ?? "").toUpperCase();
+    return k.startsWith("VMFS") ? "vmfs" : k.startsWith("NFS") ? "nfs" : k.startsWith("VSAN") ? "vsan" : k.startsWith("VVOL") ? "vvol" : "other";
+  };
+
+  // ---- the topology object, shaped like insights.js fetchTopology() returns it
+  const mountsByDs = new Map();
+  for (const m of raw.mounts) (mountsByDs.get(m.datastore_moref) ?? mountsByDs.set(m.datastore_moref, []).get(m.datastore_moref)).push(m.host_moref);
+  const hosts = raw.hosts.map((h) => ({ moref: h.moref, name: h.name, cluster: h.cluster, clusterMoref: h.cluster_moref,
+    connectionState: h.connection_state, inMaintenance: !!h.in_maintenance, cpuCores: h.cores, memoryGiB: h.memory_gib, dramGiB: h.dram_gib }));
+  const t = {
+    server: raw.source?.server ?? "vCenter",
+    datacenters: (raw.source?.datacenters ?? "").split(", ").filter(Boolean),
+    clusters: raw.clusters.map((c) => ({ name: c.name, hosts: hosts.filter((h) => h.clusterMoref === c.moref) })),
+    standaloneHosts: hosts.filter((h) => !h.clusterMoref),
+    datastores: raw.datastores.map((d) => ({ moref: d.moref, name: d.name, kind: d.kind, capacityGiB: d.capacity_gib, freeGiB: d.free_gib,
+      usedGiB: d.used_gib, usedPct: d.used_pct, vmCount: d.vm_count, mountedBy: mountsByDs.get(d.moref) ?? [] })),
+  };
+  const allHosts = [...t.clusters.flatMap((c) => c.hosts), ...t.standaloneHosts];
+
+  // ---- the diagram (same geometry as report.js)
+  const HOST_H = 52, HOST_GAP = 12, DS_H = 62, DS_GAP = 12, CLUSTER_PAD = 30, CLUSTER_GAP = 22, NODE_W = 250, COL_GAP = 210, MARGIN = 24;
+  function diagram() {
+    const hostX = MARGIN + 14, dsX = hostX + NODE_W + COL_GAP, width = dsX + NODE_W + MARGIN;
+    const hostY = new Map();
+    let left = "", y = MARGIN + 26;
+    const groups = t.clusters.map((c) => [c.name, c.hosts]);
+    if (t.standaloneHosts.length) groups.push(["Standalone hosts", t.standaloneHosts]);
+    for (const [cluster, list] of groups) {
+      const inner = list.length ? list.length * HOST_H + (list.length - 1) * HOST_GAP : HOST_H;
+      const boxH = inner + CLUSTER_PAD + 14;
+      left += `<g class="cluster"><rect x="${f1(hostX - 14)}" y="${f1(y - 24)}" width="${f1(NODE_W + 28)}" height="${f1(boxH)}" rx="8"/><text class="cluster-label" x="${f1(hostX - 2)}" y="${f1(y - 7)}">${esc(cluster)}</text></g>`;
+      let hy = y + 8;
+      for (const h of list) {
+        const state = h.inMaintenance ? "maint" : h.connectionState === "connected" ? "ok" : "bad";
+        const cores = h.cpuCores ?? "—";
+        // With memory tiering on, memorySize counts the NVMe tier; the node shows DRAM.
+        const detail = h.dramGiB !== null && h.dramGiB !== undefined ? `${cores} cores · ${gib(h.dramGiB)} DRAM` : `${cores} cores · ${gib(h.memoryGiB)}`;
+        const tip = `${h.name}: ${h.inMaintenance ? "maintenance mode" : h.connectionState ?? "unknown"}`;
+        left += `<g class="node host ${state}" data-host="${esc(h.moref)}"><title>${esc(tip)}</title><rect class="box" x="${f1(hostX)}" y="${f1(hy)}" width="${NODE_W}" height="${HOST_H}" rx="6"/><circle class="dot" cx="${f1(hostX + 16)}" cy="${f1(hy + HOST_H / 2)}" r="4"/><text class="node-title" x="${f1(hostX + 30)}" y="${f1(hy + 21)}">${esc(h.name)}</text><text class="node-sub" x="${f1(hostX + 30)}" y="${f1(hy + 38)}">${esc(detail)}</text></g>`;
+        hostY.set(h.moref, hy + HOST_H / 2);
+        hy += HOST_H + HOST_GAP;
+      }
+      y += boxH + CLUSTER_GAP;
+    }
+    const dsY = new Map();
+    let right = "", dy = MARGIN + 26;
+    for (const ds of t.datastores) {
+      const cls = kindClass(ds.kind), pct = ds.usedPct ?? 0;
+      const barW = (NODE_W - 32) * Math.min(1, Math.max(0, pct / 100));
+      const sub = `${ds.kind ?? "—"} · ${gib(ds.freeGiB)} free of ${gib(ds.capacityGiB)}`;
+      const level = pct >= 90 ? " crit" : pct >= 75 ? " warn" : "";
+      right += `<g class="node ds ${cls}" data-ds="${esc(ds.moref)}"><title>${esc(`${ds.name}: ${pct.toFixed(1)}% used, ${ds.mountedBy.length} host mount${ds.mountedBy.length === 1 ? "" : "s"}, ${ds.vmCount} VMs`)}</title><rect class="box" x="${f1(dsX)}" y="${f1(dy)}" width="${NODE_W}" height="${DS_H}" rx="6"/><rect class="kind-bar" x="${f1(dsX)}" y="${f1(dy)}" width="5" height="${DS_H}"/><text class="node-title" x="${f1(dsX + 16)}" y="${f1(dy + 20)}">${esc(ds.name)}</text><text class="node-sub" x="${f1(dsX + 16)}" y="${f1(dy + 36)}">${esc(sub)}</text><rect class="cap-track" x="${f1(dsX + 16)}" y="${f1(dy + 46)}" width="${NODE_W - 32}" height="5" rx="2.5"/><rect class="cap-fill${level}" x="${f1(dsX + 16)}" y="${f1(dy + 46)}" width="${f1(barW)}" height="5" rx="2.5"/></g>`;
+      dsY.set(ds.moref, dy + DS_H / 2);
+      dy += DS_H + DS_GAP;
+    }
+    // Links first so the nodes paint over them.
+    let links = "";
+    for (const ds of t.datastores) {
+      const y2 = dsY.get(ds.moref), cls = kindClass(ds.kind);
+      for (const hm of ds.mountedBy) {
+        const y1 = hostY.get(hm);
+        if (y1 === undefined) continue; // mounted by a host outside this inventory view
+        const x1 = hostX + NODE_W, x2 = dsX, mid = (x1 + x2) / 2;
+        links += `<path class="link ${cls}" data-host="${esc(hm)}" data-ds="${esc(ds.moref)}" d="M${f1(x1)},${f1(y1)} C${f1(mid)},${f1(y1)} ${f1(mid)},${f1(y2)} ${f1(x2)},${f1(y2)}"/>`;
+      }
+    }
+    const height = Math.max(y, dy) + MARGIN;
+    return `<svg class="topology" xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height.toFixed(0)}" viewBox="0 0 ${width} ${height.toFixed(0)}" role="img" aria-label="Host and storage topology"><text class="col-head" x="${f1(hostX)}" y="18">HOSTS</text><text class="col-head" x="${f1(dsX)}" y="18">DATASTORES</text><g class="links">${links}</g>${left}${right}</svg>`;
+  }
+
+  // Hover isolates one node's links and the nodes at their far ends.
+  function attachHover(root) {
+    root.querySelectorAll("svg.topology").forEach(function (svg) {
+      function clear() { svg.classList.remove("focus"); svg.querySelectorAll(".on").forEach(function (el) { el.classList.remove("on"); }); }
+      svg.querySelectorAll(".node").forEach(function (node) {
+        node.addEventListener("mouseenter", function () {
+          clear();
+          var host = node.getAttribute("data-host"), ds = node.getAttribute("data-ds");
+          svg.classList.add("focus"); node.classList.add("on");
+          svg.querySelectorAll(".link" + (host ? '[data-host="' + host + '"]' : '[data-ds="' + ds + '"]')).forEach(function (link) {
+            link.classList.add("on");
+            var attr = host ? "data-ds" : "data-host", peer = svg.querySelector(".node[" + attr + '="' + link.getAttribute(attr) + '"]');
+            if (peer) peer.classList.add("on");
+          });
+        });
+        node.addEventListener("mouseleave", clear);
+      });
+    });
+  }
+
+  const hostName = new Map(allHosts.map((h) => [h.moref, h.name]));
+  const cap = t.datastores.reduce((n, d) => n + (d.capacityGiB ?? 0), 0), free = t.datastores.reduce((n, d) => n + (d.freeGiB ?? 0), 0);
+  const metaHtml = `<span><b>${esc(t.server)}</b></span><span>${esc(t.datacenters.join(", ") || "no datacenter")}</span><span>${t.clusters.length} clusters</span><span>${allHosts.length} hosts</span><span>${t.datastores.length} datastores</span><span>${gib(cap)} capacity, ${gib(free)} free</span>`;
+  const dsRows = t.datastores.map((ds) => {
+    const mounts = ds.mountedBy.map((m) => hostName.get(m) ?? m).sort();
+    return `<tr><td>${esc(ds.name)}</td><td><span class="tag ${kindClass(ds.kind)}">${esc(ds.kind ?? "—")}</span></td><td class="num">${gib(ds.capacityGiB)}</td><td class="num">${gib(ds.usedGiB)}</td><td class="num">${gib(ds.freeGiB)}</td><td class="num">${ds.usedPct === null ? "—" : ds.usedPct.toFixed(1) + "%"}</td><td class="num">${ds.vmCount}</td><td class="num">${ds.mountedBy.length}</td><td class="hosts">${esc(mounts.join(", "))}</td></tr>`;
+  }).join("");
+  const hostRows = allHosts.map((h) => {
+    const mounted = t.datastores.filter((d) => d.mountedBy.includes(h.moref));
+    return `<tr><td>${esc(h.name)}</td><td>${esc(h.cluster ?? "—")}</td><td>${esc(h.inMaintenance ? "maintenance" : h.connectionState ?? "—")}</td><td class="num">${h.cpuCores ?? "—"}</td><td class="num">${gib(h.dramGiB)}</td><td class="num">${gib(h.memoryGiB)}</td><td class="num">${mounted.length}</td><td class="hosts">${esc(mounted.map((d) => d.name).join(", "))}</td></tr>`;
+  }).join("");
+
+  const svg = diagram();
+  document.getElementById("topo-meta").innerHTML = metaHtml;
+  document.getElementById("topo-diagram").innerHTML = svg;
+  document.querySelector("#topo-ds tbody").innerHTML = dsRows;
+  document.querySelector("#topo-hosts tbody").innerHTML = hostRows;
+  attachHover(document);
+
+  // ---- standalone report for emailing or archiving (report.js render(), not embedded)
+  const REPORT_STYLE = `:root{--bg:#1b2a32;--panel:#22343c;--panel-alt:#1e2f37;--line:#314351;--line-2:#495a63;--text:#eaedf0;--dim:#adbbc4;--faint:#798d99;--accent:#49afd9;--vmfs:#49afd9;--nfs:#60b515;--vsan:#c47bd6;--vvol:#f5c348;--other:#798d99;--bad:#f54f47}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+header{padding:22px 28px;border-bottom:1px solid var(--line);background:var(--panel-alt)}h1{margin:0;font-size:19px;font-weight:600}header p{margin:4px 0 0;color:var(--dim);font-size:12px}
+main{padding:24px 28px 48px;max-width:1400px}h2{font-size:16px;margin:0 0 4px;color:var(--accent)}h3{font-size:13px;text-transform:uppercase;letter-spacing:.07em;color:var(--faint);margin:26px 0 8px}
+p.meta{margin:0 0 14px;color:var(--dim);font-size:12px}p.meta span{margin-right:14px}p.meta b{color:var(--text)}
+.diagram{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:8px;overflow-x:auto;width:fit-content;max-width:100%}
+svg.topology{display:block;max-width:100%;height:auto;min-width:640px}.col-head{fill:var(--faint);font-size:10px;letter-spacing:.09em;font-weight:600}
+.cluster rect{fill:rgba(73,175,217,.04);stroke:var(--line-2);stroke-dasharray:3 3}.cluster-label{fill:var(--dim);font-size:11px;font-weight:600}
+.node rect.box{fill:var(--panel-alt);stroke:var(--line-2)}.node-title{fill:var(--text);font-size:12.5px;font-weight:600}.node-sub{fill:var(--faint);font-size:11px}
+.host .dot{fill:var(--nfs)}.host.maint .dot{fill:var(--vvol)}.host.bad .dot{fill:var(--bad)}
+.ds.vmfs .kind-bar{fill:var(--vmfs)}.ds.nfs .kind-bar{fill:var(--nfs)}.ds.vsan .kind-bar{fill:var(--vsan)}.ds.vvol .kind-bar{fill:var(--vvol)}.ds.other .kind-bar{fill:var(--other)}
+.cap-track{fill:#16242b}.cap-fill{fill:var(--accent)}.cap-fill.warn{fill:var(--vvol)}.cap-fill.crit{fill:var(--bad)}
+.link{fill:none;stroke-width:1.4;opacity:.42}.link.vmfs{stroke:var(--vmfs)}.link.nfs{stroke:var(--nfs)}.link.vsan{stroke:var(--vsan)}.link.vvol{stroke:var(--vvol)}.link.other{stroke:var(--other)}
+svg.topology.focus .link{opacity:.08}svg.topology.focus .link.on{opacity:1;stroke-width:2.4}svg.topology.focus .node{opacity:.35}svg.topology.focus .node.on{opacity:1}.node{cursor:pointer}
+table{border-collapse:collapse;width:100%;font-size:12.5px}th,td{padding:7px 12px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+th{background:#17262e;color:var(--dim);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em}td.num,th.num{text-align:right}td.hosts{white-space:normal;color:var(--dim);min-width:220px}
+.tag{padding:1px 7px;border-radius:9px;font-size:11px;font-weight:600;color:#0b1a21}.tag.vmfs{background:var(--vmfs)}.tag.nfs{background:var(--nfs)}.tag.vsan{background:var(--vsan)}.tag.vvol{background:var(--vvol)}.tag.other{background:var(--other)}
+footer{padding:18px 28px;border-top:1px solid var(--line);color:var(--faint);font-size:11.5px}`;
+  document.getElementById("topo-download").addEventListener("click", () => {
+    const th = (id) => document.querySelector(`#${id} thead`).innerHTML;
+    const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>DBH Insights Topology Report</title><style>${REPORT_STYLE}</style></head><body>
+<header><h1>Host &amp; Storage Topology</h1><p>${esc(t.server)} · collected ${esc(raw.collected ? raw.collected + " UTC" : "unknown")} · generated ${esc(new Date().toLocaleString())} by vCommunity-Observability (dbh-topology)</p></header>
+<main><h2>${esc(t.server)}</h2><p class="meta">${metaHtml}</p><div class="diagram">${svg}</div>
+<h3>Datastores</h3><table><thead>${th("topo-ds")}</thead><tbody>${dsRows}</tbody></table>
+<h3>Hosts</h3><table><thead>${th("topo-hosts")}</thead><tbody>${hostRows}</tbody></table></main>
+<footer>Lines connect each host to the datastores it has mounted. Hover a host or datastore to isolate its connections.</footer>
+<script>(${attachHover.toString()})(document);<\/script></body></html>`;
+    const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+    const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(new Blob([html], { type: "text/html" })), download: `DBH_Insights_Topology_${stamp}.html` });
+    document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

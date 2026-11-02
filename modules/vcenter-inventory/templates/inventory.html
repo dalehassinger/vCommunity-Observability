@@ -1,0 +1,450 @@
+{% extends "base.html" %}
+{#
+  vCenter-style inventory browser. Everything is rendered on the server from the
+  module's SQLite tables (see module.yaml "queries"); selection and tabs are plain
+  links (?type=vm&name=UniFi&tab=summary), so it needs no JavaScript and works at
+  dark sites.
+#}
+{% block title %}vSphere Inventory · vCommunity-Observability{% endblock %}
+{% block layout_class %}inv-layout{% endblock %}
+{% block sidenav %}{% endblock %}
+
+{% block head %}
+<style>
+  .inv-layout .content { padding: 0; display: flex; min-height: calc(100vh - 56px); }
+  .inv-tree { width: 300px; flex: none; background: var(--surface); border-right: 1px solid var(--border);
+    position: sticky; top: 56px; height: calc(100vh - 56px); overflow: auto; font-size: 13px; }
+  .inv-tree-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px;
+    border-bottom: 1px solid var(--border); }
+  .inv-tree-head a { font-size: 12px; }
+  .inv-views { display: flex; gap: 4px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  .inv-views span { display: inline-flex; padding: 6px 10px; border-bottom: 2px solid transparent; color: var(--subtle); }
+  .inv-views span.on { border-bottom-color: var(--primary); color: var(--primary); }
+  .inv-tree ul { list-style: none; margin: 0; padding-left: 16px; }
+  .inv-tree > ul { padding: 6px 0 24px 6px; }
+  .inv-tree details > summary { list-style: none; cursor: pointer; }
+  .inv-tree details > summary::-webkit-details-marker { display: none; }
+  .inv-tree details > summary::before { content: ""; display: inline-block; width: 0; height: 0; margin: 0 6px 1px 2px;
+    border-left: 5px solid var(--subtle); border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform .1s; }
+  .inv-tree details[open] > summary::before { transform: rotate(90deg); }
+  .inv-tree .leaf { padding-left: 15px; }
+  .node { display: inline-flex; align-items: center; gap: 6px; padding: 2px 6px; border-radius: 3px; color: var(--text); white-space: nowrap; }
+  .node:hover { background: var(--surface-2); text-decoration: none; }
+  .node.sel { background: var(--info-bg); color: var(--primary); font-weight: 600; }
+  .node.off { color: var(--subtle); }
+  .ico { width: 16px; height: 16px; flex: none; color: var(--subtle); }
+  .ico.vm-on { color: var(--ok); }
+  .ico.ico-alert { color: var(--crit); }
+
+  .inv-main { flex: 1; min-width: 0; padding: 16px 24px 48px; }
+  .obj-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .obj-head h1 { margin: 0; font-size: 22px; }
+  .obj-head .ico { width: 24px; height: 24px; }
+  .obj-sub { color: var(--subtle); font-size: 12px; margin-top: 2px; }
+  .obj-actions { display: flex; gap: 6px; align-items: center; padding-left: 12px; margin-left: 4px; border-left: 1px solid var(--border); }
+  .tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--border); margin: 14px 0 16px; overflow-x: auto; }
+  .tabs a { padding: 8px 2px; color: var(--text); border-bottom: 3px solid transparent; white-space: nowrap; }
+  .tabs a:hover { text-decoration: none; color: var(--primary); }
+  .tabs a.on { border-bottom-color: var(--primary); font-weight: 600; }
+
+  .sum-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; align-items: stretch; }
+  .sum-card { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; box-shadow: var(--shadow); min-height: 220px; }
+  .sum-card.wide { grid-column: span 2; }
+  .sum-card h2 { display: flex; justify-content: space-between; margin: 0; padding: 14px 16px 6px; font-size: 15px; font-weight: 500; }
+  .sum-card h2::after { content: "⋮⋮"; color: var(--border); letter-spacing: -3px; font-size: 14px; }
+  .sum-body { padding: 8px 16px 14px; flex: 1; }
+  .sum-foot { padding: 10px 16px; border-top: 1px solid var(--border); font-size: 11px; font-weight: 600;
+    letter-spacing: .06em; text-transform: uppercase; }
+  .kv { display: grid; grid-template-columns: minmax(110px, 38%) 1fr; gap: 7px 14px; font-size: 13px; }
+  .kv dt { font-weight: 600; }
+  .kv dd { margin: 0; overflow-wrap: anywhere; }
+  .usage-item { margin: 10px 0 14px; }
+  .usage-item .lbl { font-weight: 600; font-size: 13px; }
+  .usage-item .val { display: flex; align-items: center; gap: 8px; font-size: 26px; font-weight: 300; margin-top: 2px; }
+  .usage-item .val small { font-size: 12px; color: var(--subtle); }
+  .usage-item .val .ico { width: 22px; height: 22px; color: var(--text); }
+  .cap { margin: 8px 0 16px; font-size: 13px; }
+  .cap-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  .cap-bar { height: 8px; background: var(--track); border-radius: 2px; overflow: hidden; }
+  .cap-bar span { display: block; height: 100%; background: var(--primary); }
+  .cap-bar span.warn { background: var(--warn-fill); } .cap-bar span.crit { background: var(--crit); }
+  .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; height: 100%;
+    min-height: 120px; color: var(--subtle); font-size: 13px; }
+  .empty .ico { width: 30px; height: 30px; color: var(--subtle); }
+  .os-tile { display: flex; align-items: center; justify-content: center; height: 118px; background: #0b1013; border-radius: 3px;
+    color: #9fe0a9; font: 11px/1.4 ui-monospace, Menlo, monospace; padding: 10px; overflow: hidden; white-space: pre; }
+  .os-tile.off { color: #6c7a83; }
+  .rel { font-size: 13px; }
+  .rel dt { font-weight: 600; margin-top: 8px; }
+  .rel dd { margin: 2px 0 0; display: flex; align-items: center; gap: 6px; }
+  .count-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; text-align: center; }
+  .count-grid b { display: block; font-size: 28px; font-weight: 300; }
+  .count-grid span { font-size: 12px; color: var(--subtle); }
+  .snap { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  @media (max-width: 860px) {
+    .inv-layout .content { flex-direction: column; }
+    .inv-tree { width: auto; height: auto; max-height: 45vh; position: static; border-right: 0; border-bottom: 1px solid var(--border); }
+    .inv-main { padding: 14px 16px 40px; }
+    .sum-card.wide { grid-column: auto; }
+  }
+</style>
+{% endblock %}
+
+{# ------------------------------------------------------------------ helpers #}
+{% macro href(type, name='', tab='') -%}
+  ?type={{ type }}{% if name %}&name={{ name|urlencode }}{% endif %}{% if tab %}&tab={{ tab }}{% endif %}
+{%- endmacro %}
+
+{% macro icon(kind, cls='') -%}
+<svg class="ico {{ cls }}" viewBox="0 0 16 16" aria-hidden="true">
+  {%- if kind == 'vcenter' -%}<rect x="2" y="2" width="12" height="4" rx="1" fill="none" stroke="currentColor"/><rect x="2" y="7" width="12" height="4" rx="1" fill="none" stroke="currentColor"/><path d="M4 13.5h8" stroke="currentColor"/>
+  {%- elif kind == 'datacenter' -%}<path d="M2.5 14V5l5.5-3 5.5 3v9z" fill="none" stroke="currentColor"/><path d="M5.5 14v-4h5v4M5 6.5h6" stroke="currentColor" fill="none"/>
+  {%- elif kind == 'cluster' -%}<rect x="1.5" y="3" width="13" height="10" rx="1" fill="none" stroke="currentColor"/><path d="M5.5 3v10M10.5 3v10" stroke="currentColor"/>
+  {%- elif kind == 'host' -%}<rect x="4" y="1.5" width="8" height="13" rx="1" fill="none" stroke="currentColor"/><path d="M6 4.5h4M6 7h4" stroke="currentColor"/><circle cx="8" cy="11.5" r=".9" fill="currentColor"/>
+  {%- elif kind == 'vm' -%}<rect x="1.5" y="4.5" width="10" height="8" rx="1" fill="none" stroke="currentColor"/><path d="M4.5 4.5V2.5h10v8h-3" fill="none" stroke="currentColor"/>
+  {%- elif kind == 'cpu' -%}<rect x="4" y="4" width="8" height="8" fill="none" stroke="currentColor"/><path d="M6 2v2M10 2v2M6 12v2M10 12v2M2 6h2M2 10h2M12 6h2M12 10h2" stroke="currentColor"/>
+  {%- elif kind == 'mem' -%}<rect x="1.5" y="5" width="13" height="6" fill="none" stroke="currentColor"/><path d="M4 11v2M7 11v2M10 11v2M13 11v2M4 7.5h1.5M7 7.5h1.5M10 7.5h1.5" stroke="currentColor"/>
+  {%- elif kind == 'disk' -%}<ellipse cx="8" cy="4" rx="5.5" ry="2" fill="none" stroke="currentColor"/><path d="M2.5 4v8c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2V4M2.5 8c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2" fill="none" stroke="currentColor"/>
+  {%- elif kind == 'net' -%}<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12" fill="none" stroke="currentColor"/>
+  {%- elif kind == 'info' -%}<circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor"/><path d="M8 7v4.5" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="4.8" r=".9" fill="currentColor"/>
+  {%- elif kind == 'note' -%}<path d="M3 2.5h7l3 3v8H3z" fill="none" stroke="currentColor"/><path d="M5.5 7h5M5.5 9.5h5" stroke="currentColor"/>
+  {%- elif kind == 'snap' -%}<rect x="1.5" y="4.5" width="13" height="9" rx="1" fill="none" stroke="currentColor"/><circle cx="8" cy="9" r="2.5" fill="none" stroke="currentColor"/><path d="M5.5 4.5l1-2h3l1 2" fill="none" stroke="currentColor"/>
+  {%- endif -%}
+</svg>
+{%- endmacro %}
+
+{% macro mhz(v) -%}
+  {%- if v is none -%}—{%- elif v >= 1000 -%}{{ '%.2f'|format(v / 1000) }} GHz{%- else -%}{{ v|int }} MHz{%- endif -%}
+{%- endmacro %}
+
+{% macro capbar(label, used, total, unit) -%}
+  {% set pct = (used / total * 100) if (total and used is not none) else 0 %}
+  <div class="cap">
+    <div class="cap-row"><b>{{ label }}</b><span class="subtle">{{ '%.1f'|format(pct) }}% used</span></div>
+    <div class="cap-bar"><span class="{{ 'crit' if pct >= 90 else 'warn' if pct >= 75 else '' }}" style="width: {{ '%.1f'|format(pct) }}%"></span></div>
+    <div class="cap-row subtle" style="margin-top:4px"><span>Used: {{ used|round(1) }} {{ unit }}</span><span>Capacity: {{ total|round(1) }} {{ unit }}</span></div>
+  </div>
+{%- endmacro %}
+
+{% macro vm_table(rows) -%}
+  <div class="card"><div class="card-block"><div class="table-wrap"><table class="datagrid">
+    <thead><tr><th>Name</th><th>State</th><th>Status</th><th>Host</th><th>Guest OS</th><th>CPUs</th><th>Memory</th><th>Used space</th><th>IP address</th></tr></thead>
+    <tbody>
+    {% for v in rows %}<tr>
+      <td><a class="node" href="{{ href('vm', v.name) }}">{{ icon('vm', 'vm-on' if v.power_state == 'poweredOn' else '') }}{{ v.name }}</a></td>
+      <td>{{ 'Powered On' if v.power_state == 'poweredOn' else 'Powered Off' }}</td>
+      <td><span class="status status-{{ v.overall_status }}"><i></i>{{ v.overall_status }}</span></td>
+      <td>{{ v.host }}</td><td>{{ v.guest_os }}</td><td class="num">{{ v.cpu_count }}</td>
+      <td class="num">{{ v.memory_gb }} GB</td><td class="num">{{ v.storage_used_gb }} GB</td>
+      <td>{{ (v.ip_addresses or '').split(', ')[0] }}</td>
+    </tr>{% else %}<tr><td colspan="9" class="subtle">No virtual machines.</td></tr>{% endfor %}
+    </tbody></table></div></div></div>
+{%- endmacro %}
+
+{% macro host_table(rows) -%}
+  <div class="card"><div class="card-block"><div class="table-wrap"><table class="datagrid">
+    <thead><tr><th>Name</th><th>State</th><th>Status</th><th>Cluster</th><th>CPU used</th><th>Memory used</th><th>VMs</th><th>Version</th><th>Uptime</th></tr></thead>
+    <tbody>
+    {% for h in rows %}<tr>
+      <td><a class="node" href="{{ href('host', h.name) }}">{{ icon('host', 'ico-alert' if h.overall_status == 'red' else '') }}{{ h.name }}</a></td>
+      <td>{{ 'Maintenance' if h.maintenance_mode else h.connection_state|capitalize }}</td>
+      <td><span class="status status-{{ h.overall_status }}"><i></i>{{ h.overall_status }}</span></td>
+      <td>{{ h.cluster or '—' }}</td>
+      <td class="num">{{ '%.0f'|format(h.cpu_used_mhz / h.cpu_total_mhz * 100) if h.cpu_total_mhz else '—' }}%</td>
+      <td class="num">{{ '%.0f'|format(h.mem_used_gb / h.mem_total_gb * 100) if h.mem_total_gb else '—' }}%</td>
+      <td class="num">{{ h.vm_count }}</td><td>{{ h.version }}</td><td class="num">{{ h.uptime_days }} days</td>
+    </tr>{% else %}<tr><td colspan="9" class="subtle">No hosts.</td></tr>{% endfor %}
+    </tbody></table></div></div></div>
+{%- endmacro %}
+
+{% macro list_card(title, items, kind) -%}
+  <div class="card"><div class="card-block"><div class="table-wrap"><table class="datagrid">
+    <thead><tr><th>{{ title }}</th></tr></thead>
+    <tbody>{% for i in items %}{% if i %}<tr><td><span class="node">{{ icon(kind) }}{{ i }}</span></td></tr>{% endif %}{% else %}<tr><td class="subtle">None</td></tr>{% endfor %}</tbody>
+  </table></div></div></div>
+{%- endmacro %}
+
+{# ------------------------------------------------------------------ data #}
+{% set vms = data.vms %}
+{% set hosts = data.hosts %}
+{% set clusters = data.clusters %}
+{% set vc = data.vcenter[0] if data.vcenter else {'name': 'vCenter', 'version': '', 'build': ''} %}
+{% set dcs = (hosts|map(attribute='datacenter')|list + vms|map(attribute='datacenter')|list + clusters|map(attribute='datacenter')|list)|unique|sort %}
+{% set sel_type = q.type or 'vcenter' %}
+{% set tab = q.tab or 'summary' %}
+{% if sel_type == 'vm' %}{% set sel = vms|selectattr('name', 'equalto', q.name)|first %}
+{% elif sel_type == 'host' %}{% set sel = hosts|selectattr('name', 'equalto', q.name)|first %}
+{% elif sel_type == 'cluster' %}{% set sel = clusters|selectattr('name', 'equalto', q.name)|first %}
+{% else %}{% set sel = vc %}{% set sel_type = 'vcenter' %}{% endif %}
+
+{% block body %}
+{# ------------------------------------------------------------------ tree #}
+<aside class="inv-tree">
+  <div class="inv-tree-head"><b>Inventory</b><a href="/">← Dashboards</a></div>
+  <div class="inv-views"><span class="on" title="Hosts and Clusters">{{ icon('cluster') }}</span><span title="VMs (from the tree)">{{ icon('vm') }}</span><span title="Storage">{{ icon('disk') }}</span><span title="Networking">{{ icon('net') }}</span></div>
+  <ul>
+    <li><details open><summary><a class="node {{ 'sel' if sel_type == 'vcenter' }}" href="{{ href('vcenter') }}">{{ icon('vcenter') }}{{ vc.name }}</a></summary>
+      <ul>
+      {% for dc in dcs %}
+        <li><details open><summary><span class="node">{{ icon('datacenter') }}{{ dc }}</span></summary>
+          <ul>
+          {% for cl in clusters|selectattr('datacenter', 'equalto', dc) %}
+            {% set open = (sel_type in ['host', 'vm'] and sel and sel.cluster == cl.name) or (sel_type == 'cluster' and sel and sel.name == cl.name) or loop.first %}
+            <li><details {{ 'open' if open }}><summary><a class="node {{ 'sel' if sel_type == 'cluster' and sel and sel.name == cl.name }}" href="{{ href('cluster', cl.name) }}">{{ icon('cluster') }}{{ cl.name }}</a></summary>
+              <ul>
+              {% for h in hosts|selectattr('cluster', 'equalto', cl.name) %}
+                <li class="leaf"><a class="node {{ 'sel' if sel_type == 'host' and sel and sel.name == h.name }}" href="{{ href('host', h.name) }}">{{ icon('host', 'ico-alert' if h.overall_status == 'red' else '') }}{{ h.name }}</a></li>
+              {% endfor %}
+              {% for v in vms|selectattr('cluster', 'equalto', cl.name) %}
+                <li class="leaf"><a class="node {{ 'sel' if sel_type == 'vm' and sel and sel.name == v.name }} {{ 'off' if v.power_state != 'poweredOn' }}" href="{{ href('vm', v.name) }}">{{ icon('vm', 'vm-on' if v.power_state == 'poweredOn' else '') }}{{ v.name }}</a></li>
+              {% endfor %}
+              </ul></details></li>
+          {% endfor %}
+          {% for h in hosts|selectattr('datacenter', 'equalto', dc)|selectattr('cluster', 'equalto', '') %}
+            <li class="leaf"><a class="node {{ 'sel' if sel_type == 'host' and sel and sel.name == h.name }}" href="{{ href('host', h.name) }}">{{ icon('host') }}{{ h.name }}</a></li>
+          {% endfor %}
+          {% for v in vms|selectattr('datacenter', 'equalto', dc)|selectattr('cluster', 'equalto', '') %}
+            <li class="leaf"><a class="node {{ 'sel' if sel_type == 'vm' and sel and sel.name == v.name }}" href="{{ href('vm', v.name) }}">{{ icon('vm', 'vm-on' if v.power_state == 'poweredOn' else '') }}{{ v.name }}</a></li>
+          {% endfor %}
+          </ul></details></li>
+      {% endfor %}
+      </ul></details></li>
+  </ul>
+</aside>
+
+{# ------------------------------------------------------------------ object pane #}
+<section class="inv-main">
+  {% for r in run_errors %}<div class="alert alert-danger"><b>{{ r.collector }}</b> collector failed: {{ r.message }}</div>{% endfor %}
+  {% for e in query_errors %}<div class="alert alert-danger">{{ e }}</div>{% endfor %}
+
+  {% if not sel %}
+    <div class="empty">{{ icon('info') }}Object not found. It may have been removed since the last collection.</div>
+  {% else %}
+  {% set kind_icon = {'vcenter': 'vcenter', 'cluster': 'cluster', 'host': 'host', 'vm': 'vm'}[sel_type] %}
+  <div class="obj-head">
+    {{ icon(kind_icon, 'vm-on' if sel_type == 'vm' and sel.power_state == 'poweredOn' else '') }}
+    <div>
+      <h1>{{ sel.name }}</h1>
+      <div class="obj-sub">{{ {'vcenter': 'vCenter Server', 'cluster': 'Cluster', 'host': 'Host', 'vm': 'Virtual Machine'}[sel_type] }}{% if last_collected %} · data as of {{ last_collected }} UTC{% endif %}</div>
+    </div>
+    <div class="obj-actions">
+      <form method="post" action="/modules/{{ mod.name }}/run" style="margin:0"><button class="btn btn-outline">Refresh</button></form>
+    </div>
+  </div>
+
+  {% set tabs = {
+      'vcenter': [('summary', 'Summary'), ('hosts', 'Hosts'), ('vms', 'VMs')],
+      'cluster': [('summary', 'Summary'), ('hosts', 'Hosts'), ('vms', 'VMs')],
+      'host':    [('summary', 'Summary'), ('vms', 'VMs'), ('datastores', 'Datastores'), ('networks', 'Networks')],
+      'vm':      [('summary', 'Summary'), ('datastores', 'Datastores'), ('networks', 'Networks'), ('snapshots', 'Snapshots')],
+  }[sel_type] %}
+  <nav class="tabs">{% for key, label in tabs %}<a class="{{ 'on' if tab == key }}" href="{{ href(sel_type, sel.name if sel_type != 'vcenter' else '', key) }}">{{ label }}</a>{% endfor %}</nav>
+
+  {# ============================== VM #}
+  {% if sel_type == 'vm' %}{% set v = sel %}{% set on = v.power_state == 'poweredOn' %}
+    {% set ips = (v.ip_addresses or '').split(', ')|reject('equalto', '')|list %}
+    {% if tab == 'summary' %}
+    <div class="sum-grid">
+      <article class="sum-card">
+        <h2>Guest OS</h2>
+        <div class="sum-body">
+          <div class="os-tile {{ '' if on else 'off' }}">{% if on %}{{ v.dns_name or v.name }} login:
+{{ v.guest_os }}
+uptime {{ v.uptime_days }} days{% else %}Powered off{% endif %}</div>
+          <p class="subtle" style="margin:10px 0 0">{{ v.guest_family|replace('Guest', '')|capitalize or 'Unknown' }} guest</p>
+        </div>
+      </article>
+
+      <article class="sum-card wide">
+        <h2>Virtual Machine Details</h2>
+        <div class="sum-body"><dl class="kv">
+          <dt>Power Status</dt><dd><span class="status status-{{ 'green' if on else 'gray' }}"><i></i>{{ 'Powered On' if on else 'Powered Off' }}</span></dd>
+          <dt>Guest OS</dt><dd>{{ v.guest_os or '—' }}</dd>
+          <dt>VMware Tools</dt><dd>{{ 'Running' if v.tools_status == 'guestToolsRunning' else 'Not running' }}{% if v.tools_version %}, version: {{ v.tools_version }}{% endif %}</dd>
+          <dt>DNS Name</dt><dd>{{ v.dns_name or '—' }}</dd>
+          <dt>IP Addresses ({{ ips|length }})</dt>
+          <dd>{% if ips %}{{ ips[0] }}{% if ips|length > 1 %}<details><summary class="subtle" style="cursor:pointer">and {{ ips|length - 1 }} more</summary>{% for ip in ips[1:] %}{{ ip }}<br>{% endfor %}</details>{% endif %}{% else %}—{% endif %}</dd>
+          <dt>Overall status</dt><dd><span class="status status-{{ v.overall_status }}"><i></i>{{ v.overall_status }}</span></dd>
+        </dl></div>
+      </article>
+
+      <article class="sum-card">
+        <h2>Usage</h2>
+        <div class="sum-body">
+          <div class="subtle">Last updated: {{ v.collected_at }} UTC</div>
+          <div class="usage-item"><div class="lbl">CPU</div><div class="val">{{ icon('cpu') }}{{ mhz(v.cpu_used_mhz) }} <small>used</small></div></div>
+          <div class="usage-item"><div class="lbl">Memory</div><div class="val">{{ icon('mem') }}{{ (v.memory_active_mb or 0)|int }} MB <small>used</small></div></div>
+          <div class="usage-item"><div class="lbl">Storage</div><div class="val">{{ icon('disk') }}{{ v.storage_used_gb }} GB <small>used</small></div></div>
+        </div>
+        <div class="sum-foot"><a href="/api/{{ mod.name }}/vms">View data (API)</a></div>
+      </article>
+
+      <article class="sum-card wide">
+        <h2>VM Hardware</h2>
+        <div class="sum-body"><dl class="kv">
+          <dt>CPU</dt><dd>{{ v.cpu_count }} CPU(s), {{ mhz(v.cpu_used_mhz) }} used</dd>
+          <dt>Memory</dt><dd>{{ v.memory_gb }} GB, {{ '%.1f'|format((v.memory_active_mb or 0) / 1024) }} GB memory active</dd>
+          {% for d in (v.disks or '').split(';') if d %}{% set p = d.split('|') %}
+          <dt>{{ p[0] }}</dt><dd>{{ p[1] }} GB | {{ p[2] }}<br><a href="{{ href('vm', v.name, 'datastores') }}">{{ p[3] }}</a></dd>
+          {% endfor %}
+          {% for n in (v.nics or '').split(';') if n %}{% set p = n.split('|') %}
+          <dt>{{ p[0] }}</dt><dd><a href="{{ href('vm', v.name, 'networks') }}">{{ p[1] }}</a> ({{ p[2] }}) | {{ p[3] }}</dd>
+          {% endfor %}
+          <dt>CD/DVD drive 1</dt><dd>{{ v.cdrom or '—' }}</dd>
+          <dt>Compatibility</dt><dd>{{ v.hw_version or '—' }}</dd>
+        </dl></div>
+      </article>
+
+      <article class="sum-card">
+        <h2>Related Objects</h2>
+        <div class="sum-body"><dl class="rel">
+          <dt>Cluster</dt><dd>{% if v.cluster %}{{ icon('cluster') }}<a href="{{ href('cluster', v.cluster) }}">{{ v.cluster }}</a>{% else %}—{% endif %}</dd>
+          <dt>Host</dt><dd>{% if v.host %}{{ icon('host') }}<a href="{{ href('host', v.host) }}">{{ v.host }}</a>{% else %}—{% endif %}</dd>
+          <dt>Networks</dt>{% for n in (v.networks or '').split(', ') if n %}<dd>{{ icon('net') }}{{ n }}</dd>{% else %}<dd>—</dd>{% endfor %}
+          <dt>Storage</dt>{% for d in (v.datastores or '').split(', ') if d %}<dd>{{ icon('disk') }}{{ d }}</dd>{% else %}<dd>—</dd>{% endfor %}
+        </dl></div>
+      </article>
+
+      <article class="sum-card">
+        <h2>Notes</h2>
+        <div class="sum-body">{% if v.notes %}<p style="margin:0; white-space:pre-wrap">{{ v.notes }}</p>{% else %}<div class="empty">{{ icon('note') }}No notes assigned</div>{% endif %}</div>
+      </article>
+
+      <article class="sum-card">
+        <h2>Snapshots</h2>
+        <div class="sum-body">
+          {% set snaps = (v.snapshots or '').split(';')|reject('equalto', '')|list %}
+          {% if snaps %}{% for s in snaps %}<div class="snap">{{ icon('snap') }}{{ s }}</div>{% endfor %}
+          {% else %}<div class="empty">{{ icon('info') }}No snapshot taken</div>{% endif %}
+        </div>
+        <div class="sum-foot"><a href="{{ href('vm', v.name, 'snapshots') }}">Manage</a></div>
+      </article>
+    </div>
+    {% elif tab == 'datastores' %}{{ list_card('Datastore', (v.datastores or '').split(', '), 'disk') }}
+    {% elif tab == 'networks' %}{{ list_card('Network', (v.networks or '').split(', '), 'net') }}
+    {% elif tab == 'snapshots' %}{{ list_card('Snapshot', (v.snapshots or '').split(';'), 'snap') }}
+    {% endif %}
+
+  {# ============================== Host #}
+  {% elif sel_type == 'host' %}{% set h = sel %}
+    {% if tab == 'summary' %}
+    <div class="sum-grid">
+      <article class="sum-card wide">
+        <h2>Host Details</h2>
+        <div class="sum-body"><dl class="kv">
+          <dt>Hypervisor</dt><dd>ESXi {{ h.version }}, build {{ h.build }}</dd>
+          <dt>Model</dt><dd>{{ h.vendor }} {{ h.model }}</dd>
+          <dt>Processor Type</dt><dd>{{ h.cpu_model }}</dd>
+          <dt>Logical Processors</dt><dd>{{ h.cpu_threads }} ({{ h.cpu_sockets }} socket(s), {{ h.cpu_cores }} cores)</dd>
+          <dt>NICs</dt><dd>{{ h.nic_count }}</dd>
+          <dt>Virtual Machines</dt><dd>{{ h.vm_count }}</dd>
+          <dt>State</dt><dd>{{ 'Maintenance mode' if h.maintenance_mode else h.connection_state|capitalize }}</dd>
+          <dt>Status</dt><dd><span class="status status-{{ h.overall_status }}"><i></i>{{ h.overall_status }}</span></dd>
+          <dt>Uptime</dt><dd>{{ h.uptime_days }} days</dd>
+        </dl></div>
+      </article>
+      <article class="sum-card">
+        <h2>Capacity and Usage</h2>
+        <div class="sum-body">
+          <div class="subtle">Last updated: {{ h.collected_at }} UTC</div>
+          {{ capbar('CPU', (h.cpu_used_mhz or 0) / 1000, (h.cpu_total_mhz or 0) / 1000, 'GHz') }}
+          {{ capbar('Memory', h.mem_used_gb, h.mem_total_gb, 'GB') }}
+        </div>
+      </article>
+      <article class="sum-card">
+        <h2>Related Objects</h2>
+        <div class="sum-body"><dl class="rel">
+          <dt>Datacenter</dt><dd>{{ icon('datacenter') }}{{ h.datacenter }}</dd>
+          <dt>Cluster</dt><dd>{% if h.cluster %}{{ icon('cluster') }}<a href="{{ href('cluster', h.cluster) }}">{{ h.cluster }}</a>{% else %}—{% endif %}</dd>
+          <dt>Datastores</dt><dd>{{ icon('disk') }}<a href="{{ href('host', h.name, 'datastores') }}">{{ (h.datastores or '').split(', ')|reject('equalto','')|list|length }} datastore(s)</a></dd>
+          <dt>Networks</dt><dd>{{ icon('net') }}<a href="{{ href('host', h.name, 'networks') }}">{{ (h.networks or '').split(', ')|reject('equalto','')|list|length }} network(s)</a></dd>
+        </dl></div>
+      </article>
+    </div>
+    {% elif tab == 'vms' %}{{ vm_table(vms|selectattr('host', 'equalto', h.name)) }}
+    {% elif tab == 'datastores' %}{{ list_card('Datastore', (h.datastores or '').split(', '), 'disk') }}
+    {% elif tab == 'networks' %}{{ list_card('Network', (h.networks or '').split(', '), 'net') }}
+    {% endif %}
+
+  {# ============================== Cluster #}
+  {% elif sel_type == 'cluster' %}{% set c = sel %}
+    {% if tab == 'summary' %}
+    {% set cvms = vms|selectattr('cluster', 'equalto', c.name)|list %}
+    <div class="sum-grid">
+      <article class="sum-card">
+        <h2>Cluster Details</h2>
+        <div class="sum-body"><dl class="kv">
+          <dt>Datacenter</dt><dd>{{ c.datacenter }}</dd>
+          <dt>Hosts</dt><dd><a href="{{ href('cluster', c.name, 'hosts') }}">{{ c.host_count }}</a></dd>
+          <dt>Virtual Machines</dt><dd><a href="{{ href('cluster', c.name, 'vms') }}">{{ cvms|length }}</a> ({{ cvms|selectattr('power_state', 'equalto', 'poweredOn')|list|length }} powered on)</dd>
+          <dt>vSphere DRS</dt><dd>{{ 'On' if c.drs_enabled else 'Off' }}</dd>
+          <dt>vSphere HA</dt><dd>{{ 'On' if c.ha_enabled else 'Off' }}</dd>
+        </dl></div>
+      </article>
+      <article class="sum-card wide">
+        <h2>Capacity and Usage</h2>
+        <div class="sum-body">
+          <div class="subtle">Last updated: {{ c.collected_at }} UTC</div>
+          {{ capbar('CPU', (c.cpu_used_mhz or 0) / 1000, (c.cpu_total_mhz or 0) / 1000, 'GHz') }}
+          {{ capbar('Memory', c.mem_used_gb, c.mem_total_gb, 'GB') }}
+          {{ capbar('Storage', (c.storage_total_gb or 0) - (c.storage_free_gb or 0), c.storage_total_gb, 'GB') }}
+        </div>
+      </article>
+      <article class="sum-card">
+        <h2>Host Status</h2>
+        <div class="sum-body">
+          {% for h in hosts|selectattr('cluster', 'equalto', c.name) %}
+          <div class="snap"><span class="status status-{{ h.overall_status }}"><i></i></span><a href="{{ href('host', h.name) }}">{{ h.name }}</a></div>
+          {% endfor %}
+        </div>
+      </article>
+    </div>
+    {% elif tab == 'hosts' %}{{ host_table(hosts|selectattr('cluster', 'equalto', c.name)) }}
+    {% elif tab == 'vms' %}{{ vm_table(vms|selectattr('cluster', 'equalto', c.name)) }}
+    {% endif %}
+
+  {# ============================== vCenter root #}
+  {% else %}
+    {% if tab == 'summary' %}
+    {% set on_vms = vms|selectattr('power_state', 'equalto', 'poweredOn')|list %}
+    <div class="sum-grid">
+      <article class="sum-card">
+        <h2>vCenter Details</h2>
+        <div class="sum-body"><dl class="kv">
+          <dt>Version</dt><dd>{{ vc.version or '—' }}</dd>
+          <dt>Build</dt><dd>{{ vc.build or '—' }}</dd>
+          <dt>Datacenters</dt><dd>{{ dcs|length }}</dd>
+          <dt>Last collected</dt><dd>{{ last_collected or 'never' }}{{ ' UTC' if last_collected }}</dd>
+        </dl></div>
+      </article>
+      <article class="sum-card">
+        <h2>Inventory</h2>
+        <div class="sum-body">
+          <div class="count-grid">
+            <div><b>{{ clusters|length }}</b><span>Clusters</span></div>
+            <div><b><a href="{{ href('vcenter', '', 'hosts') }}">{{ hosts|length }}</a></b><span>Hosts</span></div>
+            <div><b><a href="{{ href('vcenter', '', 'vms') }}">{{ vms|length }}</a></b><span>VMs</span></div>
+          </div>
+          <dl class="kv" style="margin-top:18px">
+            <dt>Powered on</dt><dd>{{ on_vms|length }}</dd>
+            <dt>Powered off</dt><dd>{{ vms|length - on_vms|length }}</dd>
+            <dt>Hosts with alerts</dt><dd>{{ hosts|rejectattr('overall_status', 'equalto', 'green')|list|length }}</dd>
+          </dl>
+        </div>
+      </article>
+      <article class="sum-card wide">
+        <h2>Capacity and Usage</h2>
+        <div class="sum-body">
+          {{ capbar('CPU', (clusters|sum(attribute='cpu_used_mhz')) / 1000, (clusters|sum(attribute='cpu_total_mhz')) / 1000, 'GHz') }}
+          {{ capbar('Memory', clusters|sum(attribute='mem_used_gb'), clusters|sum(attribute='mem_total_gb'), 'GB') }}
+        </div>
+      </article>
+    </div>
+    {% elif tab == 'hosts' %}{{ host_table(hosts) }}
+    {% elif tab == 'vms' %}{{ vm_table(vms) }}
+    {% endif %}
+  {% endif %}
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,109 @@
+# Example module 2: written in PowerShell (PowerCLI). Needs the core-pwsh image.
+name: host-health
+version: 0.1.0
+core_api: 1
+description: ESXi host state, alarms, CPU and memory usage and uptime, via PowerCLI.
+
+collectors:
+  - name: hosts
+    script: Collect-HostHealth.ps1
+    interval_minutes: 5
+    timeout_seconds: 300
+    connections: [vcenter]
+    tables: [hosts]
+
+tables:
+  hosts:
+    mode: snapshot
+    columns:
+      name: text
+      cluster: text
+      connection_state: text
+      power_state: text
+      overall_status: text
+      maintenance_mode: integer
+      version: text
+      build: text
+      cpu_usage_pct: real
+      mem_usage_pct: real
+      vm_count: integer
+      uptime_days: real
+
+api:
+  - path: /hosts
+    table: hosts
+    description: All ESXi hosts with health and usage
+  - path: /hosts/unhealthy
+    description: Hosts not green, not connected, or in maintenance mode
+    query: >
+      SELECT * FROM hosts
+      WHERE overall_status <> 'green' OR connection_state <> 'Connected' OR maintenance_mode = 1
+  - path: /clusters
+    description: Per-cluster rollup
+    query: >
+      SELECT cluster, COUNT(*) AS hosts,
+        SUM(CASE WHEN overall_status = 'green' THEN 1 ELSE 0 END) AS healthy_hosts,
+        ROUND(AVG(cpu_usage_pct), 1) AS avg_cpu_pct, ROUND(AVG(mem_usage_pct), 1) AS avg_mem_pct,
+        SUM(vm_count) AS vms, MAX(collected_at) AS collected_at
+      FROM hosts GROUP BY cluster ORDER BY cluster
+
+dashboards:
+  - slug: overview
+    title: Host Health
+    description: ESXi host health from vCenter, collected with PowerCLI.
+    widgets:
+      - type: kpi
+        title: Hosts
+        label: total
+        query: SELECT COUNT(*) FROM hosts
+      - type: kpi
+        title: Not healthy
+        label: yellow, red or disconnected
+        warn: 1
+        crit: 2
+        query: SELECT COUNT(*) FROM hosts WHERE overall_status <> 'green' OR connection_state <> 'Connected'
+      - type: kpi
+        title: Maintenance mode
+        label: hosts
+        warn: 1
+        query: SELECT COUNT(*) FROM hosts WHERE maintenance_mode = 1
+      - type: kpi
+        title: Running VMs
+        label: across all hosts
+        query: SELECT SUM(vm_count) FROM hosts
+      - type: kpi
+        title: Avg CPU
+        label: across all hosts
+        unit: "%"
+        max: 100
+        warn: 70
+        crit: 85
+        query: SELECT ROUND(AVG(cpu_usage_pct), 1) FROM hosts
+      - type: kpi
+        title: Avg memory
+        label: across all hosts
+        unit: "%"
+        max: 100
+        warn: 80
+        crit: 90
+        query: SELECT ROUND(AVG(mem_usage_pct), 1) FROM hosts
+      - type: bar
+        title: CPU usage %
+        unit: "%"
+        max: 100
+        warn: 70
+        crit: 85
+        query: SELECT name AS label, cpu_usage_pct AS value FROM hosts ORDER BY cpu_usage_pct DESC
+      - type: bar
+        title: Memory usage %
+        unit: "%"
+        max: 100
+        warn: 80
+        crit: 90
+        query: SELECT name AS label, mem_usage_pct AS value FROM hosts ORDER BY mem_usage_pct DESC
+      - type: table
+        title: Hosts
+        query: >
+          SELECT name, cluster, overall_status, connection_state, maintenance_mode,
+            version, build, vm_count, uptime_days
+          FROM hosts ORDER BY cluster, name

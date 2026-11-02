@@ -1,0 +1,73 @@
+# Example module 4: GitHub service status from www.githubstatus.com (Python).
+# githubstatus.com runs on Atlassian Statuspage, so pointing the "url" setting at
+# any other Statuspage site (e.g. a vendor's status page) works the same way.
+# Needs outbound internet (or a proxy via HTTPS_PROXY); switch it off at dark sites.
+name: github-status
+version: 0.1.0
+core_api: 1
+description: GitHub service status, components, incidents and maintenance from githubstatus.com.
+
+collectors:
+  - name: status
+    script: collect_status.py
+    interval_minutes: 5
+    timeout_seconds: 60
+    tables: [page_status, components, incidents, maintenances]
+
+tables:
+  page_status:
+    columns: {name: text, url: text, indicator: text, description: text, updated_at: text}
+  components:
+    columns: {name: text, status: text, description: text, position: integer, updated_at: text}
+  incidents:
+    columns:
+      name: text
+      status: text
+      impact: text
+      active: integer
+      started_at: text
+      updated_at: text
+      resolved_at: text
+      shortlink: text
+      latest_update: text
+      components: text
+  maintenances:
+    columns:
+      name: text
+      status: text
+      impact: text
+      scheduled_for: text
+      scheduled_until: text
+      shortlink: text
+      components: text
+
+api:
+  - path: /status
+    table: page_status
+    description: Overall GitHub status (indicator none/minor/major/critical)
+  - path: /components
+    description: Status of each GitHub service
+    query: SELECT * FROM components ORDER BY position
+  - path: /components/degraded
+    description: GitHub services that are not fully operational
+    query: SELECT * FROM components WHERE status <> 'operational' ORDER BY position
+  - path: /incidents
+    description: Recent incidents, newest first
+    query: SELECT * FROM incidents ORDER BY started_at DESC
+  - path: /incidents/active
+    description: Unresolved incidents
+    query: SELECT * FROM incidents WHERE active = 1 ORDER BY started_at DESC
+  - path: /maintenances
+    table: maintenances
+    description: Scheduled and in-progress maintenance
+
+dashboards:
+  - slug: status
+    title: GitHub Status
+    template: status.html
+    queries:
+      page: SELECT * FROM page_status
+      components: SELECT * FROM components ORDER BY position, name
+      active: SELECT * FROM incidents WHERE active = 1 ORDER BY started_at DESC
+      recent: SELECT * FROM incidents WHERE active = 0 ORDER BY started_at DESC LIMIT 15
+      maintenances: SELECT * FROM maintenances ORDER BY scheduled_for

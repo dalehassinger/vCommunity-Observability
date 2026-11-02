@@ -1,0 +1,10 @@
+# Direct dependencies. Edit this file, then regenerate requirements.txt:
+#   uv pip compile --generate-hashes requirements.in -o requirements.txt
+fastapi
+uvicorn
+jinja2
+pyyaml
+apscheduler
+pyvmomi
+requests
+tzdata          # time zones for scheduled exports, even on images without system tzdata

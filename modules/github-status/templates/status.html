@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+{% block title %}GitHub Status · vCommunity-Observability{% endblock %}
+{% set labels = {
+    'operational': 'Operational', 'degraded_performance': 'Degraded performance',
+    'partial_outage': 'Partial outage', 'major_outage': 'Major outage', 'under_maintenance': 'Maintenance'} %}
+{% set level = {
+    'operational': 'ok', 'degraded_performance': 'warn', 'partial_outage': 'warn',
+    'major_outage': 'crit', 'under_maintenance': 'info',
+    'none': 'ok', 'minor': 'warn', 'major': 'crit', 'critical': 'crit', 'maintenance': 'info'} %}
+{% set page = data.page[0] if data.page else none %}
+{# Ring with a mark in the middle: check (ok), ! (warn/crit), wrench-ish dot (maintenance). #}
+{% macro ring(lv, pct=100, size=56) %}<svg class="ring {{ lv }}" viewBox="0 0 36 36" width="{{ size }}" height="{{ size }}" aria-hidden="true">
+  <circle class="track" cx="18" cy="18" r="15.9"/><circle class="fill" cx="18" cy="18" r="15.9" stroke-dasharray="{{ '%.1f'|format(pct) }} 100"/>
+  {% if pct >= 100 %}{% if lv == 'ok' %}<path class="mark" d="M12.5 18.5l3.6 3.6 7.6-8"/>{% elif lv == 'info' %}<path class="mark" d="M13 18h10M18 13v10"/>{% else %}<path class="mark" d="M18 11.5v8"/><circle class="dot" cx="18" cy="24.2" r="1.6"/>{% endif %}{% endif %}
+</svg>{% endmacro %}
+{% set comps = data.components %}
+{% set n_comps = comps|length %}
+{% set n_ok = comps|selectattr('status', 'equalto', 'operational')|list|length %}
+{% set n_maint = comps|selectattr('status', 'equalto', 'under_maintenance')|list|length %}
+{% set n_bad = n_comps - n_ok - n_maint %}
+{% set n_major = comps|selectattr('status', 'equalto', 'major_outage')|list|length %}
+{% set avail = (n_ok / n_comps * 100) if n_comps else 0 %}
+
+{% block head %}
+<style>
+  .gh-banner { display: flex; align-items: center; gap: 14px; padding: 18px 20px; border-radius: 4px; color: #fff;
+    font-size: 20px; font-weight: 500; margin-bottom: 18px; }
+  .gh-banner.ok { background: var(--ok); } .gh-banner.warn { background: #c27b00; }
+  .gh-banner.crit { background: var(--crit); } .gh-banner.info, .gh-banner.none { background: var(--primary); }
+  .gh-banner small { display: block; font-size: 12px; font-weight: 400; opacity: .9; }
+  .gh-banner svg { flex: none; }
+  .gh-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  .comp { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 11px 16px;
+    border-bottom: 1px solid var(--border); }
+  .comp:last-child { border-bottom: 0; }
+  .comp-name { font-weight: 500; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .pill i { width: 10px; height: 10px; border-radius: 50%; background: var(--subtle); }
+  .pill.ok { color: var(--ok); } .pill.ok i { background: var(--ok); }
+  .pill.warn { color: var(--warn); } .pill.warn i { background: var(--warn-fill); }
+  .pill.crit { color: var(--crit); } .pill.crit i { background: var(--crit); }
+  .pill.info { color: var(--primary); } .pill.info i { background: var(--primary); }
+  .inc { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .inc:last-child { border-bottom: 0; }
+  .inc-title { display: flex; justify-content: space-between; gap: 10px; font-weight: 600; }
+  .inc-title a { color: var(--text); }
+  .inc-meta { font-size: 12px; color: var(--subtle); margin-top: 2px; }
+  .inc-body { font-size: 13px; margin-top: 6px; }
+  .inc.active { border-left: 4px solid var(--warn-fill); }
+  .inc.active.crit { border-left-color: var(--crit); }
+  .card-block.flush { padding: 0; }
+  /* VCF Operations-style status cards: colored top edge, ring, big value, one-line context. */
+  .gh-section { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--subtle); margin: 4px 0 10px; }
+  .gh-kpis, .gh-svcs { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; margin-bottom: 20px; }
+  .gh-kpis { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .gh-card { background: var(--surface); border: 1px solid var(--border); border-top: 3px solid var(--border); border-radius: 4px; box-shadow: var(--shadow); padding: 14px 18px 16px; min-width: 0; }
+  .gh-card.ok { border-top-color: var(--ok); } .gh-card.warn { border-top-color: var(--warn-fill); }
+  .gh-card.crit { border-top-color: var(--crit); } .gh-card.info { border-top-color: var(--primary); }
+  .gh-card .t { font-size: 13px; color: var(--subtle); margin-bottom: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gh-card .row { display: flex; align-items: center; gap: 14px; }
+  .gh-card .v { font-size: 36px; font-weight: 300; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .gh-card .v.warn { color: var(--warn); } .gh-card .v.crit { color: var(--crit); }
+  .gh-card .v small { font-size: 15px; color: var(--subtle); margin-left: 3px; }
+  .gh-card .s { font-size: 13px; color: var(--subtle); margin-top: 2px; }
+  .gh-svc .v { font-size: 20px; font-weight: 400; line-height: 1.2; }
+  .gh-svc .v.ok { color: var(--ok); } .gh-svc .v.info { color: var(--primary); }
+  .gh-svc .s { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ring { flex: none; }
+  .ring circle { fill: none; stroke-width: 3.6; }
+  .ring .track { stroke: var(--track); }
+  .ring .fill { stroke: var(--primary); stroke-linecap: round; transform: rotate(-90deg); transform-origin: 18px 18px; }
+  .ring.ok .fill, .ring.ok .mark { stroke: var(--ok); } .ring.warn .fill, .ring.warn .mark { stroke: var(--warn-fill); }
+  .ring.crit .fill, .ring.crit .mark { stroke: var(--crit); } .ring.info .fill, .ring.info .mark { stroke: var(--primary); }
+  .ring .mark { fill: none; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+  .ring .dot { stroke: none; } .ring.warn .dot { fill: var(--warn-fill); } .ring.crit .dot { fill: var(--crit); } .ring.info .dot { fill: var(--primary); }
+  @media (max-width: 960px) { .gh-grid { grid-template-columns: 1fr; } }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb"><a href="/">Dashboards</a> / {{ mod.name }}</div>
+    <h1>GitHub Status</h1>
+    <p class="subtle">From <a href="{{ page.url if page else 'https://www.githubstatus.com' }}" target="_blank" rel="noopener">{{ (page.url if page else 'https://www.githubstatus.com')|replace('https://', '') }}</a>{% if page and page.updated_at %}, page updated {{ page.updated_at }} UTC{% endif %}</p>
+  </div>
+  <div class="page-actions">
+    <span class="subtle">Collected {{ last_collected ~ ' UTC' if last_collected else 'never' }}</span>
+    <form method="post" action="/modules/{{ mod.name }}/run"><button class="btn btn-outline">Refresh</button></form>
+  </div>
+</div>
+
+{% for r in run_errors %}<div class="alert alert-danger"><b>{{ r.collector }}</b> collector failed: {{ r.message }}</div>{% endfor %}
+
+{% if page %}
+{% set lv = level.get(page.indicator, 'none') %}
+<div class="gh-banner {{ lv }}">
+  <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true">
+    {% if lv == 'ok' %}<circle cx="12" cy="12" r="11" fill="rgba(255,255,255,.2)"/><path d="M6.5 12.5l3.5 3.5 7.5-8" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    {% else %}<circle cx="12" cy="12" r="11" fill="rgba(255,255,255,.2)"/><path d="M12 6.5v7" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><circle cx="12" cy="17.2" r="1.4" fill="#fff"/>{% endif %}
+  </svg>
+  <div>{{ page.description or 'Unknown' }}
+    <small>{{ data.components|selectattr('status', 'equalto', 'operational')|list|length }} of {{ data.components|length }} services operational · {{ data.active|length }} open incident(s)</small>
+  </div>
+</div>
+{% else %}
+<div class="alert alert-danger">No status collected yet. Click Refresh, or check the collector message on the Modules page.</div>
+{% endif %}
+
+<div class="gh-kpis">
+  <div class="gh-card"><div class="t">Services</div><div class="v">{{ n_comps }}</div><div class="s">monitored</div></div>
+  <div class="gh-card {{ 'crit' if n_major else 'warn' if n_bad else 'ok' }}"><div class="t">Not operational</div>
+    <div class="v {{ 'crit' if n_major else 'warn' if n_bad else '' }}">{{ n_bad }}</div><div class="s">degraded or outage</div></div>
+  <div class="gh-card {{ 'info' if n_maint else 'ok' }}"><div class="t">Under maintenance</div><div class="v">{{ n_maint }}</div><div class="s">services</div></div>
+  <div class="gh-card {{ 'crit' if data.active|selectattr('impact', 'in', ['major', 'critical'])|list else 'warn' if data.active else 'ok' }}"><div class="t">Open incidents</div>
+    <div class="v {{ 'warn' if data.active else '' }}">{{ data.active|length }}</div><div class="s">{{ 'unresolved' if data.active else 'none open' }}</div></div>
+  <div class="gh-card {{ 'info' if data.maintenances else 'ok' }}"><div class="t">Maintenance windows</div><div class="v">{{ data.maintenances|length }}</div><div class="s">scheduled</div></div>
+  <div class="gh-card {{ 'ok' if avail >= 100 else 'warn' if avail >= 80 else 'crit' }}"><div class="t">Operational</div>
+    <div class="row">{{ ring('ok' if avail >= 100 else 'warn' if avail >= 80 else 'crit', avail, 52) }}<div><div class="v">{{ '%.0f'|format(avail) }}<small>%</small></div><div class="s">of services</div></div></div></div>
+</div>
+
+<div class="gh-section">Services</div>
+<div class="gh-svcs">
+  {% for c in comps %}
+  {% set lv = level.get(c.status, 'none') %}
+  {% set ns = namespace(inc=none, n=0) %}{% for i in data.active if i.components and c.name in i.components.split(', ') %}{% set ns.n = ns.n + 1 %}{% if not ns.inc %}{% set ns.inc = i %}{% endif %}{% endfor %}
+  <div class="gh-card gh-svc {{ lv }}" title="{{ c.description }}">
+    <div class="t">{{ c.name }}</div>
+    <div class="row">{{ ring(lv, 100, 48) }}
+      <div style="min-width:0"><div class="v {{ lv }}">{{ labels.get(c.status, c.status) }}</div>
+        <div class="s">{% if ns.inc %}<a href="{{ ns.inc.shortlink }}" target="_blank" rel="noopener" title="{{ ns.inc.name }}">{{ ns.n }} open incident{{ 's' if ns.n != 1 }}</a>{% elif c.description %}{{ c.description }}{% else %}No incidents{% endif %}</div></div>
+    </div>
+  </div>
+  {% else %}<p class="subtle">No services collected.</p>{% endfor %}
+</div>
+
+<div class="gh-grid">
+  <div>
+    <section class="card" style="margin-bottom:16px">
+      <div class="card-header">Open incidents</div>
+      <div class="card-block flush">
+        {% for i in data.active %}
+        <div class="inc active {{ level.get(i.impact, '') }}">
+          <div class="inc-title"><a href="{{ i.shortlink }}" target="_blank" rel="noopener">{{ i.name }}</a>
+            <span class="pill {{ level.get(i.impact, '') }}"><i></i>{{ i.impact|capitalize }}</span></div>
+          <div class="inc-meta">{{ i.status|capitalize }} · started {{ i.started_at }} UTC{% if i.components %} · {{ i.components }}{% endif %}</div>
+          {% if i.latest_update %}<div class="inc-body">{{ i.latest_update }}</div>{% endif %}
+        </div>
+        {% else %}<div class="inc subtle">No open incidents.</div>{% endfor %}
+      </div>
+    </section>
+
+    {% if data.maintenances %}
+    <section class="card" style="margin-bottom:16px">
+      <div class="card-header">Scheduled maintenance</div>
+      <div class="card-block flush">
+        {% for m in data.maintenances %}
+        <div class="inc">
+          <div class="inc-title"><a href="{{ m.shortlink }}" target="_blank" rel="noopener">{{ m.name }}</a><span class="pill info"><i></i>{{ m.status|replace('_', ' ')|capitalize }}</span></div>
+          <div class="inc-meta">{{ m.scheduled_for }} → {{ m.scheduled_until }} UTC{% if m.components %} · {{ m.components }}{% endif %}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+  </div>
+  <div>
+    <section class="card">
+      <div class="card-header">Recent incidents</div>
+      <div class="card-block flush">
+        {% for i in data.recent %}
+        <div class="inc">
+          <div class="inc-title"><a href="{{ i.shortlink }}" target="_blank" rel="noopener">{{ i.name }}</a>
+            <span class="pill {{ level.get(i.impact, '') }}"><i></i>{{ i.impact|capitalize }}</span></div>
+          <div class="inc-meta">{{ i.status|capitalize }} · {{ i.started_at }} UTC{% if i.resolved_at %} → {{ i.resolved_at }}{% endif %}{% if i.components %} · {{ i.components }}{% endif %}</div>
+        </div>
+        {% else %}<div class="inc subtle">No recent incidents.</div>{% endfor %}
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

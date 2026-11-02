@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb">Home</div>
+    <h1>Dashboards</h1>
+    <p class="subtle">{{ modules|length }} module(s) installed. Each module adds its own dashboards and API endpoints.</p>
+  </div>
+</div>
+<div class="tile-grid">
+{% for n in nav %}
+  <a class="tile" href="/dash/{{ n.module }}/{{ n.slug }}">
+    <span class="tile-icon">
+      <svg viewBox="0 0 24 24" width="22" height="22"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </span>
+    <span>
+      <span class="tile-title">{{ n.title }}</span>
+      <span class="subtle">{{ n.module }}</span>
+    </span>
+  </a>
+{% else %}
+  <p class="subtle">No dashboards yet. Add a module to the modules folder.</p>
+{% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,116 @@
+# Example module 3: a vCenter-style inventory browser (Python, pyVmomi).
+# Shows how a module can ship its own page template when the widget grid
+# isn't enough: an inventory tree, object header, tabs and summary cards.
+name: vcenter-inventory
+version: 0.1.0
+core_api: 1
+description: vCenter-style inventory browser with summary pages for VMs, hosts and clusters.
+
+collectors:
+  - name: inventory
+    script: collect_inventory.py
+    interval_minutes: 10
+    timeout_seconds: 600
+    connections: [vcenter]
+    tables: [vcenter, clusters, hosts, vms]
+
+tables:
+  vcenter:
+    columns: {name: text, version: text, build: text}
+  clusters:
+    columns:
+      name: text
+      datacenter: text
+      host_count: integer
+      vm_count: integer
+      drs_enabled: integer
+      ha_enabled: integer
+      cpu_total_mhz: real
+      cpu_used_mhz: real
+      mem_total_gb: real
+      mem_used_gb: real
+      storage_total_gb: real
+      storage_free_gb: real
+  hosts:
+    columns:
+      name: text
+      datacenter: text
+      cluster: text
+      connection_state: text
+      power_state: text
+      overall_status: text
+      maintenance_mode: integer
+      version: text
+      build: text
+      vendor: text
+      model: text
+      cpu_model: text
+      cpu_sockets: integer
+      cpu_cores: integer
+      cpu_threads: integer
+      cpu_total_mhz: real
+      cpu_used_mhz: real
+      mem_total_gb: real
+      mem_used_gb: real
+      nic_count: integer
+      vm_count: integer
+      uptime_days: real
+      datastores: text      # comma-separated
+      networks: text        # comma-separated
+  vms:
+    columns:
+      name: text
+      datacenter: text
+      cluster: text
+      host: text
+      power_state: text
+      overall_status: text
+      guest_os: text
+      guest_family: text
+      tools_status: text
+      tools_version: text
+      dns_name: text
+      ip_addresses: text    # comma-separated
+      cpu_count: integer
+      cpu_used_mhz: real
+      memory_gb: real
+      memory_active_mb: real
+      storage_used_gb: real
+      storage_provisioned_gb: real
+      hw_version: text
+      disks: text           # "label|size_gb|format|datastore" joined by ";"
+      nics: text            # "label|network|connected|mac" joined by ";"
+      cdrom: text
+      datastores: text      # comma-separated
+      networks: text        # comma-separated
+      snapshots: text       # names joined by ";"
+      notes: text
+      uptime_days: real
+      is_template: integer
+
+api:
+  - path: /vms
+    table: vms
+    description: All virtual machines with configuration and usage
+  - path: /vms/powered-off
+    description: Virtual machines that are powered off
+    query: SELECT * FROM vms WHERE power_state <> 'poweredOn' AND is_template = 0
+  - path: /vms/with-snapshots
+    description: Virtual machines that have snapshots
+    query: SELECT name, host, cluster, snapshots, collected_at FROM vms WHERE snapshots <> ''
+  - path: /hosts
+    table: hosts
+    description: All ESXi hosts with hardware and usage
+  - path: /clusters
+    table: clusters
+    description: All clusters with capacity and usage
+
+dashboards:
+  - slug: inventory
+    title: vSphere Inventory
+    template: inventory.html
+    queries:
+      vcenter: SELECT * FROM vcenter
+      clusters: SELECT * FROM clusters ORDER BY datacenter, name
+      hosts: SELECT * FROM hosts ORDER BY datacenter, cluster, name
+      vms: SELECT * FROM vms ORDER BY datacenter, cluster, name COLLATE NOCASE

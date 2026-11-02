@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}DBH Impact · vCommunity-Observability{% endblock %}
+{% set source = data.source[0] if data.source else none %}
+{% set targets = data.targets %}
+{% set chosen = (targets|selectattr('target', 'equalto', q.get('target'))|first) if q.get('target') else none %}
+{% set chosen = chosen or (targets|first if targets else none) %}
+{% block head %}
+<style>
+  .imp-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 16px; }
+  .imp-pick label { font-size: 13px; font-weight: 600; color: var(--subtle); }
+  .imp-pick select { min-width: 300px; max-width: 100%; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); color: var(--text); font: inherit; }
+  .imp-pick .hint { font-size: 12.5px; color: var(--subtle); flex: 1; min-width: 240px; }
+  .imp-head h2 { margin: 0; font-size: 18px; font-weight: 600; }
+  .imp-head p { margin: 2px 0 12px; color: var(--subtle); font-size: 13px; }
+  .verdict { border: 1px solid var(--border); border-left: 4px solid var(--ok); border-radius: 4px; padding: 12px 16px; margin-bottom: 14px; background: var(--ok-bg); }
+  .verdict strong { display: block; font-size: 15px; color: var(--ok); }
+  .verdict p { margin: 4px 0 0; font-size: 13px; color: var(--text); }
+  .verdict.warn { border-left-color: var(--warn); background: var(--warn-bg); } .verdict.warn strong { color: var(--warn); }
+  .verdict.crit { border-left-color: var(--crit); background: var(--crit-bg); } .verdict.crit strong { color: var(--crit); }
+  .imp-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 14px; }
+  .imp-kpi { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--primary); border-radius: 4px; padding: 12px 16px; box-shadow: var(--shadow); }
+  .imp-kpi.muted { border-left-color: var(--border); }
+  .imp-kpi .l { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--subtle); font-weight: 600; }
+  .imp-kpi .v { font-size: 28px; font-weight: 300; line-height: 1.2; margin: 4px 0 2px; }
+  .imp-kpi .s { font-size: 12px; color: var(--subtle); }
+  .imp-row { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 14px; margin-bottom: 14px; align-items: start; }
+  @media (max-width: 900px) { .imp-row { grid-template-columns: 1fr; } }
+  .imp-card { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; box-shadow: var(--shadow); margin-bottom: 14px; min-width: 0; }
+  .imp-row .imp-card { margin-bottom: 0; }
+  .imp-card .t { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--subtle); font-weight: 600; padding: 12px 16px 4px; margin: 0; }
+  .imp-card .note { font-size: 12.5px; color: var(--subtle); padding: 0 16px 6px; margin: 0; }
+  .imp-card .empty { padding: 4px 16px 14px; color: var(--subtle); font-style: italic; margin: 0; }
+  .facts { padding: 4px 16px 12px; }
+  .facts div { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; font-size: 13px; border-bottom: 1px solid var(--border); }
+  .facts div:last-child { border-bottom: 0; }
+  .facts span { color: var(--subtle); } .facts b { font-weight: 600; text-align: right; }
+  .imp-scroll { overflow: auto; max-height: 520px; }
+  .datagrid th.num { text-align: right; }
+  .sev { display: inline-block; min-width: 64px; text-align: center; padding: 1px 8px; border-radius: 9px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+  .sev.crit { background: var(--crit-bg); color: var(--crit); } .sev.warn { background: var(--warn-bg); color: var(--warn); } .sev.low { background: var(--ok-bg); color: var(--ok); }
+  .imp-rank td a { color: var(--link); text-decoration: none; } .imp-rank td a:hover { text-decoration: underline; }
+  .imp-rank tr.on td { background: var(--info-bg); }
+  td.wrap { white-space: normal; min-width: 260px; }
+  .imp-est { font-size: 12px; color: var(--subtle); margin: -6px 0 14px; }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb"><a href="/">Dashboards</a> / {{ mod.name }}</div>
+    <h1>Impact</h1>
+    <p class="subtle">{% if chosen %}{{ chosen.name }} · {{ chosen.status }} · {% endif %}{% if source %}{{ source.server }} · {% endif %}collected {{ last_collected ~ ' UTC' if last_collected else 'never' }}</p>
+  </div>
+  <div class="page-actions">
+    <form method="post" action="/modules/{{ mod.name }}/run"><button class="btn btn-outline">Refresh</button></form>
+  </div>
+</div>
+
+{% for r in run_errors %}<div class="alert alert-danger"><b>{{ r.collector }}</b> collector failed: {{ r.message }}</div>{% endfor %}
+{% for e in query_errors %}<div class="alert alert-danger">{{ e }}</div>{% endfor %}
+
+{% if not targets %}
+<div class="card"><div class="card-block"><p class="subtle" style="margin:0">No impact answers yet. Click Refresh to collect, or wait for the next scheduled run.</p></div></div>
+{% else %}
+<form class="imp-pick" method="get" action="/dash/{{ mod.name }}/impact">
+  <label for="imp-target">If this fails…</label>
+  <select id="imp-target" name="target" onchange="this.form.submit()">
+    {% for kind, label in [('host', 'Hosts'), ('datastore', 'Datastores')] %}
+    <optgroup label="{{ label }}">
+      {% for t in targets if t.kind == kind %}<option value="{{ t.target }}" {{ 'selected' if chosen and t.target == chosen.target }}>{{ t.name }} · {{ t.subtitle }}</option>{% endfor %}
+    </optgroup>
+    {% endfor %}
+  </select>
+  <noscript><button class="btn btn-outline">Show</button></noscript>
+  <span class="hint">Answers from the inventory already collected: which VMs sit on it, which hosts reach it, and whether the cluster could take the load.</span>
+</form>
+
+<div id="imp-result"></div>
+{% if chosen and chosen.kind == 'host' %}<p class="imp-est">Memory figures use assigned VM memory, which is what an HA restart admits against, so treat them as estimates.</p>{% endif %}
+
+<div class="imp-card">
+  <p class="t">Every host and datastore, worst first</p>
+  <div class="imp-scroll"><table class="datagrid imp-rank">
+    <thead><tr><th>Impact</th><th>If this fails</th><th>Type</th><th>What happens</th><th class="num">VMs</th><th class="num">Running</th></tr></thead>
+    <tbody>
+    {% for t in targets|sort(attribute='name')|sort(attribute='vms_running', reverse=true)|sort(attribute='severity_rank') %}
+      <tr class="{{ 'on' if chosen and t.target == chosen.target }}"><td><span class="sev {{ t.severity }}">{{ {'crit': 'critical', 'warn': 'warning', 'low': 'low'}[t.severity] }}</span></td>
+        <td><a href="?target={{ t.target|urlencode }}">{{ t.name }}</a></td><td>{{ t.kind }}</td><td class="wrap">{{ t.headline }}</td>
+        <td class="num">{{ t.vms_affected }}</td><td class="num">{{ t.vms_running }}</td></tr>
+    {% endfor %}
+    </tbody></table></div>
+</div>
+
+<script id="imp-report" type="application/json">{{ chosen.report|replace('</', '<\\/')|safe if chosen else 'null' }}</script>
+<script>
+// Port of DBH Insights' renderImpact() (collect/js/app.js) for one finished answer.
+(() => {
+  const r = JSON.parse(document.getElementById("imp-report").textContent);
+  const box = document.getElementById("imp-result");
+  if (!r) { box.innerHTML = '<p class="subtle">Pick a host or datastore to see what depends on it.</p>'; return; }
+  const make = (tag, cls, text) => { const el = document.createElement(tag); if (cls) el.className = cls; if (text !== undefined) el.textContent = text; return el; };
+  function table(columns, rows) {
+    const t = make("table", "datagrid"), head = make("tr"), body = make("tbody");
+    rows[0]?.forEach((cell, i) => head.append(make("th", cell && typeof cell === "object" ? "num" : "", columns[i])));
+    if (!rows.length) columns.forEach((c) => head.append(make("th", "", c)));
+    for (const row of rows) {
+      const tr = make("tr");
+      row.forEach((cell) => tr.append(cell && typeof cell === "object" ? make("td", "num", String(cell.num)) : make("td", "", String(cell ?? ""))));
+      body.append(tr);
+    }
+    const thead = make("thead"); thead.append(head); t.append(thead, body);
+    const wrap = make("div", "imp-scroll"); wrap.append(t); return wrap;
+  }
+  const head = make("div", "imp-head");
+  head.append(make("h2", "", r.title), make("p", "", r.subtitle));
+  const verdict = make("div", `verdict ${r.severity}`);
+  verdict.append(make("strong", "", r.headline), make("p", "", r.detail));
+  const kpis = make("div", "imp-kpis");
+  for (const [label, value, sub] of r.kpis) {
+    const k = make("div", `imp-kpi ${r.severity === "crit" ? "" : "muted"}`);
+    k.append(make("div", "l", label), make("div", "v", value));
+    if (sub) k.append(make("div", "s", sub));
+    kpis.append(k);
+  }
+  const row = make("div", "imp-row");
+  const facts = make("div", "imp-card"), list = make("div", "facts");
+  facts.append(make("p", "t", r.kind === "host" ? "Host and cluster" : "Datastore"));
+  for (const [k, v] of r.facts) { const d = make("div"); d.append(make("span", "", k), make("b", "", v)); list.append(d); }
+  facts.append(list);
+  const main = make("div", "imp-card");
+  main.append(make("p", "t", r.table.title), r.table.rows.length ? table(r.table.columns, r.table.rows) : make("p", "empty", r.table.empty));
+  row.append(facts, main);
+  box.append(head, verdict, kpis, row);
+  for (const l of r.lists) {
+    const card = make("div", "imp-card");
+    card.append(make("p", "t", l.title));
+    if (l.note) card.append(make("p", "note", l.note));
+    card.append(table(l.columns, l.rows));
+    box.append(card);
+  }
+})();
+</script>
+{% endif %}
+{% endblock %}

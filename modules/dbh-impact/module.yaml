@@ -1,0 +1,110 @@
+# DBH Insights Impact as a vCommunity-Observability module.
+# Port of the Impact view in https://github.com/DBH-Insights/DBH-Insights
+# (collect/js/impact.js): "if this fails...". Pick a host or a datastore and see which
+# VMs stop, whether vSphere HA could restart them, and whether the cluster has the
+# memory to take them. Every host and datastore is answered on each collection, so the
+# answers are also REST endpoints (severity, VMs affected...) for MP Builder.
+name: dbh-impact
+version: 0.1.0
+core_api: 1
+description: DBH Insights Impact. What stops if one host or one datastore fails, and could HA restart it.
+
+settings_help:
+  vcenter_name: Name shown for the vCenter (default is the vCenter host)
+
+collectors:
+  - name: fabric
+    script: collect_impact.py
+    interval_minutes: 30
+    timeout_seconds: 900
+    connections: [vcenter]
+    tables: [fabric_source, fabric_clusters, fabric_hosts, fabric_datastores, fabric_mounts, fabric_vms, fabric_vm_datastores, impact]
+
+tables:
+  fabric_source:
+    columns: {server: text, datacenters: text}
+  fabric_clusters:
+    columns: {moref: text, name: text, ha_enabled: integer, drs_enabled: integer}
+  fabric_hosts:
+    columns:
+      moref: text
+      name: text
+      cluster_moref: text
+      cluster: text
+      connection_state: text
+      in_maintenance: integer
+      cores: integer
+      memory_gib: real     # includes memory tiers (NVMe) when tiering is on
+      dram_gib: real
+  fabric_datastores:
+    columns:
+      moref: text
+      name: text
+      kind: text
+      capacity_gib: real
+      free_gib: real
+      used_gib: real
+      used_pct: real
+      vm_count: integer
+      mount_count: integer
+      accessible: integer
+  fabric_mounts:
+    columns: {datastore_moref: text, host_moref: text}
+
+  fabric_vms:
+    columns: {moref: text, name: text, power_state: text, template: integer, vcpu: integer, memory_gib: real, host_moref: text}
+  fabric_vm_datastores:
+    columns: {vm_moref: text, datastore_moref: text}
+  impact:
+    columns:
+      target: text            # "host:host-11" or "datastore:datastore-21"
+      kind: text
+      moref: text
+      name: text
+      subtitle: text
+      severity: text          # crit, warn or low
+      severity_rank: integer  # 0 crit, 1 warn, 2 low
+      headline: text
+      detail: text
+      status: text
+      vms_affected: integer
+      vms_running: integer
+      memory_gib: real        # host: memory to restart; datastore: running VM memory
+      hosts_left: integer
+      spare_memory_gib: real
+      restart_fits: integer
+      datastores_lost: integer
+      vms_wholly_here: integer
+      hosts_mounting: integer
+      report: text            # the full answer (cards, facts, lists) as JSON for the page
+
+api:
+  - path: /hosts
+    description: Impact of losing each host (severity, VMs that stop, memory to restart, cluster headroom)
+    query: >-
+      SELECT name, subtitle, severity, headline, detail, vms_affected, vms_running, memory_gib AS memory_to_restart_gib,
+             hosts_left, spare_memory_gib, restart_fits, datastores_lost, collected_at
+      FROM impact WHERE kind = 'host' ORDER BY severity_rank, vms_running DESC, name
+  - path: /datastores
+    description: Impact of losing each datastore (severity, VMs that crash, VMs wholly stored there)
+    query: >-
+      SELECT name, subtitle, severity, headline, detail, vms_affected, vms_running, vms_wholly_here, hosts_mounting,
+             memory_gib AS running_memory_gib, collected_at
+      FROM impact WHERE kind = 'datastore' ORDER BY severity_rank, vms_running DESC, name
+  - path: /critical
+    description: Every host or datastore whose failure would leave running VMs down (severity crit)
+    query: SELECT kind, name, headline, detail, vms_running, collected_at FROM impact WHERE severity = 'crit' ORDER BY vms_running DESC, name
+  - path: /single-points-of-failure
+    description: Datastores only one host can reach, and VMs that would lose storage with that host
+    query: >-
+      SELECT d.name AS datastore, d.kind, h.name AS host, h.cluster, d.vm_count
+      FROM fabric_datastores d JOIN fabric_mounts m ON m.datastore_moref = d.moref JOIN fabric_hosts h ON h.moref = m.host_moref
+      WHERE d.mount_count = 1 ORDER BY d.name
+
+dashboards:
+  - slug: impact
+    title: DBH Impact
+    template: impact.html
+    queries:
+      source: SELECT * FROM fabric_source
+      targets: SELECT target, kind, name, subtitle, severity, severity_rank, headline, status, vms_affected, vms_running, report FROM impact ORDER BY kind DESC, name COLLATE NOCASE
