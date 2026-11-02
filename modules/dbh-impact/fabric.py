@@ -78,6 +78,33 @@ def flag(value: Any) -> int | None:
 
 # --------------------------------------------------------------------------- building the tables
 
+MOREF_FIELDS = {
+    "fabric_clusters": ["moref"],
+    "fabric_hosts": ["moref", "cluster_moref"],
+    "fabric_datastores": ["moref"],
+    "fabric_mounts": ["datastore_moref", "host_moref"],
+    "fabric_vms": ["moref", "host_moref"],
+    "fabric_vm_datastores": ["vm_moref", "datastore_moref"],
+}
+
+
+def stamp_vcenter(data: dict[str, list[dict]], vc_id: str, namespace_morefs: bool) -> dict[str, list[dict]]:
+    """Tag every row with the connection id; optionally prefix morefs so they stay unique across vCenters."""
+    out: dict[str, list[dict]] = {}
+    for table, rows in data.items():
+        stamped = []
+        for row in rows:
+            r = dict(row)
+            r["vcenter"] = vc_id
+            if namespace_morefs:
+                for key in MOREF_FIELDS.get(table, []):
+                    if r.get(key):
+                        r[key] = f"{vc_id}:{r[key]}"
+            stamped.append(r)
+        out[table] = stamped
+    return out
+
+
 def build(server: str, datacenters: list[str], hosts: list[dict], clusters: list[dict],
           datastores: list[dict], vms: list[dict] | None) -> dict[str, list[dict]]:
     """Join raw objects (property name -> value dicts with a 'moref') into the tables."""
@@ -231,113 +258,172 @@ class LiveSource:
 
 # --------------------------------------------------------------------------- sample data (VCO_MOCK=1)
 
-def sample(with_vms: bool) -> dict[str, list[dict]]:
+def sample(with_vms: bool, suffix: str = "") -> dict[str, list[dict]]:
     """A small lab like the DBH Insights screenshots: CL-01 is one host with HA off and a
     local datastore only it can reach; CL-02 has two hosts on vSAN with HA on; esx9-04
-    is standalone."""
+    is standalone. `suffix` distinguishes a second mock vCenter (empty = primary lab)."""
     T = 1024 ** 4
+    # Primary lab keeps exact original names so existing smoke assertions stay stable.
+    s = suffix  # "" or "-lab"
     hosts = [
-        {"moref": "host-11", "name": "esx9-01.vcrocs.local", "runtime.connectionState": "connected",
+        {"moref": "host-11", "name": f"esx9-01.vcrocs.local{s}", "runtime.connectionState": "connected",
          "runtime.inMaintenanceMode": False, "summary.hardware.numCpuCores": 12,
          "summary.hardware.memorySize": 63.7 * GIB, "hardware.memoryTierInfo": []},
-        {"moref": "host-12", "name": "esx9-02.vcrocs.local", "runtime.connectionState": "connected",
+        {"moref": "host-12", "name": f"esx9-02.vcrocs.local{s}", "runtime.connectionState": "connected",
          "runtime.inMaintenanceMode": False, "summary.hardware.numCpuCores": 16,
          "summary.hardware.memorySize": 384 * GIB,
          "hardware.memoryTierInfo": [{"type": "DRAM", "size": 128 * GIB}, {"type": "NVMe", "size": 256 * GIB}]},
-        {"moref": "host-13", "name": "esx9-03.vcrocs.local", "runtime.connectionState": "connected",
+        {"moref": "host-13", "name": f"esx9-03.vcrocs.local{s}", "runtime.connectionState": "connected",
          "runtime.inMaintenanceMode": False, "summary.hardware.numCpuCores": 16,
          "summary.hardware.memorySize": 128 * GIB, "hardware.memoryTierInfo": []},
-        {"moref": "host-14", "name": "esx9-04.vcrocs.local", "runtime.connectionState": "connected",
+        {"moref": "host-14", "name": f"esx9-04.vcrocs.local{s}", "runtime.connectionState": "connected",
          "runtime.inMaintenanceMode": True, "summary.hardware.numCpuCores": 8,
          "summary.hardware.memorySize": 64 * GIB, "hardware.memoryTierInfo": []},
     ]
     clusters = [
-        {"moref": "domain-c8", "name": "CL-01", "host": ["host-11"],
+        {"moref": "domain-c8", "name": f"CL-01{s}", "host": ["host-11"],
          "configuration.dasConfig.enabled": False, "configuration.drsConfig.enabled": False},
-        {"moref": "domain-c9", "name": "CL-02", "host": ["host-12", "host-13"],
+        {"moref": "domain-c9", "name": f"CL-02{s}", "host": ["host-12", "host-13"],
          "configuration.dasConfig.enabled": True, "configuration.drsConfig.enabled": True},
     ]
     every = ["host-11", "host-12", "host-13", "host-14"]
-    ds_def = [
-        # moref, name, type, capacity, free, mounted by
-        ("datastore-21", "ESX9-01-2TB", "VMFS", 1.82 * T, 1.82 * T - 349.1 * GIB, ["host-11"]),
-        ("datastore-22", "ESX9-04-local", "VMFS", 0.9 * T, 0.7 * T, ["host-14"]),
-        ("datastore-23", "SYN-HDD", "NFS41", 16 * T, 6.4 * T, every),
-        ("datastore-24", "SYN-SSD-04", "NFS41", 3.6 * T, 1.1 * T, every),
-        ("datastore-25", "SYN-SSD-05", "NFS41", 3.6 * T, 2.9 * T, every),
-        ("datastore-26", "vsanDatastore", "vsan", 7.3 * T, 3.0 * T, ["host-12", "host-13"]),
+    ds = [
+        ("datastore-21", f"ESX9-01-2TB{s}", "VMFS", 1.82 * T, 1.82 * T - 349.1 * GIB, ["host-11"]),
+        ("datastore-22", f"ESX9-04-local{s}", "VMFS", 0.9 * T, 0.7 * T, ["host-14"]),
+        ("datastore-23", f"SYN-HDD{s}", "NFS41", 16 * T, 6.4 * T, every),
+        ("datastore-24", f"SYN-SSD-04{s}", "NFS41", 3.6 * T, 1.1 * T, every),
+        ("datastore-25", f"SYN-SSD-05{s}", "NFS41", 3.6 * T, 2.9 * T, every),
+        ("datastore-26", f"vsanDatastore{s}", "vsan", 7.3 * T, 3.0 * T, ["host-12", "host-13"]),
     ]
-    vm_def = [
-        # name, host, power, vcpu, memory GiB, datastores
-        ("collector", "host-11", "poweredOn", 4, 16, ["SYN-HDD"]),
-        ("DC-02", "host-11", "poweredOn", 4, 4, ["SYN-HDD"]),
-        ("lic91", "host-11", "poweredOn", 2, 4, ["SYN-HDD"]),
-        ("minion01", "host-11", "poweredOn", 1, 2, ["SYN-SSD-04"]),
-        ("minion02", "host-11", "poweredOn", 1, 2, ["SYN-SSD-04"]),
-        ("offDepot", "host-11", "poweredOn", 2, 4, ["SYN-HDD"]),
-        ("OPS91", "host-11", "poweredOn", 4, 16, ["SYN-HDD"]),
-        ("SaltMaster", "host-11", "poweredOn", 2, 8, ["SYN-SSD-05"]),
-        ("TWINGATE", "host-11", "poweredOn", 1, 2, ["SYN-HDD"]),
-        ("UniFi", "host-11", "poweredOn", 4, 8, ["SYN-HDD"]),
-        ("vcf91installer", "host-11", "poweredOn", 4, 16, ["SYN-SSD-05"]),
-        ("vcf91sddc", "host-11", "poweredOn", 4, 16, ["SYN-HDD"]),
-        ("veeam-01", "host-11", "poweredOn", 2, 8, ["SYN-SSD-04", "ESX9-01-2TB"]),
-        ("MPB2", "host-11", "poweredOff", 2, 8, ["SYN-SSD-05"]),
-        ("POWERSHELL-HOST", "host-11", "poweredOff", 1, 2, ["SYN-HDD"]),
-        ("ROCKY-Postgres", "host-11", "poweredOff", 2, 2, ["SYN-HDD"]),
-        ("vcsa91", "host-12", "poweredOn", 4, 21, ["vsanDatastore"]),
-        ("nsx02", "host-12", "poweredOn", 6, 24, ["vsanDatastore"]),
-        ("vsp01-b2hr2", "host-12", "poweredOn", 4, 16, ["vsanDatastore"]),
-        ("vsp01-c2td7", "host-13", "poweredOn", 4, 16, ["vsanDatastore"]),
-        ("vsp01-lhkgg", "host-13", "poweredOn", 4, 16, ["vsanDatastore", "SYN-SSD-04"]),
-        ("DC-03", "host-13", "poweredOn", 2, 4, ["SYN-HDD"]),
-        ("TWINGATE-02", "host-13", "poweredOn", 1, 2, ["SYN-HDD"]),
-        ("vCLS-1a2b3c", "host-12", "poweredOn", 1, 0.125, ["vsanDatastore"]),
-        ("ubuntu-template", "host-13", "poweredOff", 2, 4, ["SYN-HDD"]),
-        ("lab-scratch", "host-14", "poweredOff", 2, 4, ["ESX9-04-local"]),
-    ]
+    # VM inventory for the primary lab; secondary labs get a compact rename.
+    if not s:
+        vm_def = [
+            ("collector", "host-11", "poweredOn", 4, 16, ["SYN-HDD"]),
+            ("DC-02", "host-11", "poweredOn", 4, 4, ["SYN-HDD"]),
+            ("lic91", "host-11", "poweredOn", 2, 4, ["SYN-HDD"]),
+            ("minion01", "host-11", "poweredOn", 1, 2, ["SYN-SSD-04"]),
+            ("minion02", "host-11", "poweredOn", 1, 2, ["SYN-SSD-04"]),
+            ("offDepot", "host-11", "poweredOn", 2, 4, ["SYN-HDD"]),
+            ("OPS91", "host-11", "poweredOn", 4, 16, ["SYN-HDD"]),
+            ("SaltMaster", "host-11", "poweredOn", 2, 8, ["SYN-SSD-05"]),
+            ("TWINGATE", "host-11", "poweredOn", 1, 2, ["SYN-HDD"]),
+            ("UniFi", "host-11", "poweredOn", 4, 8, ["SYN-HDD"]),
+            ("vcf91installer", "host-11", "poweredOn", 4, 16, ["SYN-SSD-05"]),
+            ("vcf91sddc", "host-11", "poweredOn", 4, 16, ["SYN-HDD"]),
+            ("veeam-01", "host-11", "poweredOn", 2, 8, ["SYN-SSD-04", "ESX9-01-2TB"]),
+            ("MPB2", "host-11", "poweredOff", 2, 8, ["SYN-SSD-05"]),
+            ("POWERSHELL-HOST", "host-11", "poweredOff", 1, 2, ["SYN-HDD"]),
+            ("ROCKY-Postgres", "host-11", "poweredOff", 2, 2, ["SYN-HDD"]),
+            ("vcsa91", "host-12", "poweredOn", 4, 21, ["vsanDatastore"]),
+            ("nsx02", "host-12", "poweredOn", 6, 24, ["vsanDatastore"]),
+            ("vsp01-b2hr2", "host-12", "poweredOn", 4, 16, ["vsanDatastore"]),
+            ("vsp01-c2td7", "host-13", "poweredOn", 4, 16, ["vsanDatastore"]),
+            ("vsp01-lhkgg", "host-13", "poweredOn", 4, 16, ["vsanDatastore", "SYN-SSD-04"]),
+            ("DC-03", "host-13", "poweredOn", 2, 4, ["SYN-HDD"]),
+            ("TWINGATE-02", "host-13", "poweredOn", 1, 2, ["SYN-HDD"]),
+            ("vCLS-1a2b3c", "host-12", "poweredOn", 1, 0.125, ["vsanDatastore"]),
+            ("ubuntu-template", "host-13", "poweredOff", 2, 4, ["SYN-HDD"]),
+            ("lab-scratch", "host-14", "poweredOff", 2, 4, ["ESX9-04-local"]),
+        ]
+    else:
+        vm_def = [
+            (f"collector{s}", "host-11", "poweredOn", 4, 16, [f"SYN-HDD{s}"]),
+            (f"app{s}-01", "host-11", "poweredOn", 2, 8, [f"SYN-SSD-04{s}"]),
+            (f"vcsa{s}", "host-12", "poweredOn", 4, 21, [f"vsanDatastore{s}"]),
+            (f"edge{s}", "host-13", "poweredOn", 2, 4, [f"SYN-HDD{s}"]),
+            (f"vCLS{s}", "host-12", "poweredOn", 1, 0.125, [f"vsanDatastore{s}"]),
+            (f"scratch{s}", "host-14", "poweredOff", 2, 4, [f"ESX9-04-local{s}"]),
+        ]
     vms = []
     for i, (name, host, power, vcpu, mem, dss) in enumerate(vm_def):
         vms.append({"moref": f"vm-{100 + i}", "name": name, "runtime.powerState": power,
                     "config.template": name.endswith("-template"), "config.hardware.numCPU": vcpu,
                     "config.hardware.memoryMB": mem * 1024, "runtime.host": host, "_ds": dss})
     datastores = []
-    for moref, name, kind, cap, free, mounted in ds_def:
+    for moref, name, kind, cap, free, mounted in ds:
         datastores.append({"moref": moref, "name": name, "summary.type": kind, "summary.capacity": cap,
                            "summary.freeSpace": free, "summary.accessible": True,
                            "host": [{"key": h} for h in mounted],
                            "vm": [v["moref"] for v in vms if name in v["_ds"]]})
-    return build("vcsa91.vcrocs.local", ["DC-01"], hosts, clusters, datastores, vms if with_vms else None)
+    server = f"vcsa91.vcrocs.local{s}" if s else "vcsa91.vcrocs.local"
+    return build(server, [f"DC-01{s}" if s else "DC-01"], hosts, clusters, datastores,
+                 vms if with_vms else None)
+
+
+def _vcenters() -> list[dict]:
+    raw = os.environ.get("VCO_VCENTERS")
+    if raw:
+        try:
+            items = json.loads(raw)
+            if isinstance(items, list) and items:
+                return items
+        except json.JSONDecodeError:
+            pass
+    host = os.environ.get("VCO_VCENTER_HOST", "")
+    if not host and os.environ.get("VCO_MOCK") != "1":
+        return []
+    return [{
+        "id": "default", "label": host or "vCenter", "host": host,
+        "user": os.environ.get("VCO_VCENTER_USER", ""),
+        "password": os.environ.get("VCO_VCENTER_PASSWORD", ""),
+        "verify_ssl": os.environ.get("VCO_VCENTER_VERIFY_SSL", "false"),
+    }]
+
+
+def _merge(parts: list[dict[str, list[dict]]]) -> dict[str, list[dict]]:
+    out: dict[str, list[dict]] = {}
+    for part in parts:
+        for table, rows in part.items():
+            out.setdefault(table, []).extend(rows)
+    return out
 
 
 # --------------------------------------------------------------------------- collector entry point
 
 def main(with_vms: bool, extend=None) -> None:
-    """Collector contract: VCO_VCENTER_* in, JSON keyed by table out to VCO_OUTPUT_FILE.
+    """Collector contract: VCO_VCENTER_* / VCO_VCENTERS in, JSON keyed by table out.
     `extend(tables)` may add more tables (dbh-impact adds its answers)."""
     settings = json.loads(os.environ.get("VCO_SETTINGS") or "{}")
-    host = os.environ.get("VCO_VCENTER_HOST", "")
+    instances = _vcenters()
+    if not instances:
+        raise SystemExit("No vCenter configured; add one on the Settings page or in config.yaml")
     started = time.monotonic()
-    if os.environ.get("VCO_MOCK") == "1":
-        data = sample(with_vms)
-        if settings.get("vcenter_name"):
-            data["fabric_source"][0]["server"] = settings["vcenter_name"]
-    else:
-        if not host:
-            raise SystemExit("VCO_VCENTER_HOST is not set; configure the vcenter connection")
-        if not os.environ.get("VCO_VCENTER_PASSWORD"):
-            raise SystemExit("vCenter password is empty: set it on the Settings page or in .env")
-        source = LiveSource(host, os.environ.get("VCO_VCENTER_USER", ""), os.environ["VCO_VCENTER_PASSWORD"],
-                            os.environ.get("VCO_VCENTER_VERIFY_SSL", "false").lower() == "true")
-        try:
-            data = source.fabric(settings.get("vcenter_name") or host, with_vms)
-        finally:
-            source.close()
+    mock = os.environ.get("VCO_MOCK") == "1"
+    multi = len(instances) > 1
+    parts = []
+    for i, vc in enumerate(instances):
+        if mock:
+            data = sample(with_vms, suffix="" if i == 0 else f"-{vc['id']}")
+            if i == 0 and settings.get("vcenter_name") and not multi:
+                data["fabric_source"][0]["server"] = settings["vcenter_name"]
+            elif multi or not settings.get("vcenter_name"):
+                data["fabric_source"][0]["server"] = vc.get("label") or vc.get("host") or vc["id"]
+        else:
+            host = vc.get("host") or ""
+            if not host:
+                raise SystemExit(f"vCenter '{vc.get('id')}' has no host; configure it on the Settings page")
+            if not vc.get("password"):
+                raise SystemExit(f"vCenter '{vc.get('id')}' password is empty: set it on the Settings page or in .env")
+            source = LiveSource(host, vc.get("user", ""), vc["password"],
+                                str(vc.get("verify_ssl", "false")).lower() == "true")
+            try:
+                server = (settings.get("vcenter_name") if not multi else None) or vc.get("label") or host
+                data = source.fabric(server, with_vms)
+            finally:
+                source.close()
+        parts.append(stamp_vcenter(data, vc["id"], namespace_morefs=multi))
+    data = _merge(parts)
     if extend:
         data.update(extend(data))
+        # Impact rows inherit vcenter from the moref prefix when multi; stamp when missing.
+        if "impact" in data:
+            for row in data["impact"]:
+                if "vcenter" not in row:
+                    moref = row.get("moref") or ""
+                    row["vcenter"] = moref.split(":", 1)[0] if multi and ":" in moref else instances[0]["id"]
     log(f"{len(data['fabric_hosts'])} hosts, {len(data['fabric_datastores'])} datastores, "
         f"{len(data['fabric_mounts'])} mounts" + (f", {len(data['fabric_vms'])} VMs" if with_vms else "")
-        + f" in {time.monotonic() - started:.1f}s")
+        + f" across {len(instances)} vCenter(s) in {time.monotonic() - started:.1f}s")
     payload = json.dumps(data, default=str)
     if os.environ.get("VCO_OUTPUT_FILE"):
         with open(os.environ["VCO_OUTPUT_FILE"], "w") as fh:

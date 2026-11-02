@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}DBH Topology · vCommunity-Observability{% endblock %}
 {% set source = data.source[0] if data.source else none %}
+{% set source_label = (data.source|map(attribute='server')|list)|join(' · ') if data.source else none %}
 {% block head %}
 <style>
   /* Colors follow DBH Insights' report.js, mapped onto the app theme so light and dark both work. */
@@ -45,7 +46,7 @@
   <div>
     <div class="breadcrumb"><a href="/">Dashboards</a> / {{ mod.name }}</div>
     <h1>Host &amp; Storage Topology</h1>
-    <p class="subtle">{% if source %}{{ source.server }} · {% endif %}collected {{ last_collected ~ ' UTC' if last_collected else 'never' }}</p>
+    <p class="subtle">{% if source_label %}{{ source_label }} · {% endif %}collected {{ last_collected ~ ' UTC' if last_collected else 'never' }}</p>
   </div>
   <div class="page-actions">
     <button type="button" class="btn btn-outline" id="topo-download">Download HTML</button>

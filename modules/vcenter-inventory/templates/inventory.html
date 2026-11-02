@@ -92,8 +92,8 @@
 {% endblock %}
 
 {# ------------------------------------------------------------------ helpers #}
-{% macro href(type, name='', tab='') -%}
-  ?type={{ type }}{% if name %}&name={{ name|urlencode }}{% endif %}{% if tab %}&tab={{ tab }}{% endif %}
+{% macro href(type, name='', tab='', vc='') -%}
+  ?type={{ type }}{% if vc %}&vc={{ vc|urlencode }}{% endif %}{% if name %}&name={{ name|urlencode }}{% endif %}{% if tab %}&tab={{ tab }}{% endif %}
 {%- endmacro %}
 
 {% macro icon(kind, cls='') -%}
@@ -132,7 +132,7 @@
     <thead><tr><th>Name</th><th>State</th><th>Status</th><th>Host</th><th>Guest OS</th><th>CPUs</th><th>Memory</th><th>Used space</th><th>IP address</th></tr></thead>
     <tbody>
     {% for v in rows %}<tr>
-      <td><a class="node" href="{{ href('vm', v.name) }}">{{ icon('vm', 'vm-on' if v.power_state == 'poweredOn' else '') }}{{ v.name }}</a></td>
+      <td><a class="node" href="{{ href('vm', v.name, vc=v.vcenter) }}">{{ icon('vm', 'vm-on' if v.power_state == 'poweredOn' else '') }}{{ v.name }}</a></td>
       <td>{{ 'Powered On' if v.power_state == 'poweredOn' else 'Powered Off' }}</td>
       <td><span class="status status-{{ v.overall_status }}"><i></i>{{ v.overall_status }}</span></td>
       <td>{{ v.host }}</td><td>{{ v.guest_os }}</td><td class="num">{{ v.cpu_count }}</td>
@@ -147,7 +147,7 @@
     <thead><tr><th>Name</th><th>State</th><th>Status</th><th>Cluster</th><th>CPU used</th><th>Memory used</th><th>VMs</th><th>Version</th><th>Uptime</th></tr></thead>
     <tbody>
     {% for h in rows %}<tr>
-      <td><a class="node" href="{{ href('host', h.name) }}">{{ icon('host', 'ico-alert' if h.overall_status == 'red' else '') }}{{ h.name }}</a></td>
+      <td><a class="node" href="{{ href('host', h.name, vc=h.vcenter) }}">{{ icon('host', 'ico-alert' if h.overall_status == 'red' else '') }}{{ h.name }}</a></td>
       <td>{{ 'Maintenance' if h.maintenance_mode else h.connection_state|capitalize }}</td>
       <td><span class="status status-{{ h.overall_status }}"><i></i>{{ h.overall_status }}</span></td>
       <td>{{ h.cluster or '—' }}</td>
@@ -169,14 +169,26 @@
 {% set vms = data.vms %}
 {% set hosts = data.hosts %}
 {% set clusters = data.clusters %}
-{% set vc = data.vcenter[0] if data.vcenter else {'name': 'vCenter', 'version': '', 'build': ''} %}
-{% set dcs = (hosts|map(attribute='datacenter')|list + vms|map(attribute='datacenter')|list + clusters|map(attribute='datacenter')|list)|unique|sort %}
+{% set vcenters = data.vcenter if data.vcenter else [{'vcenter': 'default', 'name': 'vCenter', 'version': '', 'build': ''}] %}
 {% set sel_type = q.type or 'vcenter' %}
 {% set tab = q.tab or 'summary' %}
-{% if sel_type == 'vm' %}{% set sel = vms|selectattr('name', 'equalto', q.name)|first %}
-{% elif sel_type == 'host' %}{% set sel = hosts|selectattr('name', 'equalto', q.name)|first %}
-{% elif sel_type == 'cluster' %}{% set sel = clusters|selectattr('name', 'equalto', q.name)|first %}
-{% else %}{% set sel = vc %}{% set sel_type = 'vcenter' %}{% endif %}
+{% set sel_vc = q.vc or (vcenters[0].vcenter if vcenters else 'default') %}
+{% if sel_type == 'vm' %}
+  {% set sel = vms|selectattr('name', 'equalto', q.name)|selectattr('vcenter', 'equalto', sel_vc)|first %}
+  {% if not sel %}{% set sel = vms|selectattr('name', 'equalto', q.name)|first %}{% endif %}
+{% elif sel_type == 'host' %}
+  {% set sel = hosts|selectattr('name', 'equalto', q.name)|selectattr('vcenter', 'equalto', sel_vc)|first %}
+  {% if not sel %}{% set sel = hosts|selectattr('name', 'equalto', q.name)|first %}{% endif %}
+{% elif sel_type == 'cluster' %}
+  {% set sel = clusters|selectattr('name', 'equalto', q.name)|selectattr('vcenter', 'equalto', sel_vc)|first %}
+  {% if not sel %}{% set sel = clusters|selectattr('name', 'equalto', q.name)|first %}{% endif %}
+{% else %}
+  {% set sel = vcenters|selectattr('vcenter', 'equalto', sel_vc)|first %}
+  {% if not sel %}{% set sel = vcenters[0] %}{% endif %}
+  {% set sel_type = 'vcenter' %}
+{% endif %}
+{% if sel and sel.vcenter %}{% set sel_vc = sel.vcenter %}{% endif %}
+{% set vc = sel if sel_type == 'vcenter' else (vcenters|selectattr('vcenter', 'equalto', sel_vc)|first or vcenters[0]) %}
 
 {% block body %}
 {# ------------------------------------------------------------------ tree #}
@@ -184,32 +196,38 @@
   <div class="inv-tree-head"><b>Inventory</b><a href="/">← Dashboards</a></div>
   <div class="inv-views"><span class="on" title="Hosts and Clusters">{{ icon('cluster') }}</span><span title="VMs (from the tree)">{{ icon('vm') }}</span><span title="Storage">{{ icon('disk') }}</span><span title="Networking">{{ icon('net') }}</span></div>
   <ul>
-    <li><details open><summary><a class="node {{ 'sel' if sel_type == 'vcenter' }}" href="{{ href('vcenter') }}">{{ icon('vcenter') }}{{ vc.name }}</a></summary>
+    {% for root in vcenters %}
+    {% set root_hosts = hosts|selectattr('vcenter', 'equalto', root.vcenter)|list %}
+    {% set root_vms = vms|selectattr('vcenter', 'equalto', root.vcenter)|list %}
+    {% set root_clusters = clusters|selectattr('vcenter', 'equalto', root.vcenter)|list %}
+    {% set dcs = (root_hosts|map(attribute='datacenter')|list + root_vms|map(attribute='datacenter')|list + root_clusters|map(attribute='datacenter')|list)|unique|sort %}
+    <li><details {{ 'open' if root.vcenter == sel_vc }}><summary><a class="node {{ 'sel' if sel_type == 'vcenter' and sel and sel.vcenter == root.vcenter }}" href="{{ href('vcenter', vc=root.vcenter) }}">{{ icon('vcenter') }}{{ root.name }}</a></summary>
       <ul>
       {% for dc in dcs %}
         <li><details open><summary><span class="node">{{ icon('datacenter') }}{{ dc }}</span></summary>
           <ul>
-          {% for cl in clusters|selectattr('datacenter', 'equalto', dc) %}
-            {% set open = (sel_type in ['host', 'vm'] and sel and sel.cluster == cl.name) or (sel_type == 'cluster' and sel and sel.name == cl.name) or loop.first %}
-            <li><details {{ 'open' if open }}><summary><a class="node {{ 'sel' if sel_type == 'cluster' and sel and sel.name == cl.name }}" href="{{ href('cluster', cl.name) }}">{{ icon('cluster') }}{{ cl.name }}</a></summary>
+          {% for cl in root_clusters|selectattr('datacenter', 'equalto', dc) %}
+            {% set open = (sel_type in ['host', 'vm'] and sel and sel.cluster == cl.name and sel.vcenter == cl.vcenter) or (sel_type == 'cluster' and sel and sel.name == cl.name and sel.vcenter == cl.vcenter) or loop.first %}
+            <li><details {{ 'open' if open }}><summary><a class="node {{ 'sel' if sel_type == 'cluster' and sel and sel.name == cl.name and sel.vcenter == cl.vcenter }}" href="{{ href('cluster', cl.name, vc=cl.vcenter) }}">{{ icon('cluster') }}{{ cl.name }}</a></summary>
               <ul>
-              {% for h in hosts|selectattr('cluster', 'equalto', cl.name) %}
-                <li class="leaf"><a class="node {{ 'sel' if sel_type == 'host' and sel and sel.name == h.name }}" href="{{ href('host', h.name) }}">{{ icon('host', 'ico-alert' if h.overall_status == 'red' else '') }}{{ h.name }}</a></li>
+              {% for h in root_hosts|selectattr('cluster', 'equalto', cl.name) %}
+                <li class="leaf"><a class="node {{ 'sel' if sel_type == 'host' and sel and sel.name == h.name and sel.vcenter == h.vcenter }}" href="{{ href('host', h.name, vc=h.vcenter) }}">{{ icon('host', 'ico-alert' if h.overall_status == 'red' else '') }}{{ h.name }}</a></li>
               {% endfor %}
-              {% for v in vms|selectattr('cluster', 'equalto', cl.name) %}
-                <li class="leaf"><a class="node {{ 'sel' if sel_type == 'vm' and sel and sel.name == v.name }} {{ 'off' if v.power_state != 'poweredOn' }}" href="{{ href('vm', v.name) }}">{{ icon('vm', 'vm-on' if v.power_state == 'poweredOn' else '') }}{{ v.name }}</a></li>
+              {% for v in root_vms|selectattr('cluster', 'equalto', cl.name) %}
+                <li class="leaf"><a class="node {{ 'sel' if sel_type == 'vm' and sel and sel.name == v.name and sel.vcenter == v.vcenter }} {{ 'off' if v.power_state != 'poweredOn' }}" href="{{ href('vm', v.name, vc=v.vcenter) }}">{{ icon('vm', 'vm-on' if v.power_state == 'poweredOn' else '') }}{{ v.name }}</a></li>
               {% endfor %}
               </ul></details></li>
           {% endfor %}
-          {% for h in hosts|selectattr('datacenter', 'equalto', dc)|selectattr('cluster', 'equalto', '') %}
-            <li class="leaf"><a class="node {{ 'sel' if sel_type == 'host' and sel and sel.name == h.name }}" href="{{ href('host', h.name) }}">{{ icon('host') }}{{ h.name }}</a></li>
+          {% for h in root_hosts|selectattr('datacenter', 'equalto', dc)|selectattr('cluster', 'equalto', '') %}
+            <li class="leaf"><a class="node {{ 'sel' if sel_type == 'host' and sel and sel.name == h.name and sel.vcenter == h.vcenter }}" href="{{ href('host', h.name, vc=h.vcenter) }}">{{ icon('host') }}{{ h.name }}</a></li>
           {% endfor %}
-          {% for v in vms|selectattr('datacenter', 'equalto', dc)|selectattr('cluster', 'equalto', '') %}
-            <li class="leaf"><a class="node {{ 'sel' if sel_type == 'vm' and sel and sel.name == v.name }}" href="{{ href('vm', v.name) }}">{{ icon('vm', 'vm-on' if v.power_state == 'poweredOn' else '') }}{{ v.name }}</a></li>
+          {% for v in root_vms|selectattr('datacenter', 'equalto', dc)|selectattr('cluster', 'equalto', '') %}
+            <li class="leaf"><a class="node {{ 'sel' if sel_type == 'vm' and sel and sel.name == v.name and sel.vcenter == v.vcenter }}" href="{{ href('vm', v.name, vc=v.vcenter) }}">{{ icon('vm', 'vm-on' if v.power_state == 'poweredOn' else '') }}{{ v.name }}</a></li>
           {% endfor %}
           </ul></details></li>
       {% endfor %}
       </ul></details></li>
+    {% endfor %}
   </ul>
 </aside>
 
@@ -239,7 +257,7 @@
       'host':    [('summary', 'Summary'), ('vms', 'VMs'), ('datastores', 'Datastores'), ('networks', 'Networks')],
       'vm':      [('summary', 'Summary'), ('datastores', 'Datastores'), ('networks', 'Networks'), ('snapshots', 'Snapshots')],
   }[sel_type] %}
-  <nav class="tabs">{% for key, label in tabs %}<a class="{{ 'on' if tab == key }}" href="{{ href(sel_type, sel.name if sel_type != 'vcenter' else '', key) }}">{{ label }}</a>{% endfor %}</nav>
+  <nav class="tabs">{% for key, label in tabs %}<a class="{{ 'on' if tab == key }}" href="{{ href(sel_type, sel.name if sel_type != 'vcenter' else '', key, sel_vc) }}">{{ label }}</a>{% endfor %}</nav>
 
   {# ============================== VM #}
   {% if sel_type == 'vm' %}{% set v = sel %}{% set on = v.power_state == 'poweredOn' %}
@@ -286,10 +304,10 @@ uptime {{ v.uptime_days }} days{% else %}Powered off{% endif %}</div>
           <dt>CPU</dt><dd>{{ v.cpu_count }} CPU(s), {{ mhz(v.cpu_used_mhz) }} used</dd>
           <dt>Memory</dt><dd>{{ v.memory_gb }} GB, {{ '%.1f'|format((v.memory_active_mb or 0) / 1024) }} GB memory active</dd>
           {% for d in (v.disks or '').split(';') if d %}{% set p = d.split('|') %}
-          <dt>{{ p[0] }}</dt><dd>{{ p[1] }} GB | {{ p[2] }}<br><a href="{{ href('vm', v.name, 'datastores') }}">{{ p[3] }}</a></dd>
+          <dt>{{ p[0] }}</dt><dd>{{ p[1] }} GB | {{ p[2] }}<br><a href="{{ href('vm', v.name, 'datastores', v.vcenter) }}">{{ p[3] }}</a></dd>
           {% endfor %}
           {% for n in (v.nics or '').split(';') if n %}{% set p = n.split('|') %}
-          <dt>{{ p[0] }}</dt><dd><a href="{{ href('vm', v.name, 'networks') }}">{{ p[1] }}</a> ({{ p[2] }}) | {{ p[3] }}</dd>
+          <dt>{{ p[0] }}</dt><dd><a href="{{ href('vm', v.name, 'networks', v.vcenter) }}">{{ p[1] }}</a> ({{ p[2] }}) | {{ p[3] }}</dd>
           {% endfor %}
           <dt>CD/DVD drive 1</dt><dd>{{ v.cdrom or '—' }}</dd>
           <dt>Compatibility</dt><dd>{{ v.hw_version or '—' }}</dd>
@@ -299,8 +317,8 @@ uptime {{ v.uptime_days }} days{% else %}Powered off{% endif %}</div>
       <article class="sum-card">
         <h2>Related Objects</h2>
         <div class="sum-body"><dl class="rel">
-          <dt>Cluster</dt><dd>{% if v.cluster %}{{ icon('cluster') }}<a href="{{ href('cluster', v.cluster) }}">{{ v.cluster }}</a>{% else %}—{% endif %}</dd>
-          <dt>Host</dt><dd>{% if v.host %}{{ icon('host') }}<a href="{{ href('host', v.host) }}">{{ v.host }}</a>{% else %}—{% endif %}</dd>
+          <dt>Cluster</dt><dd>{% if v.cluster %}{{ icon('cluster') }}<a href="{{ href('cluster', v.cluster, vc=v.vcenter) }}">{{ v.cluster }}</a>{% else %}—{% endif %}</dd>
+          <dt>Host</dt><dd>{% if v.host %}{{ icon('host') }}<a href="{{ href('host', v.host, vc=v.vcenter) }}">{{ v.host }}</a>{% else %}—{% endif %}</dd>
           <dt>Networks</dt>{% for n in (v.networks or '').split(', ') if n %}<dd>{{ icon('net') }}{{ n }}</dd>{% else %}<dd>—</dd>{% endfor %}
           <dt>Storage</dt>{% for d in (v.datastores or '').split(', ') if d %}<dd>{{ icon('disk') }}{{ d }}</dd>{% else %}<dd>—</dd>{% endfor %}
         </dl></div>
@@ -318,7 +336,7 @@ uptime {{ v.uptime_days }} days{% else %}Powered off{% endif %}</div>
           {% if snaps %}{% for s in snaps %}<div class="snap">{{ icon('snap') }}{{ s }}</div>{% endfor %}
           {% else %}<div class="empty">{{ icon('info') }}No snapshot taken</div>{% endif %}
         </div>
-        <div class="sum-foot"><a href="{{ href('vm', v.name, 'snapshots') }}">Manage</a></div>
+        <div class="sum-foot"><a href="{{ href('vm', v.name, 'snapshots', v.vcenter) }}">Manage</a></div>
       </article>
     </div>
     {% elif tab == 'datastores' %}{{ list_card('Datastore', (v.datastores or '').split(', '), 'disk') }}
@@ -356,13 +374,13 @@ uptime {{ v.uptime_days }} days{% else %}Powered off{% endif %}</div>
         <h2>Related Objects</h2>
         <div class="sum-body"><dl class="rel">
           <dt>Datacenter</dt><dd>{{ icon('datacenter') }}{{ h.datacenter }}</dd>
-          <dt>Cluster</dt><dd>{% if h.cluster %}{{ icon('cluster') }}<a href="{{ href('cluster', h.cluster) }}">{{ h.cluster }}</a>{% else %}—{% endif %}</dd>
-          <dt>Datastores</dt><dd>{{ icon('disk') }}<a href="{{ href('host', h.name, 'datastores') }}">{{ (h.datastores or '').split(', ')|reject('equalto','')|list|length }} datastore(s)</a></dd>
-          <dt>Networks</dt><dd>{{ icon('net') }}<a href="{{ href('host', h.name, 'networks') }}">{{ (h.networks or '').split(', ')|reject('equalto','')|list|length }} network(s)</a></dd>
+          <dt>Cluster</dt><dd>{% if h.cluster %}{{ icon('cluster') }}<a href="{{ href('cluster', h.cluster, vc=h.vcenter) }}">{{ h.cluster }}</a>{% else %}—{% endif %}</dd>
+          <dt>Datastores</dt><dd>{{ icon('disk') }}<a href="{{ href('host', h.name, 'datastores', h.vcenter) }}">{{ (h.datastores or '').split(', ')|reject('equalto','')|list|length }} datastore(s)</a></dd>
+          <dt>Networks</dt><dd>{{ icon('net') }}<a href="{{ href('host', h.name, 'networks', h.vcenter) }}">{{ (h.networks or '').split(', ')|reject('equalto','')|list|length }} network(s)</a></dd>
         </dl></div>
       </article>
     </div>
-    {% elif tab == 'vms' %}{{ vm_table(vms|selectattr('host', 'equalto', h.name)) }}
+    {% elif tab == 'vms' %}{{ vm_table(vms|selectattr('vcenter', 'equalto', h.vcenter)|selectattr('host', 'equalto', h.name)) }}
     {% elif tab == 'datastores' %}{{ list_card('Datastore', (h.datastores or '').split(', '), 'disk') }}
     {% elif tab == 'networks' %}{{ list_card('Network', (h.networks or '').split(', '), 'net') }}
     {% endif %}
@@ -370,14 +388,14 @@ uptime {{ v.uptime_days }} days{% else %}Powered off{% endif %}</div>
   {# ============================== Cluster #}
   {% elif sel_type == 'cluster' %}{% set c = sel %}
     {% if tab == 'summary' %}
-    {% set cvms = vms|selectattr('cluster', 'equalto', c.name)|list %}
+    {% set cvms = vms|selectattr('vcenter', 'equalto', c.vcenter)|selectattr('cluster', 'equalto', c.name)|list %}
     <div class="sum-grid">
       <article class="sum-card">
         <h2>Cluster Details</h2>
         <div class="sum-body"><dl class="kv">
           <dt>Datacenter</dt><dd>{{ c.datacenter }}</dd>
-          <dt>Hosts</dt><dd><a href="{{ href('cluster', c.name, 'hosts') }}">{{ c.host_count }}</a></dd>
-          <dt>Virtual Machines</dt><dd><a href="{{ href('cluster', c.name, 'vms') }}">{{ cvms|length }}</a> ({{ cvms|selectattr('power_state', 'equalto', 'poweredOn')|list|length }} powered on)</dd>
+          <dt>Hosts</dt><dd><a href="{{ href('cluster', c.name, 'hosts', c.vcenter) }}">{{ c.host_count }}</a></dd>
+          <dt>Virtual Machines</dt><dd><a href="{{ href('cluster', c.name, 'vms', c.vcenter) }}">{{ cvms|length }}</a> ({{ cvms|selectattr('power_state', 'equalto', 'poweredOn')|list|length }} powered on)</dd>
           <dt>vSphere DRS</dt><dd>{{ 'On' if c.drs_enabled else 'Off' }}</dd>
           <dt>vSphere HA</dt><dd>{{ 'On' if c.ha_enabled else 'Off' }}</dd>
         </dl></div>
@@ -394,27 +412,32 @@ uptime {{ v.uptime_days }} days{% else %}Powered off{% endif %}</div>
       <article class="sum-card">
         <h2>Host Status</h2>
         <div class="sum-body">
-          {% for h in hosts|selectattr('cluster', 'equalto', c.name) %}
-          <div class="snap"><span class="status status-{{ h.overall_status }}"><i></i></span><a href="{{ href('host', h.name) }}">{{ h.name }}</a></div>
+          {% for h in hosts|selectattr('vcenter', 'equalto', c.vcenter)|selectattr('cluster', 'equalto', c.name) %}
+          <div class="snap"><span class="status status-{{ h.overall_status }}"><i></i></span><a href="{{ href('host', h.name, vc=h.vcenter) }}">{{ h.name }}</a></div>
           {% endfor %}
         </div>
       </article>
     </div>
-    {% elif tab == 'hosts' %}{{ host_table(hosts|selectattr('cluster', 'equalto', c.name)) }}
-    {% elif tab == 'vms' %}{{ vm_table(vms|selectattr('cluster', 'equalto', c.name)) }}
+    {% elif tab == 'hosts' %}{{ host_table(hosts|selectattr('vcenter', 'equalto', c.vcenter)|selectattr('cluster', 'equalto', c.name)) }}
+    {% elif tab == 'vms' %}{{ vm_table(vms|selectattr('vcenter', 'equalto', c.vcenter)|selectattr('cluster', 'equalto', c.name)) }}
     {% endif %}
 
   {# ============================== vCenter root #}
   {% else %}
+    {% set vc_hosts = hosts|selectattr('vcenter', 'equalto', sel_vc)|list %}
+    {% set vc_vms = vms|selectattr('vcenter', 'equalto', sel_vc)|list %}
+    {% set vc_clusters = clusters|selectattr('vcenter', 'equalto', sel_vc)|list %}
+    {% set vc_dcs = (vc_hosts|map(attribute='datacenter')|list + vc_vms|map(attribute='datacenter')|list + vc_clusters|map(attribute='datacenter')|list)|unique|sort %}
     {% if tab == 'summary' %}
-    {% set on_vms = vms|selectattr('power_state', 'equalto', 'poweredOn')|list %}
+    {% set on_vms = vc_vms|selectattr('power_state', 'equalto', 'poweredOn')|list %}
     <div class="sum-grid">
       <article class="sum-card">
         <h2>vCenter Details</h2>
         <div class="sum-body"><dl class="kv">
           <dt>Version</dt><dd>{{ vc.version or '—' }}</dd>
           <dt>Build</dt><dd>{{ vc.build or '—' }}</dd>
-          <dt>Datacenters</dt><dd>{{ dcs|length }}</dd>
+          <dt>Connection id</dt><dd><code>{{ sel_vc }}</code></dd>
+          <dt>Datacenters</dt><dd>{{ vc_dcs|length }}</dd>
           <dt>Last collected</dt><dd>{{ last_collected or 'never' }}{{ ' UTC' if last_collected }}</dd>
         </dl></div>
       </article>
@@ -422,27 +445,27 @@ uptime {{ v.uptime_days }} days{% else %}Powered off{% endif %}</div>
         <h2>Inventory</h2>
         <div class="sum-body">
           <div class="count-grid">
-            <div><b>{{ clusters|length }}</b><span>Clusters</span></div>
-            <div><b><a href="{{ href('vcenter', '', 'hosts') }}">{{ hosts|length }}</a></b><span>Hosts</span></div>
-            <div><b><a href="{{ href('vcenter', '', 'vms') }}">{{ vms|length }}</a></b><span>VMs</span></div>
+            <div><b>{{ vc_clusters|length }}</b><span>Clusters</span></div>
+            <div><b><a href="{{ href('vcenter', '', 'hosts', sel_vc) }}">{{ vc_hosts|length }}</a></b><span>Hosts</span></div>
+            <div><b><a href="{{ href('vcenter', '', 'vms', sel_vc) }}">{{ vc_vms|length }}</a></b><span>VMs</span></div>
           </div>
           <dl class="kv" style="margin-top:18px">
             <dt>Powered on</dt><dd>{{ on_vms|length }}</dd>
-            <dt>Powered off</dt><dd>{{ vms|length - on_vms|length }}</dd>
-            <dt>Hosts with alerts</dt><dd>{{ hosts|rejectattr('overall_status', 'equalto', 'green')|list|length }}</dd>
+            <dt>Powered off</dt><dd>{{ vc_vms|length - on_vms|length }}</dd>
+            <dt>Hosts with alerts</dt><dd>{{ vc_hosts|rejectattr('overall_status', 'equalto', 'green')|list|length }}</dd>
           </dl>
         </div>
       </article>
       <article class="sum-card wide">
         <h2>Capacity and Usage</h2>
         <div class="sum-body">
-          {{ capbar('CPU', (clusters|sum(attribute='cpu_used_mhz')) / 1000, (clusters|sum(attribute='cpu_total_mhz')) / 1000, 'GHz') }}
-          {{ capbar('Memory', clusters|sum(attribute='mem_used_gb'), clusters|sum(attribute='mem_total_gb'), 'GB') }}
+          {{ capbar('CPU', (vc_clusters|sum(attribute='cpu_used_mhz')) / 1000, (vc_clusters|sum(attribute='cpu_total_mhz')) / 1000, 'GHz') }}
+          {{ capbar('Memory', vc_clusters|sum(attribute='mem_used_gb'), vc_clusters|sum(attribute='mem_total_gb'), 'GB') }}
         </div>
       </article>
     </div>
-    {% elif tab == 'hosts' %}{{ host_table(hosts) }}
-    {% elif tab == 'vms' %}{{ vm_table(vms) }}
+    {% elif tab == 'hosts' %}{{ host_table(vc_hosts) }}
+    {% elif tab == 'vms' %}{{ vm_table(vc_vms) }}
     {% endif %}
   {% endif %}
   {% endif %}

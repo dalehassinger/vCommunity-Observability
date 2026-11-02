@@ -16,6 +16,7 @@ tables:
   datastores:            # current state, replaced on every run
     mode: snapshot
     columns: &ds_columns
+      vcenter: text          # connection id; distinguishes same names across vCenters
       name: text
       datacenter: text
       type: text
@@ -43,19 +44,19 @@ api:
     description: Estimated days until full, based on growth over the last 30 days
     query: &runway |
       WITH first AS (
-        SELECT h.name, h.used_gb AS first_used, h.collected_at AS first_at
+        SELECT h.vcenter, h.name, h.used_gb AS first_used, h.collected_at AS first_at
         FROM datastore_history h
         WHERE h.collected_at = (
           SELECT MIN(collected_at) FROM datastore_history
-          WHERE name = h.name AND collected_at >= datetime('now', '-30 days'))
+          WHERE vcenter = h.vcenter AND name = h.name AND collected_at >= datetime('now', '-30 days'))
       ), growth AS (
-        SELECT d.name, d.capacity_gb, d.free_gb, d.used_pct, d.collected_at,
+        SELECT d.vcenter, d.name, d.capacity_gb, d.free_gb, d.used_pct, d.collected_at,
           CASE WHEN julianday(d.collected_at) - julianday(f.first_at) >= 1.0 / 24
                THEN ROUND((d.used_gb - f.first_used) / (julianday(d.collected_at) - julianday(f.first_at)), 2)
           END AS growth_gb_per_day
-        FROM datastores d LEFT JOIN first f ON f.name = d.name
+        FROM datastores d LEFT JOIN first f ON f.vcenter = d.vcenter AND f.name = d.name
       )
-      SELECT name, capacity_gb, free_gb, used_pct, growth_gb_per_day,
+      SELECT vcenter, name, capacity_gb, free_gb, used_pct, growth_gb_per_day,
         CASE WHEN growth_gb_per_day > 0 THEN CAST(free_gb / growth_gb_per_day AS INTEGER) END AS runway_days,
         collected_at
       FROM growth ORDER BY runway_days IS NULL, runway_days

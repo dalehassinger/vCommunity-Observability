@@ -13,7 +13,8 @@ core_api: 1
 description: DBH Insights inventory sheets (vInfo, vHost, vDisk... 27 in all) with Insights, Sheets and XLSX export.
 
 settings_help:
-  vcenter_name: Name shown in the "VI SDK Server" column (default is the vCenter host)
+  vcenter_name: Name shown in the "VI SDK Server" column when only one vCenter is selected (default is the host)
+  vcenters: Optional list of vCenter connection ids to collect; empty means all
 
 collectors:
   - name: sheets
@@ -39,6 +40,7 @@ exports:
 tables:
   sheets:
     columns:
+      vcenter: text
       position: integer
       sheet: text
       table_name: text
@@ -521,7 +523,7 @@ tables:
       vi_sdk_server: text
 api:
 - path: /sheets
-  query: SELECT position, sheet, grp AS sheet_group, table_name, row_count, error, collected_at FROM sheets ORDER BY position
+  query: SELECT vcenter, position, sheet, grp AS sheet_group, table_name, row_count, error, collected_at FROM sheets ORDER BY vcenter, position
   description: Every sheet with its row count and any collection error
 - path: /vinfo
   table: vinfo
@@ -626,12 +628,12 @@ dashboards:
     datastores: SELECT * FROM vdatastore
     source: SELECT * FROM vsource
     health: SELECT message_type, COUNT(*) AS findings FROM vhealth GROUP BY message_type ORDER BY findings DESC
-    sheets: SELECT * FROM sheets ORDER BY position
+    sheets: SELECT * FROM sheets ORDER BY vcenter, position
 - slug: sheets
   title: DBH Sheets
   template: sheets.html
   queries:
-    sheets: SELECT * FROM sheets ORDER BY position
+    sheets: SELECT * FROM sheets ORDER BY vcenter, position
     columns: SELECT * FROM sheet_columns ORDER BY table_name, position
     vinfo: SELECT * FROM "vinfo"
     vcpu: SELECT * FROM "vcpu"

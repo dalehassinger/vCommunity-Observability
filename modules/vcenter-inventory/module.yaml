@@ -16,9 +16,10 @@ collectors:
 
 tables:
   vcenter:
-    columns: {name: text, version: text, build: text}
+    columns: {vcenter: text, name: text, version: text, build: text}
   clusters:
     columns:
+      vcenter: text
       name: text
       datacenter: text
       host_count: integer
@@ -33,6 +34,7 @@ tables:
       storage_free_gb: real
   hosts:
     columns:
+      vcenter: text
       name: text
       datacenter: text
       cluster: text
@@ -59,6 +61,7 @@ tables:
       networks: text        # comma-separated
   vms:
     columns:
+      vcenter: text
       name: text
       datacenter: text
       cluster: text
@@ -97,7 +100,7 @@ api:
     query: SELECT * FROM vms WHERE power_state <> 'poweredOn' AND is_template = 0
   - path: /vms/with-snapshots
     description: Virtual machines that have snapshots
-    query: SELECT name, host, cluster, snapshots, collected_at FROM vms WHERE snapshots <> ''
+    query: SELECT vcenter, name, host, cluster, snapshots, collected_at FROM vms WHERE snapshots <> ''
   - path: /hosts
     table: hosts
     description: All ESXi hosts with hardware and usage
@@ -110,7 +113,7 @@ dashboards:
     title: vSphere Inventory
     template: inventory.html
     queries:
-      vcenter: SELECT * FROM vcenter
-      clusters: SELECT * FROM clusters ORDER BY datacenter, name
-      hosts: SELECT * FROM hosts ORDER BY datacenter, cluster, name
-      vms: SELECT * FROM vms ORDER BY datacenter, cluster, name COLLATE NOCASE
+      vcenter: SELECT * FROM vcenter ORDER BY name
+      clusters: SELECT * FROM clusters ORDER BY vcenter, datacenter, name
+      hosts: SELECT * FROM hosts ORDER BY vcenter, datacenter, cluster, name
+      vms: SELECT * FROM vms ORDER BY vcenter, datacenter, cluster, name COLLATE NOCASE

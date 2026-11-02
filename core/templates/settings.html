@@ -49,10 +49,89 @@
   {% if auth %}<div class="token-row"><label>API token</label><input type="password" name="token" autocomplete="off" placeholder="Required to save: the token from .env (VCO_API_TOKEN_...)"></div>{% endif %}
 {% endmacro %}
 
+<section class="card" id="vcenters" style="margin-bottom:16px">
+  <div class="card-header">vCenter connections
+    {% if vcenters_from_ui %}<span class="src">edited here</span>{% endif %}</div>
+  <div class="card-block">
+    {{ card_msg('vcenters') }}
+    <p class="subtle" style="margin-top:0">Collectors that list <code>vcenter</code> receive every enabled connection below (or a subset via module setting <code>vcenters</code>). Rows are tagged with the vCenter id so names do not collide.</p>
+    <div class="table-wrap"><table class="datagrid">
+      <thead><tr><th>Id</th><th>Label</th><th>Address</th><th>User</th><th>TLS</th><th></th></tr></thead>
+      <tbody>
+      {% for v in vcenters %}
+        <tr>
+          <td><code>{{ v.id }}</code>{% if not v.enabled %} <span class="label">off</span>{% endif %}</td>
+          <td>{{ v.label }}</td>
+          <td>{{ v.host or '—' }}</td>
+          <td>{{ v.user or '—' }}</td>
+          <td>{{ 'verify' if v.verify else 'skip' }}</td>
+          <td class="sched-actions">
+            <a class="btn btn-outline" style="height:26px;font-size:11px" href="/settings?edit_vcenter={{ v.id }}#vcenters">Edit</a>
+            {% if vcenters|length > 1 %}
+            <form class="row-form reset-form" method="post" action="/settings/vcenters/{{ v.id }}/delete" style="margin:0"
+                  onsubmit="return confirm('Remove vCenter {{ v.id }}?')">
+              {% if auth %}<input type="hidden" name="token" class="token-copy">{% endif %}
+              <button class="btn btn-outline" style="height:26px;font-size:11px">Remove</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="subtle">No vCenter configured yet.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    <div class="hint">Used by: {{ vcenter_used_by|join(', ') if vcenter_used_by else 'no module yet' }}</div>
+    {% if edit_vcenter %}
+    <form method="post" action="/settings/vcenters" autocomplete="off" class="sched-form is-editing" style="margin-top:14px">
+      <h4 class="sched-form-title">{{ 'Add vCenter' if edit_vcenter.is_new else 'Edit vCenter' }}</h4>
+      <input type="hidden" name="is_new" value="{{ '1' if edit_vcenter.is_new else '0' }}">
+      <div class="form-row"><label for="vc-id">Id</label>
+        <div>{% if edit_vcenter.is_new %}
+          <input type="text" id="vc-id" name="id" value="{{ edit_vcenter.id }}" placeholder="lab" pattern="[A-Za-z][A-Za-z0-9_-]{0,31}" required>
+          <div class="hint">Stable key stored with collected rows (letters, digits, _ or -).</div>
+        {% else %}
+          <input type="text" id="vc-id" value="{{ edit_vcenter.id }}" disabled>
+          <input type="hidden" name="id" value="{{ edit_vcenter.id }}">
+        {% endif %}</div></div>
+      <div class="form-row"><label for="vc-label">Label</label>
+        <div><input type="text" id="vc-label" name="label" value="{{ edit_vcenter.label }}" placeholder="Workload lab"></div></div>
+      <div class="form-row"><label for="vc-host">Address (FQDN or IP)</label>
+        <div><input type="text" id="vc-host" name="host" value="{{ edit_vcenter.host }}"></div></div>
+      <div class="form-row"><label for="vc-user">Username</label>
+        <div><input type="text" id="vc-user" name="user" value="{{ edit_vcenter.user }}"></div></div>
+      <div class="form-row"><label for="vc-password">Password</label>
+        <div><input type="password" id="vc-password" name="password" autocomplete="new-password"
+               placeholder="{{ 'Saved. Leave blank to keep it' if edit_vcenter.password_set else 'Not set' }}"></div></div>
+      <div class="form-row"><label for="vc-ssl">Verify TLS certificate</label>
+        <div><label class="switch" style="font-weight:400"><input type="checkbox" id="vc-ssl" name="verify_ssl" value="1" {{ 'checked' if edit_vcenter.verify }}><span></span></label>
+          <div class="hint">Leave off for self-signed lab certificates.</div></div></div>
+      {{ token_field() }}
+      <div class="form-actions">
+        <button class="btn btn-primary" name="action" value="save">Save</button>
+        <button class="btn btn-outline" name="action" value="test">Save and test</button>
+        <a class="btn btn-outline" href="/settings#vcenters">Cancel</a>
+      </div>
+    </form>
+    {% else %}
+    {% if auth %}<div class="token-row"><label>API token</label><input type="password" name="token" id="vcenters-token" autocomplete="off" placeholder="Required to add, edit, remove or reset"></div>{% endif %}
+    <div class="form-actions" style="margin-top:12px">
+      <a class="btn btn-primary" href="/settings?edit_vcenter=__new__#vcenters">Add vCenter</a>
+      {% if vcenters_from_ui %}
+      <form class="reset-form" method="post" action="/settings/vcenters/reset" style="display:inline;margin:0">
+        {% if auth %}<input type="hidden" name="token" class="token-copy">{% endif %}
+        <button class="btn btn-outline">Reset to config.yaml</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+</section>
+
 <div class="settings-grid">
 {% for c in connections %}
   <section class="card" id="{{ c.name }}">
-    <div class="card-header">{{ 'vCenter' if c.name == 'vcenter' else 'VCF Operations' if c.name == 'vcfops' else c.name }} connection
+    <div class="card-header">{{ 'VCF Operations' if c.name == 'vcfops' else c.name }} connection
       {% if c.from_ui %}<span class="src">edited here</span>{% endif %}</div>
     <div class="card-block">
       {{ card_msg(c.name) }}
@@ -261,10 +340,12 @@
 </script>
 {% if auth %}
 <script>
-  // The reset buttons reuse the token typed into the same card.
+  // Reset / remove buttons reuse the token typed into the same card.
   document.querySelectorAll(".reset-form").forEach((f) => f.addEventListener("submit", () => {
-    const t = f.closest(".card").querySelector("input[name=token]");
-    f.querySelector(".token-copy").value = t ? t.value : "";
+    const card = f.closest(".card");
+    const t = card && (card.querySelector("input[name=token]:not(.token-copy)") || document.getElementById("vcenters-token"));
+    const copy = f.querySelector(".token-copy");
+    if (copy) copy.value = t ? t.value : "";
   }));
 </script>
 {% endif %}

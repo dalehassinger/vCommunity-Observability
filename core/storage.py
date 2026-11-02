@@ -46,6 +46,10 @@ class Storage:
                        "created_at TEXT, last_run TEXT, last_status TEXT, last_message TEXT, last_file TEXT)")
             db.execute("CREATE TABLE IF NOT EXISTS collector_settings (module TEXT, collector TEXT, "
                        "interval_minutes INTEGER, changed_at TEXT, PRIMARY KEY (module, collector))")
+            # UI-managed vCenter list. When any row exists, it wins over config.yaml for vCenter.
+            db.execute("""CREATE TABLE IF NOT EXISTS vcenter_instances (
+                id TEXT PRIMARY KEY, label TEXT, host TEXT, "user" TEXT, password TEXT,
+                verify_ssl TEXT, enabled INTEGER DEFAULT 1, position INTEGER, changed_at TEXT)""")
 
     # -- connections -------------------------------------------------------
     def _core(self) -> sqlite3.Connection:
@@ -153,6 +157,60 @@ class Storage:
     def reset_connection_settings(self, connection: str) -> None:
         with _lock, self._core() as db:
             db.execute("DELETE FROM connection_settings WHERE connection = ?", (connection,))
+
+    # -- vCenter instances (multi-vCenter) ---------------------------------
+    def vcenter_instances(self) -> list[dict[str, Any]]:
+        with self._core() as db:
+            db.row_factory = sqlite3.Row
+            rows = db.execute(
+                'SELECT id, label, host, "user" AS user, password, verify_ssl, enabled, position '
+                "FROM vcenter_instances ORDER BY position, id"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_vcenter_instances(self, instances: list[dict[str, Any]]) -> None:
+        with _lock, self._core() as db:
+            db.execute("DELETE FROM vcenter_instances")
+            for i, inst in enumerate(instances):
+                db.execute(
+                    'INSERT INTO vcenter_instances (id, label, host, "user", password, verify_ssl, '
+                    "enabled, position, changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (inst["id"], inst.get("label") or inst.get("host") or inst["id"],
+                     inst.get("host") or "", inst.get("user") or "", inst.get("password") or "",
+                     str(inst.get("verify_ssl") or "false"), int(bool(inst.get("enabled", True))),
+                     i, utcnow()),
+                )
+
+    def upsert_vcenter_instance(self, inst: dict[str, Any]) -> None:
+        with _lock, self._core() as db:
+            existing = db.execute("SELECT password, position FROM vcenter_instances WHERE id = ?",
+                                  (inst["id"],)).fetchone()
+            password = inst.get("password")
+            if password in (None, "") and existing:
+                password = existing[0]
+            position = inst.get("position")
+            if position is None:
+                position = existing[1] if existing else (
+                    db.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM vcenter_instances").fetchone()[0])
+            db.execute(
+                'INSERT INTO vcenter_instances (id, label, host, "user", password, verify_ssl, '
+                "enabled, position, changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET label = excluded.label, host = excluded.host, "
+                '"user" = excluded."user", password = excluded.password, verify_ssl = excluded.verify_ssl, '
+                "enabled = excluded.enabled, position = excluded.position, changed_at = excluded.changed_at",
+                (inst["id"], inst.get("label") or inst.get("host") or inst["id"],
+                 inst.get("host") or "", inst.get("user") or "", password or "",
+                 str(inst.get("verify_ssl") or "false"), int(bool(inst.get("enabled", True))),
+                 int(position), utcnow()),
+            )
+
+    def delete_vcenter_instance(self, vid: str) -> None:
+        with _lock, self._core() as db:
+            db.execute("DELETE FROM vcenter_instances WHERE id = ?", (vid,))
+
+    def reset_vcenter_instances(self) -> None:
+        with _lock, self._core() as db:
+            db.execute("DELETE FROM vcenter_instances")
 
     def collector_intervals(self) -> dict[tuple[str, str], int]:
         with self._core() as db:

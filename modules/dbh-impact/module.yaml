@@ -10,7 +10,8 @@ core_api: 1
 description: DBH Insights Impact. What stops if one host or one datastore fails, and could HA restart it.
 
 settings_help:
-  vcenter_name: Name shown for the vCenter (default is the vCenter host)
+  vcenter_name: Name shown for the vCenter when only one is selected (default is the host)
+  vcenters: Optional list of vCenter connection ids to collect; empty means all
 
 collectors:
   - name: fabric
@@ -22,11 +23,12 @@ collectors:
 
 tables:
   fabric_source:
-    columns: {server: text, datacenters: text}
+    columns: {vcenter: text, server: text, datacenters: text}
   fabric_clusters:
-    columns: {moref: text, name: text, ha_enabled: integer, drs_enabled: integer}
+    columns: {vcenter: text, moref: text, name: text, ha_enabled: integer, drs_enabled: integer}
   fabric_hosts:
     columns:
+      vcenter: text
       moref: text
       name: text
       cluster_moref: text
@@ -38,6 +40,7 @@ tables:
       dram_gib: real
   fabric_datastores:
     columns:
+      vcenter: text
       moref: text
       name: text
       kind: text
@@ -49,15 +52,16 @@ tables:
       mount_count: integer
       accessible: integer
   fabric_mounts:
-    columns: {datastore_moref: text, host_moref: text}
+    columns: {vcenter: text, datastore_moref: text, host_moref: text}
 
   fabric_vms:
-    columns: {moref: text, name: text, power_state: text, template: integer, vcpu: integer, memory_gib: real, host_moref: text}
+    columns: {vcenter: text, moref: text, name: text, power_state: text, template: integer, vcpu: integer, memory_gib: real, host_moref: text}
   fabric_vm_datastores:
-    columns: {vm_moref: text, datastore_moref: text}
+    columns: {vcenter: text, vm_moref: text, datastore_moref: text}
   impact:
     columns:
-      target: text            # "host:host-11" or "datastore:datastore-21"
+      vcenter: text
+      target: text            # "host:host-11" or "datastore:datastore-21" (morefs prefixed with id: when multi)
       kind: text
       moref: text
       name: text
