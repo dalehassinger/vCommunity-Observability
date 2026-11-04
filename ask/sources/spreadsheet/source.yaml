@@ -1,0 +1,60 @@
+# Knowledge source plug-in: spreadsheets (.xlsx, .csv) such as RVTools or the
+# dashboards' DBH Insights export.
+#
+# Same contract as the other plug-ins (see sources/markdown-repo/source.yaml), plus:
+#   - ASK_SOURCE_UPLOAD_DIR: the folder the Knowledge sources page saves uploads into.
+#   - Every sheet is also written to <work folder>/tables.db (one table per sheet), and
+#     the output's "state" lists those tables. Ask uses them for data questions
+#     (counts, totals, top N): the model writes one read-only SELECT over them.
+name: spreadsheet
+title: Spreadsheet (xlsx / csv)
+description: Indexes .xlsx and .csv files (RVTools, DBH Insights exports) from a folder or from uploads, one document per row, and loads every sheet into SQLite for counting and totals questions.
+version: 0.1.0
+runtime: python
+entry: fetch_spreadsheet.py
+timeout_seconds: 1800
+options:
+  - key: location
+    label: Files from
+    type: select
+    choices: [folder, upload]
+    default: folder
+    hint: "folder = a folder inside the container, such as the dashboards' exports (/exports). upload = files you upload on this page."
+  - key: path
+    label: Folder
+    default: /exports
+    hint: "Only for 'folder'. Compose mounts the dashboards' ./exports folder read-only at /exports."
+  - key: pattern
+    label: File names (globs)
+    type: list
+    default: ["dbh-insights-*.xlsx"]
+    hint: "Only for 'folder'. One pattern per line, e.g. dbh-insights-*.xlsx or *.xlsx. Uploads always use every uploaded .xlsx and .csv file."
+  - key: pick
+    label: Which files
+    type: select
+    choices: [newest, all]
+    default: newest
+    hint: "newest = only the newest file of each name (a timestamp at the end of the name is ignored), so 'Keep newest N' exports aren't counted twice. all = every matching file."
+  - key: sheets
+    label: Sheets to include
+    type: list
+    default: []
+    hint: "One sheet name per line. Empty = every sheet."
+  - key: embed_sheets
+    label: Searchable sheets
+    type: list
+    default: []
+    hint: "Sheets that get one searchable document per row. Empty = automatic: the main RVTools / DBH Insights sheets (vInfo, vHost, vDatastore, vCluster, vSnapshot ...), or every sheet for other workbooks. All sheets are always loaded for data questions."
+  - key: max_embed_rows
+    label: Max searchable rows per sheet
+    type: number
+    default: 5000
+    min: 0
+    step: 100
+    hint: "Larger sheets are loaded for data questions only (embedding every row takes time)."
+  - key: uploads
+    label: When a file is uploaded again
+    type: select
+    choices: [replace, keep]
+    default: replace
+    hint: "Only for 'upload'. replace = a new upload removes the earlier files. keep = keep them all (pick 'all' above to use them together)."

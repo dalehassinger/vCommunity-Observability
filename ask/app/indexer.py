@@ -144,6 +144,10 @@ class Indexer:
     def workdir(self, name: str) -> Path:
         return self.data_dir / "sources" / name
 
+    def upload_dir(self, name: str) -> Path:
+        """Files uploaded on the Knowledge sources page (the spreadsheet plug-in reads them)."""
+        return self.data_dir / "uploads" / name
+
     def is_running(self, name: str) -> bool:
         lock = self._locks.get(name)
         return bool(lock and lock.locked())
@@ -196,6 +200,7 @@ class Indexer:
         work.mkdir(parents=True, exist_ok=True)
         env = {**os.environ, "ASK_SOURCE_OPTIONS": json.dumps(src["options"]),
                "ASK_SOURCE_WORKDIR": str(work), "ASK_SOURCE_NAME": name,
+               "ASK_SOURCE_UPLOAD_DIR": str(self.upload_dir(name)),
                "ASK_SOURCE_STATE": json.dumps({} if full else prev["state"])}
         if full:
             env["ASK_SOURCE_FULL"] = "1"
@@ -245,3 +250,4 @@ class Indexer:
 
     def remove_workdir(self, name: str) -> None:
         shutil.rmtree(self.workdir(name), ignore_errors=True)
+        shutil.rmtree(self.upload_dir(name), ignore_errors=True)

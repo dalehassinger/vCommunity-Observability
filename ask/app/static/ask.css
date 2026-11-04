@@ -194,3 +194,16 @@ a.cite:hover { background: var(--primary); color: #fff; text-decoration: none; }
 .src-chip:hover { border-color: var(--primary); text-decoration: none; }
 .src-chip.more { padding-left: 10px; color: var(--subtle); }
 .src-group { margin: 12px 0 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--subtle); }
+
+/* Spreadsheet sources: data question card (SQL + result) and the upload box. */
+.src-card.data { grid-column: 1 / -1; border-left-color: var(--ok); }
+.src-card pre.sql { margin: 6px 0; padding: 8px 10px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 4px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; }
+.data-table-wrap { max-height: 320px; overflow: auto; margin: 6px 0; border: 1px solid var(--border); border-radius: 4px; }
+.datagrid.compact th, .datagrid.compact td { padding: 4px 8px; font-size: 12px; white-space: nowrap; }
+.datagrid.compact td.num, .datagrid.compact th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.upload-box { margin: 10px 0; padding: 10px 12px; border: 1px dashed var(--border); border-radius: 4px; }
+.upload-box.drag { border-color: var(--primary); background: var(--surface-2); }
+.upload-drop { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.upload-list { margin: 8px 0 0; padding-left: 18px; }
+.upload-list li { margin: 2px 0; }

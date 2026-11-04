@@ -66,6 +66,12 @@ class Ollama:
             raise OllamaError(f"Ollama returned {len(vecs)} embeddings for {len(texts)} inputs")
         return vecs
 
+    def chat(self, model: str, messages: list[dict[str, str]], *, options: dict[str, Any],
+             think: bool = False, keep_alive: str = "10m") -> str:
+        """Whole answer as one string (used for the short SQL-writing step of data questions)."""
+        return "".join((o.get("message") or {}).get("content") or ""
+                       for o in self.chat_stream(model, messages, options=options, think=think, keep_alive=keep_alive))
+
     def chat_stream(self, model: str, messages: list[dict[str, str]], *, options: dict[str, Any],
                     think: bool = False, keep_alive: str = "10m") -> Iterator[dict[str, Any]]:
         """Yield Ollama's streamed chat objects ({"message": {"content", "thinking"}, "done", ...})."""

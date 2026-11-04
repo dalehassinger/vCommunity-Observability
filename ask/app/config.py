@@ -44,6 +44,7 @@ SETTINGS: dict[str, dict[str, Any]] = {
     "top_k":            {"default": 8, "type": "int"},
     "context_chars":    {"default": 24000, "type": "int"},
     "expand_links":     {"default": True, "type": "bool"},
+    "data_questions":   {"default": True, "type": "bool"},
     "history_turns":    {"default": 3, "type": "int"},
     "keep_alive":       {"default": "10m", "type": "str"},
     "system_prompt":    {"default": DEFAULT_SYSTEM_PROMPT, "type": "text"},

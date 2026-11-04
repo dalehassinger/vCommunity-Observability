@@ -49,6 +49,7 @@ services:
       - ./ask-data:/app/data                   # ask.db (index + chats) and cloned repositories
       - ./ask-knowledge:/knowledge:ro          # optional: local markdown folders for "local folder" sources
       - ./ask-sources:/sources                 # optional: extra or patched source plug-ins
+      - ./exports:/exports:ro                  # the dashboards' exports, read by "spreadsheet" sources
       # - ./ask/config/ask.yaml:/app/config/ask.yaml:ro   # optional: your own copy of ask.example.yaml
     restart: unless-stopped
     init: true

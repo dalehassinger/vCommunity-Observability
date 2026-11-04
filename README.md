@@ -1,5 +1,8 @@
 # vCommunity-Observability
 
+> [!WARNING]
+> **Warning: this software is under development. Do not use in a production environment.**
+
 An open-source framework that collects data from **vCenter** and **VCF Operations**, stores it locally in SQLite, and makes it useful in two ways:
 
 - **Custom dashboards** served by the app itself, styled after VCF Operations (Clarity look, light and dark theme). No Grafana and no CDN, so it works at dark sites.
@@ -367,7 +370,7 @@ Each collection answers the question for every host and datastore, so the answer
 
 ## vCommunity Ask (local AI chat)
 
-A second container, `vco-ask`, gives you a chat prompt in the same VCF Operations look (same header, left sidebar and light/dark theme). You ask questions and it answers **only from knowledge sources you point it at**: the markdown files of a GitHub repository, or the posts of a web site or blog (optionally only a date range). Your local **Ollama** writes the answers, so nothing leaves your machine.
+A second container, `vco-ask`, gives you a chat prompt in the same VCF Operations look (same header, left sidebar and light/dark theme). You ask questions and it answers **only from knowledge sources you point it at**: the markdown files of a GitHub repository, the posts of a web site or blog (optionally only a date range), or spreadsheets such as RVTools or the dashboards' DBH Insights export. For spreadsheets it can also answer counting and totals questions ("how many VMs are powered on per cluster?") with a read-only SQL query that it shows you. Your local **Ollama** writes the answers, so nothing leaves your machine.
 
 ![vCommunity Ask chat](docs/screenshots/ask-chat.png)
 
@@ -472,6 +475,7 @@ One card per source with a status ring (green OK, blue syncing, red error, amber
 | Temperature | 0.2 | Low keeps answers close to the sources |
 | Chat history (turns) | 3 | 0 = every question stands alone |
 | Follow links | on | Link expansion (step 4 above) |
+| Data questions | on | Counting and totals questions about spreadsheet sources are answered with a read-only SQL query (see [Spreadsheets and data questions](#spreadsheets-and-data-questions)) |
 | Observability URL | `http://localhost:8080` | Sidebar link back to the dashboards |
 | System prompt | built in | Editable; **Reset to the default** restores it |
 
@@ -609,6 +613,49 @@ Qwen 3.x and some other models can reason step by step before they answer. The *
 - Thinking does not find new sources. It reasons over the same retrieved sources.
 - Ask always sends the flag, even when it is off, because Ollama lets thinking models think by default when `think` is missing. Models without thinking ignore it.
 
+### Spreadsheets and data questions
+
+The `spreadsheet` source plug-in reads `.xlsx` and `.csv` files, for example an RVTools export or the dashboards' **DBH Insights** XLSX export. It can read them in two ways (the **Files from** option):
+
+- **folder (default).** A folder inside the container. Compose mounts the dashboards' `./exports` folder read-only at `/exports`, so a scheduled DBH Insights export is picked up automatically: Ask re-checks the folder on the source's **Re-sync every** interval (as low as 0.25 h, 15 minutes) and re-indexes only when a matching file is new or changed (name, size and modified time).
+- **upload.** Drag a file onto the source's card on the **Knowledge sources** page (or click **choose a file**). Ask saves it under `data/uploads/<source>/` and re-indexes. By default a new upload replaces the earlier files (**When a file is uploaded again** = `replace`); `keep` keeps them all. **Remove** deletes an uploaded file. Uploading needs the API token when `ASK_API_TOKEN` is set. Only `.xlsx` and `.csv` are accepted, up to `ASK_UPLOAD_MAX_MB` (default 50).
+
+**Add a spreadsheet source.** On **Knowledge sources** press **Add source**, pick **Spreadsheet (xlsx / csv)**, keep the defaults to read the newest `dbh-insights-*.xlsx` from `/exports` (or set **Files from** to `upload`), and save. Spreadsheet sources are not created automatically. If you have both a spreadsheet source and other sources, pick the spreadsheet source in the chat's sources menu when you ask data questions, so Ask knows which tables you mean.
+
+Each sheet is used in two ways:
+
+1. **Search (normal answers).** Rows of the main sheets become documents (one per row, such as one per VM in `vInfo`), plus a summary per cluster (or per host) and an overview of each sheet with its columns and row count. They are chunked, embedded and searched like any other source, which suits "tell me about vm-web-01" or "what is on host esx03?".
+2. **Data questions (counts, totals, top N).** Every sheet is also loaded into a small SQLite database, one table per sheet, at `data/sources/<source>/tables.db`. The plug-in writes it to a temporary file and swaps it in, so a question never sees a half-written table. A column becomes a number column when all of its values are numbers, otherwise text. A `source_file` column records which file each row came from.
+
+How a data question is answered:
+
+1. **Is it a data question?** Counting and totals words (*how many*, *total*, *average*, *top 10*, *per cluster*, *more than*), listing phrases (*show all hosts*, *list the VMs*, *which datastores*, *every snapshot*), the words *sheet*, *table* or *column*, or the name of one of the source's sheets (one typo allowed, so *vHosst* finds `vHost`) send the question down this path (when **Data questions** is on and a spreadsheet source is selected or included).
+2. **Pick the tables.** Ask matches the question against table and column names (with RVTools synonyms, so "VM" finds `vinfo`) and describes up to 5 tables to the model (a sheet named in the question always comes first): column names and types, what common RVTools columns mean, and 3 sample rows.
+3. **The model writes one SQL query.** A separate, short call to the chat model with temperature 0 and thinking off. If the query fails, the error goes back to the model once for a corrected query.
+4. **Checks before it runs.** Only a single `SELECT` (or `WITH ... SELECT`); no `ATTACH`, `PRAGMA`, `INSERT`, `UPDATE`, `DELETE`, `DROP`, `load_extension` and similar; the database is opened read-only; SQLite's internal tables are blocked; a query is stopped after 5 seconds; at most 500 rows come back.
+5. **The answer.** The query and its result (up to 60 rows) go to the model as source [1], and the model writes the answer from it. The chat shows a **Query and result** card with the SQL (**Copy SQL**) and the complete result table (up to 500 rows, scrollable, **Download CSV**), so you can check the numbers. For a long list the model summarizes it instead of copying it, because the full table is right there.
+6. **Fallback.** If the model can't write a valid query, or the checks refuse it, Ask answers with the normal search instead; the answer's stats show `data_error`.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `location` (Files from) | `folder` | `folder` or `upload` |
+| `path` (Folder) | `/exports` | Folder inside the container (folder mode only) |
+| `pattern` (File names) | `dbh-insights-*.xlsx` | Globs, one per line, e.g. `*.xlsx` or `RVTools*.xlsx` (folder mode only) |
+| `pick` (Which files) | `newest` | `newest` = only the newest file of each name (a trailing timestamp is ignored, so "Keep newest N" exports aren't counted twice); `all` = every matching file |
+| `sheets` | (all) | Sheets to include, one per line |
+| `embed_sheets` (Searchable sheets) | automatic | Sheets that get one document per row. Automatic = the main RVTools / DBH Insights sheets (`vInfo`, `vHost`, `vDatastore`, `vCluster`, `vSnapshot`, `vRP`, `vSource`, `vLicense`, `vHealth`, `dvSwitch`, cluster capacity), or every sheet for other workbooks. Every sheet is always loaded for data questions |
+| `max_embed_rows` | `5000` | Larger sheets are used for data questions only (embedding every row takes time) |
+| `uploads` | `replace` | `replace` or `keep` earlier uploads (upload mode only) |
+
+The header row is the first row with at least two filled cells. Column names are made SQL-friendly (`# CPUs` becomes `num_cpus`, `Provisioned MiB` becomes `provisioned_mib`); the model sees the original header next to each name. [openpyxl](https://openpyxl.readthedocs.io/) (MIT) reads the `.xlsx` files (values only, formulas and macros are never run).
+
+Tips for good data answers:
+
+- Ask for lists the same way: "Show all hosts from the vHost sheet" returns every host row in the card. Search alone can't list a whole sheet, because it only retrieves the best few matches (**Chunks to retrieve**).
+- Ask about columns that exist: "How many VMs are powered on per cluster?", "Top 10 VMs by provisioned MiB", "Which datastores have less than 20% free?". The **Data tables** row on the source card lists each table and its row count.
+- Use a chat model that is good at SQL; Qwen 3.x models are. Smaller models write wrong queries more often, and you see it in the query card.
+- Turn **Data questions** off on the Settings page to send every question through the normal search.
+
 ### Ask configuration
 
 `ask/config/ask.example.yaml` is built into the image as `/app/config/ask.yaml`. To use your own, copy it to `ask/config/ask.yaml` and uncomment the volume line in `docker-compose.yml`.
@@ -628,6 +675,7 @@ Qwen 3.x and some other models can reason step by step before they answer. The *
 | `ASK_OBSERVABILITY_URL` | Sidebar link to the dashboards |
 | `ASK_CONFIG`, `ASK_DATA_DIR`, `ASK_SHARED_DIR` | Config file, data folder, folder holding the shared `app.css` (set in the image) |
 | `ASK_GITHUB_TOKEN` (any name) | Read-only token for a private repository; put the variable's **name** in the source's "Token env var" |
+| `ASK_UPLOAD_MAX_MB` | Largest spreadsheet upload in MB (default 50) |
 | `VCO_ASK_URL` | First container: sidebar link to Ask |
 
 ### Source plug-ins
@@ -640,6 +688,7 @@ A source plug-in is a folder with `source.yaml` and a script in **Python or Powe
 | `ASK_SOURCE_WORKDIR` | A private folder under `data/sources/<name>` (for clones or caches) |
 | `ASK_SOURCE_STATE` | JSON the script returned last time (for example the commit), `{}` on a full re-index |
 | `ASK_SOURCE_FULL` | `1` on **Re-index all** |
+| `ASK_SOURCE_UPLOAD_DIR` | The folder the Knowledge sources page saves this source's uploads into (`data/uploads/<name>`); used by `spreadsheet` |
 
 The script prints **one JSON object** to stdout (logs go to stderr; a non-zero exit marks the sync failed):
 
@@ -678,6 +727,8 @@ The publish date comes from the feed first, then the page itself (`article:publi
 
 For a blog whose markdown is in a Git repository (Hugo, Jekyll and similar), `markdown-repo` gives cleaner text with no crawling; `web-site` is for sites you don't have the source for.
 
+**`spreadsheet`.** Reads `.xlsx` and `.csv` files (RVTools, DBH Insights) from a folder such as `/exports` or from uploads. One document per row plus cluster and sheet summaries for search, and every sheet loaded into `data/sources/<name>/tables.db` for data questions; it also returns the table list (columns, types, sample rows) in its `state`. See [Spreadsheets and data questions](#spreadsheets-and-data-questions) for the options.
+
 ### Ask REST API
 
 All under token auth when `ASK_API_TOKEN` is set; Swagger UI at http://localhost:8081/docs.
@@ -700,7 +751,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8081/api/ask -Headers $h -C
 
 - `ask/Dockerfile`, built from the repository root (it copies `core/static/app.css` and the vendored Swagger UI, so a theme fix lands in both containers). Python 3.13 slim + git, native arm64 on Apple Silicon, no PowerShell.
 - Runs as non-root user `ask` (uid 10002) on port 8081, health check on `/api/health`.
-- Volumes: `./ask-data` → `/app/data` (index, chats, clones), `./ask-knowledge` → `/knowledge` (read-only, local folders), `./ask-sources` → `/sources` (extra or patched plug-ins).
+- Volumes: `./ask-data` → `/app/data` (index, chats, clones), `./ask-knowledge` → `/knowledge` (read-only, local folders), `./ask-sources` → `/sources` (extra or patched plug-ins), `./exports` → `/exports` (read-only, the dashboards' exports for `spreadsheet` sources).
 - Front-end libraries are vendored in `ask/app/static/vendor/` with their licences: marked 18.1.3 (MIT) and DOMPurify 3.4.17 (Apache-2.0/MPL-2.0). Every answer and document is sanitised by DOMPurify before display.
 - On a Linux Docker host, uncomment `extra_hosts: host.docker.internal:host-gateway` in `docker-compose.yml`. Leave it commented on Rancher Desktop and Docker Desktop: it replaces their own mapping to the Mac, and Ollama then refuses the connection.
 
@@ -955,6 +1006,11 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 | Ask: web-site source is red with "could not reach https://..." | The container can't reach the site (DNS, proxy or firewall). Test with `docker compose exec vco-ask python -c "import requests;print(requests.get('https://SITE/').status_code)"`. Behind a proxy, set `HTTPS_PROXY` for the `vco-ask` service. The previous index is kept |
 | Ask: web-site source indexed 0 pages or misses posts | Check the log (`docker compose logs vco-ask`): `out_of_range` = outside the date range, `too_short` = pages with under 200 characters of article text (list pages), `blocked` = robots.txt. Widen the date range, set **Pages with no date** to `keep`, adjust the URL globs, or raise **Max pages per sync** |
 | Ask: "The last sync was interrupted (app restarted)" | The container stopped during a sync. Press **Sync now** |
+| Ask: spreadsheet source is red with "folder /exports not found" | The `./exports:/exports:ro` line is missing under `vco-ask` in `docker-compose.yml` (older copy). Add it, then `docker compose up -d vco-ask` |
+| Ask: spreadsheet source indexes 0 files | No file matches **File names** in the folder. The default is `dbh-insights-*.xlsx`; for RVTools set it to `*.xlsx` or `RVTools*.xlsx`. Check the folder with `docker compose exec vco-ask ls /exports` |
+| Ask: upload refused | Only `.xlsx` and `.csv` (an `.xlsx` must be a real Excel file, not a renamed one), up to `ASK_UPLOAD_MAX_MB` (default 50), and the API token must be entered when `ASK_API_TOKEN` is set |
+| Ask: "The sources do not contain the individual rows" after a spreadsheet import | The question went through search, which only finds a few matching rows plus the sheet overview. Ask it as a data question ("show all hosts from the vHost sheet", "how many ...") with the spreadsheet source selected; the answer then has a **Query and result** card. Sheets with more rows than **Max searchable rows per sheet** (default 5000, for example a large vInfo) are not searchable at all, only queryable |
+| Ask: a counting question got a search answer instead of numbers | The question didn't use a data word (*how many*, *total*, *top 10*, *per cluster* ...), no spreadsheet source was selected, **Data questions** is off, or the model's query failed the checks (the stats show `data_error`). Rephrase, or pick the spreadsheet source in the sources menu |
 | Changes to modules or templates don't show | Built-in modules are in the image: `docker compose up -d --build` |
 
 ## Testing
@@ -971,6 +1027,8 @@ cd ask && ASK_DATA_DIR=/tmp/ask-test ASK_OLLAMA_URL=http://127.0.0.1:11555 \
   uvicorn app.main:create_app --factory --port 8081                    # syncs the isvara repo on start
 curl -s "localhost:8081/api/search?q=VM%20CPU%20Co-stop"                 # retrieval only
 ```
+
+For the spreadsheet source, `python3 ask/scripts/make_sample_rvtools.py /tmp/sample.xlsx` writes a made-up RVTools-style workbook (40 VMs in `vInfo`, plus `vHost` and `vDatastore`) to upload. The stand-in Ollama answers data questions with canned SQL (a count of powered-on VMs, or a per-host count when the question says "per host").
 
 The smoke test also checks that the DBH sheet tables match `module.yaml`, that the two `fabric.py` copies are identical, that Impact gives the same answers as the original website for the sample lab, and that schedules save, verify, edit, run, pause and remove correctly.
 
@@ -994,6 +1052,7 @@ docs/screenshots/       screenshots used in this README
 ask/                    vCommunity Ask (second container)
   app/main.py           routes: chat, sources, settings, document view, REST API
   app/rag.py            hybrid retrieval, link expansion, prompt, streamed answers
+  app/data.py           data questions: table choice, model-written SQL, checks, read-only run
   app/indexer.py        source plug-ins, chunking, embedding, scheduled syncs
   app/db.py             SQLite: documents, chunks, FTS5, sqlite-vec, chats, settings
   app/ollama.py         Ollama client (version, models, embed, chat stream)
@@ -1002,8 +1061,10 @@ ask/                    vCommunity Ask (second container)
   app/static/           ask.css, ask.js, admin.js, vendored marked + DOMPurify
   sources/markdown-repo/  built-in source plug-in (Git repo or folder of markdown)
   sources/web-site/     built-in source plug-in (blog/site crawler: sitemap, feed, links, date range)
+  sources/spreadsheet/  built-in source plug-in (xlsx/csv from /exports or uploads, sheets into tables.db)
   config/               ask.example.yaml
   scripts/fake_ollama.py  stand-in for Ollama, for tests
+  scripts/make_sample_rvtools.py  made-up RVTools-style workbook, for tests
   Dockerfile            vcommunity-ask image (build from the repo root)
   requirements.in/.txt  direct dependencies / hashed lock file
 Dockerfile              core and core-pwsh image targets
@@ -1027,6 +1088,9 @@ requirements.in/.txt    direct dependencies / hashed lock file
 
 | Date | Change |
 | --- | --- |
+| 2026-11-04 | README: development warning added at the top |
+| 2026-11-04 | Ask data questions: listing questions ("show all hosts", "list the VMs", "which datastores") and questions naming a sheet (one typo allowed) now use a SQL query instead of search; the named sheet is always given to the model; the result card shows every returned row (up to 500) with **Download CSV**; the model is told the full table is shown so it summarizes long lists |
+| 2026-11-04 | Ask: new `spreadsheet` source plug-in reads `.xlsx`/`.csv` (RVTools, DBH Insights) from the dashboards' `./exports` folder (mounted read-only at `/exports`, re-indexed when a new export lands) or from uploads on the Knowledge sources page (`ASK_UPLOAD_MAX_MB`); one document per row plus cluster and sheet summaries; every sheet loaded into SQLite for **data questions**, where the model writes one checked, read-only SELECT and the chat shows the query and result. New **Data questions** setting, `ASK_SOURCE_UPLOAD_DIR` for plug-ins, openpyxl added to the lock file, `make_sample_rvtools.py` test workbook |
 | 2026-11-04 | README: **Getting started** replaces Quick start (prerequisites per OS, clone, config and `.env` keys, data folders and Linux ownership, Ollama per OS and non-Mac chat models, start, first steps for both containers, bash and PowerShell); Ask notes for the first isvara sync and Windows/Linux; Dark sites copy list and `--no-build` start; three Troubleshooting rows. `New-OfflineBundle.ps1` now also saves the Ask image (`-SkipAsk` to leave it out) |
 | 2026-11-04 | README: new **Data storage (SQLite)** section (module databases, `snapshot`/`append` tables, `_core.db`); Ask sections **The Ask database**, **From prompt to answer** (diagram), **How Ollama and the chat model are used** and **Tuning the answers** (temperature, chat history, thinking). `.gitignore` now also excludes `*.db`, `*.db-wal` and `*.db-shm` |
 | 2026-11-04 | **vCommunity Ask** second container (`vco-ask`, port 8081): chat UI in the same theme answered by local Ollama via RAG; SQLite with FTS5 + sqlite-vec; `markdown-repo` source plug-in with isvara metadata and link expansion; Knowledge sources, Settings and document pages; REST API; stand-in Ollama for tests. Dashboards sidebar link to Ask (`VCO_ASK_URL`); `.dockerignore` added |

@@ -61,6 +61,28 @@ class H(BaseHTTPRequestHandler):
             inputs = body.get("input")
             inputs = [inputs] if isinstance(inputs, str) else inputs
             return self._json({"model": body.get("model"), "embeddings": [embed(t) for t in inputs]})
+        if self.path == "/api/chat" and body["messages"][0]["content"].startswith("You write ONE SQLite SELECT"):
+            # Data questions: a canned query, chosen by a word in the question.
+            q = body["messages"][1]["content"].rsplit("Question:", 1)[-1].lower()
+            failed_once = len(body["messages"]) > 2
+            if "broken" in q and not failed_once:
+                sql = "SELECT nope FROM vinfo"
+            elif "drop" in q:
+                sql = "DROP TABLE vinfo"
+            elif "per host" in q:
+                sql = ("SELECT host, count(*) AS vms, sum(cpus) AS vcpus, round(sum(memory) / 1024.0, 1) AS memory_gib "
+                       "FROM vinfo WHERE template = 'False' GROUP BY host ORDER BY vms DESC")
+            elif "all hosts" in q:
+                sql = "SELECT host, cluster, cpu_model, num_cpu FROM vhost ORDER BY host"
+            else:
+                sql = "SELECT count(*) AS powered_on_vms FROM vinfo WHERE powerstate = 'poweredOn' AND template = 'False'"
+            msg = {"model": body.get("model"), "message": {"role": "assistant", "content": f"```sql\n{sql}\n```"}, "done": True}
+            body_out = (json.dumps(msg) + "\n").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            self.wfile.write(body_out)
+            return
         if self.path == "/api/chat":
             user = body["messages"][-1]["content"]
             ids = re.findall(r"^\[(\d+)\] id: (\S+)", user, re.M)

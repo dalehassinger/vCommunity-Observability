@@ -52,6 +52,9 @@
       <div class="field"><label for="s-expand_links">Follow links{% if 'expand_links' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><label class="switch"><input type="checkbox" id="s-expand_links" data-key="expand_links" {{ 'checked' if settings.expand_links else '' }}><span></span>On</label>
           <div class="hint">Add files the matches link to (same_name, internal_derive, same_meaning, related).</div></div></div>
+      <div class="field"><label for="s-data_questions">Data questions{% if 'data_questions' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><label class="switch"><input type="checkbox" id="s-data_questions" data-key="data_questions" {{ 'checked' if settings.data_questions else '' }}><span></span>On</label>
+          <div class="hint">For spreadsheet sources: counting, totals and top-N questions are answered by a read-only SQL query the model writes over the sheets, shown with the answer.</div></div></div>
       <div class="field"><label for="s-observability_url">Observability URL{% if 'observability_url' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><input type="text" id="s-observability_url" data-key="observability_url" value="{{ settings.observability_url }}" placeholder="http://localhost:8080">
           <div class="hint">Adds a sidebar link back to the vCommunity-Observability dashboards.</div></div></div>

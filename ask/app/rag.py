@@ -17,6 +17,7 @@ import time
 from typing import Any, Iterator
 from urllib.parse import quote
 
+from . import data
 from .db import DB
 from .indexer import embed_prefixes
 from .ollama import Ollama, OllamaError
@@ -151,8 +152,29 @@ def build_messages(cfg: dict[str, Any], items: list[dict[str, Any]], question: s
     return msgs
 
 
+def build_data_messages(cfg: dict[str, Any], res: dict[str, Any], question: str,
+                        history: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Messages for a data question: the query result is source [1]."""
+    msgs = [{"role": "system", "content": cfg["system_prompt"]}]
+    turns = max(0, int(cfg["history_turns"]))
+    if turns:
+        for m in history[-turns * 2:]:
+            if m["role"] in ("user", "assistant") and m["content"]:
+                msgs.append({"role": m["role"], "content": m["content"]})
+    block = (f"[1] id: data query | spreadsheet source \"{res['source_title']}\" (tables: {', '.join(res['tables'])})\n"
+             f"This SQL query was run on the complete data, so its result is exact:\n```sql\n{res['sql']}\n```\n"
+             f"Result:\n{data.result_markdown(res)}\n\n"
+             "Answer from source [1] and cite it. Give the numbers exactly as in the result. If the result "
+             "does not answer the question (wrong columns, no rows), say so plainly. The complete result table "
+             f"({len(res['rows'])}{'+' if res['truncated'] else ''} rows) is shown to the reader right under your answer, so do not "
+             "copy long tables: summarize them (how many rows, notable values) and never say rows are missing "
+             "because only some are listed here.")
+    msgs.append({"role": "user", "content": f"Sources:\n\n{block}\n\n=====\n\nQuestion: {question}"})
+    return msgs
+
+
 def sse(event: str, data: Any) -> str:
-    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
 def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
@@ -166,11 +188,24 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
     try:
         if db.stats()["chunks"] == 0:
             raise OllamaError("Nothing is indexed yet. Open Knowledge sources and press Sync now.")
-        items = retrieve(db, cfg, question, sources)
-        cards = source_cards(items)
-        yield sse("meta", {"chat_id": chat_id, "sources": cards, "model": model,
-                           "retrieval_ms": int((time.time() - t0) * 1000)})
-        msgs = build_messages(cfg, items, question, history)
+        res = None
+        srcs = data.tables_for(db, sources) if cfg.get("data_questions", True) else []
+        if srcs and data.is_data_question(question, srcs):
+            res = data.query(cfg, data.pick_source(srcs, question), question)
+            if res.get("error"):
+                stats["data_error"] = res["error"]
+                res = None
+        if res:
+            cards = [data.card(res)]
+            yield sse("meta", {"chat_id": chat_id, "sources": cards, "model": model,
+                               "retrieval_ms": int((time.time() - t0) * 1000)})
+            msgs = build_data_messages(cfg, res, question, history)
+        else:
+            items = retrieve(db, cfg, question, sources)
+            cards = source_cards(items)
+            yield sse("meta", {"chat_id": chat_id, "sources": cards, "model": model,
+                               "retrieval_ms": int((time.time() - t0) * 1000)})
+            msgs = build_messages(cfg, items, question, history)
         options = {"temperature": cfg["temperature"], "num_ctx": cfg["num_ctx"]}
         for obj in Ollama(cfg["ollama_url"]).chat_stream(model, msgs, options=options, think=cfg["think"],
                                                           keep_alive=cfg["keep_alive"]):
@@ -183,7 +218,7 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
                 yield sse("token", msg["content"])
             if obj.get("done"):
                 ev, ed = obj.get("eval_count") or 0, obj.get("eval_duration") or 0
-                stats = {"tokens": ev, "tok_per_s": round(ev / (ed / 1e9), 1) if ed else None,
+                stats = {**stats, "tokens": ev, "tok_per_s": round(ev / (ed / 1e9), 1) if ed else None,
                          "prompt_tokens": obj.get("prompt_eval_count"),
                          "seconds": round(time.time() - t0, 1)}
         yield sse("done", {"stats": stats, "model": model})

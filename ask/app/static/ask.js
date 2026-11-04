@@ -46,7 +46,58 @@
     return host === 'github.com' ? 'View on GitHub ↗' : host ? 'View on ' + host + ' ↗' : 'View source ↗';
   }
 
+  // A data question's source: the SQL the model wrote and the rows it returned.
+  function dataCard(s, prefix) {
+    var card = el('div', 'src-card data');
+    card.id = prefix + '-' + s.n;
+    var head = el('div', 'src-head');
+    head.appendChild(el('span', 'src-n', String(s.n)));
+    head.appendChild(el('span', 'src-title', s.title));
+    card.appendChild(head);
+    var meta = el('div', 'src-meta');
+    meta.appendChild(el('code', null, s.doc_id));
+    meta.appendChild(el('span', 'badge', s.row_count + (s.truncated ? '+' : '') + ' row' + (s.row_count === 1 ? '' : 's')));
+    card.appendChild(meta);
+    var pre = el('pre', 'sql'); pre.appendChild(el('code', null, s.sql)); card.appendChild(pre);
+    if (s.columns && s.columns.length && s.rows && s.rows.length) {
+      var wrap = el('div', 'data-table-wrap');
+      var t = el('table', 'datagrid compact');
+      var first = s.rows[0] || [];
+      var tr = el('tr'); s.columns.forEach(function (c, i) { tr.appendChild(el('th', typeof first[i] === 'number' ? 'num' : null, c)); });
+      var thead = el('thead'); thead.appendChild(tr); t.appendChild(thead);
+      var tb = el('tbody');
+      s.rows.forEach(function (r) {
+        var row = el('tr');
+        r.forEach(function (v) {
+          if (typeof v === 'number' && !Number.isInteger(v)) v = Math.round(v * 100) / 100;
+          row.appendChild(el('td', typeof v === 'number' ? 'num' : null, v == null ? '' : String(v)));
+        });
+        tb.appendChild(row);
+      });
+      t.appendChild(tb); wrap.appendChild(t); card.appendChild(wrap);
+      if (s.truncated) card.appendChild(el('div', 'subtle', 'The first ' + s.rows.length + ' rows are shown (the query limit).'));
+    }
+    var copy = el('button', 'link-btn', 'Copy SQL'); copy.type = 'button';
+    copy.onclick = function () { try { navigator.clipboard.writeText(s.sql); copy.textContent = 'Copied'; } catch (e) {} };
+    var links = el('div', 'src-links'); links.appendChild(copy);
+    if (s.columns && s.columns.length && s.rows && s.rows.length) {
+      var dl = el('button', 'link-btn', 'Download CSV'); dl.type = 'button';
+      dl.onclick = function () {
+        var q = function (v) { v = v == null ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+        var csv = [s.columns.map(q).join(',')].concat(s.rows.map(function (r) { return r.map(q).join(','); })).join('\r\n');
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+        a.download = 'ask-query.csv'; document.body.appendChild(a); a.click();
+        setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+      };
+      links.appendChild(dl);
+    }
+    card.appendChild(links);
+    return card;
+  }
+
   function sourceCard(s, prefix) {
+      if (s.kind === 'data') return dataCard(s, prefix);
       var card = el('div', 'src-card ' + (s.kind === 'linked' ? 'linked' : 'hit'));
       card.id = prefix + '-' + s.n;
       var head = el('div', 'src-head');
@@ -119,7 +170,9 @@
       }
     }
     var det = el('details', 'sources');
-    det.appendChild(el('summary', null, 'Source details (' + hits.length + (linked.length ? ' + ' + linked.length + ' linked' : '') + ')'));
+    var isData = hits.length && hits[0].kind === 'data';
+    det.appendChild(el('summary', null, isData ? 'Query and result' : 'Source details (' + hits.length + (linked.length ? ' + ' + linked.length + ' linked' : '') + ')'));
+    if (isData) det.open = true;
     [[hits, ''], [linked, 'Linked files']].forEach(function (g) {
       if (!g[0].length) return;
       if (g[1]) det.appendChild(el('div', 'src-group', g[1]));
@@ -259,7 +312,8 @@
             }
             sourceCards(a.sources, payload.sources, a.prefix, a.strip);
             a.text.innerHTML = '<span class="typing"><i></i><i></i><i></i></span> <span class="subtle">' +
-              (payload.sources.length ? 'Found ' + payload.sources.length + ' sources, asking ' : 'No matching sources, asking ') +
+              (payload.sources.length && payload.sources[0].kind === 'data' ? 'Query returned ' + payload.sources[0].row_count + ' rows, asking ' :
+               payload.sources.length ? 'Found ' + payload.sources.length + ' sources, asking ' : 'No matching sources, asking ') +
               DOMPurify.sanitize(payload.model) + '…</span>';
           } else if (ev === 'thinking') {
             thinking += payload; a.thinking.hidden = false;

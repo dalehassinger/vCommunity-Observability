@@ -72,3 +72,20 @@ sources:
   #     delay_seconds: 1
   #   examples:
   #     - What has the blog written about VCF Operations dashboards?
+
+  # Example: the newest DBH Insights XLSX export from the dashboards (./exports, mounted at /exports).
+  # Rows become searchable documents and every sheet is loaded for data questions (counts, totals).
+  # For RVTools files set pattern to "*.xlsx", or use location: upload and upload them on the page.
+  # - name: inventory
+  #   plugin: spreadsheet
+  #   title: Inventory (DBH Insights export)
+  #   interval_hours: 1
+  #   options:
+  #     location: folder
+  #     path: /exports
+  #     pattern:
+  #       - "dbh-insights-*.xlsx"
+  #     pick: newest
+  #   examples:
+  #     - How many VMs are powered on per cluster?
+  #     - Which 10 VMs have the most provisioned storage?

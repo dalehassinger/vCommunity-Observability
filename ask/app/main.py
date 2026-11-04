@@ -34,6 +34,8 @@ from . import rag
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("ask")
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
+UPLOAD_TYPES = {".xlsx", ".csv"}
+UPLOAD_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._()+-]{0,150}$")
 
 
 def shared_dir() -> Path:
@@ -78,6 +80,15 @@ def create_app() -> FastAPI:
         return discover_plugins(cfg.sources_dirs)
 
     indexer = Indexer(db, cfg.data_dir, plugins, settings)
+    upload_max = int(float(os.environ.get("ASK_UPLOAD_MAX_MB") or 50) * 1024 * 1024)
+
+    def uploaded_files(name: str) -> list[dict[str, Any]]:
+        d = indexer.upload_dir(name)
+        if not d.is_dir():
+            return []
+        return [{"name": p.name, "size_mb": round(p.stat().st_size / 1048576, 1), "uploaded": ago(p.stat().st_mtime)}
+                for p in sorted(d.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+                if p.is_file() and p.suffix.lower() in UPLOAD_TYPES]
 
     # Seed sources from ask.yaml once; after that the Sources page owns them.
     for src in cfg.sources:
@@ -177,6 +188,10 @@ def create_app() -> FastAPI:
         for s in srcs:
             view = _source_view(s)
             s["status"], s["last_error"] = view["status"], view["last_error"]
+            if s["plugin"] == "spreadsheet":
+                s["uploads"] = uploaded_files(s["name"])
+                st = db.get_state(s["name"])["state"]
+                s["tables"] = [{"table": t["table"], "sheet": t["sheet"], "rows": t["rows"]} for t in st.get("tables") or []]
         pl = plugins()
         return page(request, "sources.html", "/sources", plugins=pl, stats=db.stats(), sources=srcs,
                     plugins_json={n: p.options for n, p in pl.items()})
@@ -349,6 +364,55 @@ def create_app() -> FastAPI:
     @app.post("/ui/sources/{name}/enabled", include_in_schema=False, dependencies=[Depends(require_admin)])
     def ui_source_enabled(name: str, body: dict = Body(...)):
         db.set_source_enabled(name, bool(body.get("enabled")))
+        return {"ok": True}
+
+    @app.put("/ui/sources/{name}/files/{filename}", include_in_schema=False, dependencies=[Depends(require_admin)])
+    async def ui_upload(name: str, filename: str, request: Request):
+        """Upload one .xlsx or .csv file to a spreadsheet source (the raw file is the
+        request body), then sync the source."""
+        src = db.get_source(name)
+        if not src or src["plugin"] != "spreadsheet":
+            raise HTTPException(404, "Uploads are for spreadsheet sources")
+        filename = os.path.basename(filename).strip()
+        if Path(filename).suffix.lower() not in UPLOAD_TYPES or not UPLOAD_NAME_RE.match(filename):
+            raise HTTPException(400, "Upload an .xlsx or .csv file (letters, digits, spaces and . _ - ( ) in the name)")
+        if int(request.headers.get("content-length") or 0) > upload_max:
+            raise HTTPException(413, f"The file is larger than {upload_max // 1048576} MB (ASK_UPLOAD_MAX_MB)")
+        folder = indexer.upload_dir(name)
+        folder.mkdir(parents=True, exist_ok=True)
+        part = folder / f".{filename}.part"
+        size = 0
+        try:
+            with part.open("wb") as f:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > upload_max:
+                        raise HTTPException(413, f"The file is larger than {upload_max // 1048576} MB (ASK_UPLOAD_MAX_MB)")
+                    f.write(chunk)
+            if size == 0:
+                raise HTTPException(400, "The file is empty")
+            with part.open("rb") as f:
+                head = f.read(4)
+            if filename.lower().endswith(".xlsx") and head != b"PK\x03\x04":
+                raise HTTPException(400, "That is not an .xlsx workbook (an .xls or .xlsm file? Save it as .xlsx)")
+        except BaseException:
+            part.unlink(missing_ok=True)
+            raise
+        if (src["options"].get("uploads") or "replace") == "replace":
+            for old in folder.iterdir():
+                if old.is_file() and old.suffix.lower() in UPLOAD_TYPES:
+                    old.unlink()
+        os.replace(part, folder / filename)
+        indexer.start(name)
+        return {"ok": True, "name": filename, "size": size}
+
+    @app.post("/ui/sources/{name}/files/{filename}/delete", include_in_schema=False, dependencies=[Depends(require_admin)])
+    def ui_upload_delete(name: str, filename: str):
+        f = indexer.upload_dir(name) / os.path.basename(filename)
+        if not f.is_file():
+            raise HTTPException(404, "No such uploaded file")
+        f.unlink()
+        indexer.start(name)
         return {"ok": True}
 
     @app.post("/ui/sources/{name}/delete", include_in_schema=False, dependencies=[Depends(require_admin)])
