@@ -1,0 +1,10 @@
+# Direct dependencies of vCommunity Ask. Edit this file, then regenerate requirements.txt:
+#   uv pip compile --universal --generate-hashes --python-version 3.13 requirements.in -o requirements.txt
+fastapi
+uvicorn
+jinja2
+pyyaml
+apscheduler<4
+requests
+sqlite-vec      # vector search inside SQLite (loadable extension, Apache-2.0/MIT)
+trafilatura     # web-site source plug-in: pulls the article text and publish date out of HTML pages (Apache-2.0)

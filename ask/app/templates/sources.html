@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+{% block title %}Knowledge sources · vCommunity Ask{% endblock %}
+{% block body %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb">Knowledge</div>
+    <h1>Knowledge sources</h1>
+    <p class="subtle">Where answers come from. Each source is a plug-in that fetches documents; the app splits them by heading,
+      embeds them with <code>{{ settings.embed_model }}</code> and stores them in SQLite. {{ stats.documents }} documents, {{ stats.chunks }} chunks in total.</p>
+  </div>
+  <div class="page-actions">
+    <button class="btn btn-primary" type="button" id="add-source">Add source</button>
+  </div>
+</div>
+
+{% include "_token.html" %}
+
+<div class="source-grid" id="source-grid">
+{% for s in sources %}
+  {% set cls = 'running' if s.status == 'running' else ('crit' if s.status == 'error' else ('ok' if s.status == 'ok' else 'warn')) %}
+  <div class="card source-card {{ cls }}" data-name="{{ s.name }}" data-status="{{ s.status }}">
+    <div class="card-header">
+      <span>{{ s.title }} <span class="badge">{{ s.name }}</span>{% if s.origin == 'config' %}<span class="badge badge-info" title="Defined in ask.yaml; edits here win">ask.yaml</span>{% endif %}</span>
+      <button class="switch {{ 'on' if s.enabled else '' }}" type="button" data-toggle="{{ s.name }}" aria-pressed="{{ 'true' if s.enabled else 'false' }}">
+        <span></span>{{ 'On' if s.enabled else 'Off' }}
+      </button>
+    </div>
+    <div class="card-block">
+      <div class="source-kpis">
+        <div class="ring" title="Sync status">
+          <svg viewBox="0 0 64 64" width="64" height="64"><circle class="track" cx="32" cy="32" r="27"/>
+            <circle class="fill" cx="32" cy="32" r="27" stroke-dasharray="{{ '40 130' if s.status == 'running' else '170 0' }}"/></svg>
+          <b class="ring-label">{{ {'ok': 'OK', 'running': '…', 'error': 'Error', 'never': 'New'}.get(s.status, s.status) }}</b>
+        </div>
+        <div class="kpi-mini"><span class="v" data-f="docs">{{ s.docs }}</span><span class="l">Documents</span></div>
+        <div class="kpi-mini"><span class="v" data-f="chunks">{{ s.chunks }}</span><span class="l">Chunks</span></div>
+      </div>
+      <dl class="kv">
+        <dt>Plug-in</dt><dd>{{ s.plugin }}</dd>
+        {% if s.options.repo_url %}<dt>Repository</dt><dd><a href="{{ s.options.repo_url }}" target="_blank" rel="noopener">{{ s.options.repo_url | replace('https://', '') }}</a> · {{ s.options.branch or 'main' }}</dd>
+        {% elif s.options.path %}<dt>Folder</dt><dd><code>{{ s.options.path }}</code></dd>
+        {% elif s.options.site_url %}<dt>Site</dt><dd><a href="{{ s.options.site_url }}" target="_blank" rel="noopener">{{ s.options.site_url | replace('https://', '') }}</a> · {{ s.options.discovery or 'auto' }}</dd>{% endif %}
+        {% if s.options.last_days and s.options.last_days|float > 0 %}<dt>Date range</dt><dd>last {{ s.options.last_days|int }} days</dd>
+        {% elif s.options.date_from or s.options.date_to %}<dt>Date range</dt><dd>{{ s.options.date_from or 'any' }} → {{ s.options.date_to or 'today' }}</dd>{% endif %}
+        {% if s.options.include %}<dt>Include</dt><dd><code>{{ s.options.include | join(', ') }}</code></dd>{% endif %}
+        <dt>Version</dt><dd><code>{{ (s.version[:12] if s.version|length == 40 else s.version) or '–' }}</code></dd>
+        <dt>Last synced</dt><dd data-f="last_ok">{{ s.last_ok | ago }}</dd>
+        <dt>Re-sync every</dt><dd>{{ s.interval_hours | round(2) | string | replace('.0', '') }} h</dd>
+        <dt>Status</dt><dd data-f="progress">{{ s.progress or s.status }}</dd>
+      </dl>
+      {% if s.last_error %}<div class="alert alert-danger err-box" data-f="last_error">{{ s.last_error }}</div>{% endif %}
+      <div class="card-actions">
+        <button class="btn btn-primary" type="button" data-sync="{{ s.name }}">Sync now</button>
+        <button class="btn btn-outline" type="button" data-full="{{ s.name }}" title="Re-embed every document">Re-index all</button>
+        <button class="btn btn-outline" type="button" data-edit="{{ s.name }}">Edit</button>
+        <a class="btn btn-outline" href="/sources/{{ s.name }}">Documents</a>
+        <button class="btn btn-outline" type="button" data-delete="{{ s.name }}">Delete</button>
+        <span class="form-msg" data-msg="{{ s.name }}"></span>
+      </div>
+    </div>
+  </div>
+{% else %}
+  <div class="card span-all"><div class="card-block">No sources yet. Press <b>Add source</b> to point the app at a Git repository or a folder of markdown files.</div></div>
+{% endfor %}
+</div>
+
+<h3>Source plug-ins</h3>
+<div class="card"><div class="card-block">
+  <table class="datagrid">
+    <thead><tr><th>Plug-in</th><th>Runtime</th><th>Version</th><th>Description</th><th>Folder</th></tr></thead>
+    <tbody>
+    {% for p in plugins.values() %}
+      <tr><td><b>{{ p.name }}</b></td><td>{{ p.runtime }}</td><td>{{ p.version }}</td><td class="msg">{{ p.description }}</td><td><code>{{ p.folder }}</code></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div></div>
+
+<dialog class="editor-dialog" id="editor">
+  <form id="editor-form" method="dialog">
+    <h3 id="editor-title">Add source</h3>
+    <div class="field"><label for="f-name">Name</label>
+      <div><input type="text" id="f-name" required pattern="[a-z0-9][a-z0-9_-]{0,62}"><div class="hint">Short id: lower-case letters, digits, - or _. Cannot be changed later.</div></div></div>
+    <div class="field"><label for="f-title">Title</label><div><input type="text" id="f-title" required></div></div>
+    <div class="field"><label for="f-plugin">Plug-in</label>
+      <div><select id="f-plugin">{% for p in plugins.values() %}<option value="{{ p.name }}">{{ p.title }} ({{ p.name }})</option>{% endfor %}</select></div></div>
+    <div id="f-options"></div>
+    <div class="field"><label for="f-interval">Re-sync every (hours)</label><div><input type="number" id="f-interval" min="0.25" step="0.25" value="24"></div></div>
+    <div class="field"><label for="f-examples">Example questions</label>
+      <div><textarea id="f-examples" rows="4"></textarea><div class="hint">One per line, shown on the New chat page (up to 6).</div></div></div>
+    <div class="form-actions card-actions">
+      <button class="btn btn-primary" type="button" id="editor-save">Save and sync</button>
+      <button class="btn btn-outline" type="button" id="editor-cancel">Cancel</button>
+      <span class="form-msg" id="editor-msg"></span>
+    </div>
+  </form>
+</dialog>
+{% endblock %}
+{% block scripts %}
+<script src="/static/admin.js"></script>
+<script>
+(function () {
+  var SOURCES = {{ sources | tojson }};
+  var PLUGINS = {{ plugins_json | tojson }};
+  var byName = {}; SOURCES.forEach(function (s) { byName[s.name] = s; });
+  function msg(name, text, bad) {
+    var m = document.querySelector('[data-msg="' + name + '"]');
+    if (m) { m.textContent = text; m.className = 'form-msg ' + (bad ? 'bad' : 'ok'); }
+  }
+  async function act(name, url, body, ok) {
+    try { await AskAdmin.post(url, body); msg(name, ok); setTimeout(function () { location.reload(); }, 700); }
+    catch (e) { msg(name, e.message, true); }
+  }
+  document.querySelectorAll('[data-sync]').forEach(function (b) {
+    b.onclick = function () { act(b.dataset.sync, '/ui/sources/' + b.dataset.sync + '/sync', {}, 'Sync started'); };
+  });
+  document.querySelectorAll('[data-full]').forEach(function (b) {
+    b.onclick = function () {
+      if (confirm('Re-embed every document of this source? This takes a few minutes.'))
+        act(b.dataset.full, '/ui/sources/' + b.dataset.full + '/sync', { full: true }, 'Full re-index started');
+    };
+  });
+  document.querySelectorAll('[data-toggle]').forEach(function (b) {
+    b.onclick = function () {
+      act(b.dataset.toggle, '/ui/sources/' + b.dataset.toggle + '/enabled', { enabled: !b.classList.contains('on') }, 'Saved');
+    };
+  });
+  document.querySelectorAll('[data-delete]').forEach(function (b) {
+    b.onclick = function () {
+      if (confirm('Delete source "' + b.dataset.delete + '" and its index? The files themselves are not touched.'))
+        act(b.dataset.delete, '/ui/sources/' + b.dataset.delete + '/delete', {}, 'Deleted');
+    };
+  });
+
+  // Editor dialog: fields come from the plug-in's source.yaml options.
+  var dlg = document.getElementById('editor');
+  var fName = document.getElementById('f-name'), fTitle = document.getElementById('f-title'),
+      fPlugin = document.getElementById('f-plugin'), fOpts = document.getElementById('f-options'),
+      fInt = document.getElementById('f-interval'), fEx = document.getElementById('f-examples'),
+      eMsg = document.getElementById('editor-msg');
+  function renderOptions(plugin, values) {
+    fOpts.innerHTML = '';
+    (PLUGINS[plugin] || []).forEach(function (o) {
+      var row = document.createElement('div'); row.className = 'field';
+      var lab = document.createElement('label'); lab.textContent = o.label || o.key; lab.htmlFor = 'o-' + o.key;
+      var box = document.createElement('div'), input;
+      var v = values && values[o.key] != null ? values[o.key] : (o.default != null ? o.default : '');
+      if (o.type === 'select') {
+        input = document.createElement('select');
+        (o.choices || []).forEach(function (c) { var op = document.createElement('option'); op.value = op.textContent = c; input.appendChild(op); });
+        input.value = v;
+      } else if (o.type === 'list') {
+        input = document.createElement('textarea'); input.rows = 3; input.value = Array.isArray(v) ? v.join('\n') : v;
+      } else if (o.type === 'date' || o.type === 'number') {
+        input = document.createElement('input'); input.type = o.type; input.value = v;
+        if (o.min != null) input.min = o.min;
+        if (o.step != null) input.step = o.step;
+      } else {
+        input = document.createElement('input'); input.type = 'text'; input.value = v;
+      }
+      input.id = 'o-' + o.key; input.dataset.key = o.key;
+      box.appendChild(input);
+      if (o.hint) { var h = document.createElement('div'); h.className = 'hint'; h.textContent = o.hint; box.appendChild(h); }
+      row.appendChild(lab); row.appendChild(box); fOpts.appendChild(row);
+    });
+  }
+  function openEditor(src) {
+    eMsg.textContent = '';
+    document.getElementById('editor-title').textContent = src ? 'Edit source' : 'Add source';
+    fName.value = src ? src.name : ''; fName.disabled = !!src;
+    fTitle.value = src ? src.title : '';
+    fPlugin.value = src ? src.plugin : fPlugin.options[0].value;
+    fInt.value = src ? src.interval_hours : 24;
+    fEx.value = src ? (src.examples || []).join('\n') : '';
+    renderOptions(fPlugin.value, src ? src.options : null);
+    dlg.showModal();
+  }
+  fPlugin.onchange = function () { renderOptions(fPlugin.value, null); };
+  document.getElementById('add-source').onclick = function () { openEditor(null); };
+  document.querySelectorAll('[data-edit]').forEach(function (b) { b.onclick = function () { openEditor(byName[b.dataset.edit]); }; });
+  document.getElementById('editor-cancel').onclick = function () { dlg.close(); };
+  document.getElementById('editor-save').onclick = async function () {
+    var opts = {};
+    fOpts.querySelectorAll('[data-key]').forEach(function (i) { opts[i.dataset.key] = i.value; });
+    var existing = byName[fName.value];
+    try {
+      await AskAdmin.post('/ui/sources/save', {
+        name: fName.value, title: fTitle.value, plugin: fPlugin.value, options: opts,
+        interval_hours: fInt.value, examples: fEx.value, enabled: existing ? existing.enabled : true, sync_now: true
+      });
+      eMsg.textContent = 'Saved, sync started'; eMsg.className = 'form-msg ok';
+      setTimeout(function () { location.reload(); }, 600);
+    } catch (e) { eMsg.textContent = e.message; eMsg.className = 'form-msg bad'; }
+  };
+
+  // While a sync runs, refresh its progress every 2 seconds and reload when it ends.
+  function poll() {
+    var running = document.querySelectorAll('.source-card[data-status="running"]').length;
+    if (!running) return;
+    fetch('/ui/sources').then(function (r) { return r.json(); }).then(function (d) {
+      var reload = false;
+      d.sources.forEach(function (s) {
+        var card = document.querySelector('.source-card[data-name="' + s.name + '"]');
+        if (!card) return;
+        if (card.dataset.status === 'running' && s.status !== 'running') reload = true;
+        ['docs', 'chunks', 'progress'].forEach(function (f) {
+          var e = card.querySelector('[data-f="' + f + '"]'); if (e) e.textContent = s[f];
+        });
+      });
+      if (reload) location.reload(); else setTimeout(poll, 2000);
+    }).catch(function () { setTimeout(poll, 5000); });
+  }
+  setTimeout(poll, 1500);
+})();
+</script>
+{% endblock %}

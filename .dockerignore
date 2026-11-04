@@ -1,0 +1,13 @@
+# Keep the build context small and secrets out of images (both Dockerfiles build from here).
+.git
+.env
+data/
+exports/
+extra-modules/
+ask-data/
+ask-knowledge/
+ask-sources/
+docs/
+**/__pycache__/
+**/*.pyc
+.venv/

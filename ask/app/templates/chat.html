@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}{{ chat.title if chat else "New chat" }} · vCommunity Ask{% endblock %}
+{% block body_class %}chat-page{% endblock %}
+{% block content_class %}chat-content{% endblock %}
+{% block body %}
+<div class="chat-wrap">
+  <div class="chat-head">
+    <div class="chat-title">
+      <div class="breadcrumb">Chat</div>
+      <h1 id="chat-title">{{ chat.title if chat else "New chat" }}</h1>
+    </div>
+    <div class="page-actions">
+      <button class="btn btn-outline" id="delete-chat" type="button" {% if not chat %}hidden{% endif %}>Delete chat</button>
+    </div>
+  </div>
+
+  <div id="thread" class="thread" aria-live="polite">
+    {% if not chat %}
+    <div class="empty-state" id="empty-state">
+      <div class="empty-icon">
+        <svg viewBox="0 0 32 32" width="40" height="40" aria-hidden="true"><path d="M8 10.5h16a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-8l-5 3.5v-3.5H8A1.5 1.5 0 0 1 6.5 20v-8A1.5 1.5 0 0 1 8 10.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M11 16h.01M16 16h.01M21 16h.01" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>
+      </div>
+      <h2>Ask your knowledge</h2>
+      <p class="subtle">Answers come only from your indexed sources, with the files they used.
+        {% if stats.chunks %}{{ stats.documents }} documents, {{ stats.chunks }} chunks indexed.
+        {% else %}Nothing is indexed yet: open <a href="/sources">Knowledge sources</a> and press Sync now.{% endif %}</p>
+      {% if examples %}
+      <div class="examples">
+        {% for e in examples %}<button type="button" class="example" data-q="{{ e }}">{{ e }}</button>{% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+  <form class="composer" id="composer" autocomplete="off">
+    <div class="composer-box">
+      <textarea id="question" rows="1" placeholder="Ask a question about your knowledge sources…" aria-label="Question" required></textarea>
+      <div class="composer-bar">
+        <label class="scope">
+          <span>Sources</span>
+          <select id="scope" aria-label="Which sources to search">
+            <option value="all">All sources</option>
+            {% for s in sources if s.enabled %}
+            <option value="{{ s.name }}" {{ 'selected' if chat and chat.scope == s.name else '' }}>{{ s.title }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <span class="composer-hint">Enter to send · Shift+Enter for a new line</span>
+        <button class="btn btn-primary" id="send" type="submit">Send</button>
+        <button class="btn btn-outline" id="stop" type="button" hidden>Stop</button>
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/vendor/marked/marked.umd.js"></script>
+<script src="/static/vendor/dompurify/purify.min.js"></script>
+<script>
+  window.ASK = {
+    chatId: {{ (chat.id if chat else "") | tojson }},
+    messages: {{ messages | tojson }},
+    model: {{ settings.chat_model | tojson }}
+  };
+</script>
+<script src="/static/ask.js"></script>
+{% endblock %}

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}{{ src.title }} · vCommunity Ask{% endblock %}
+{% block body %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb"><a href="/sources">Knowledge sources</a> / {{ src.name }}</div>
+    <h1>{{ src.title }}</h1>
+    <p class="subtle">{{ docs | length }} documents indexed{% if src.version %} at <code>{{ src.version[:12] }}</code>{% endif %}.</p>
+  </div>
+  <div class="page-actions"><input type="search" id="filter" placeholder="Filter…" class="filter-input" aria-label="Filter documents"></div>
+</div>
+<div class="card"><div class="card-block">
+  <div class="table-wrap">
+  <table class="datagrid" id="docs">
+    <thead><tr><th>Id</th><th>Title</th><th>Status</th><th class="num">Chunks</th><th></th></tr></thead>
+    <tbody>
+    {% for d in docs %}
+      <tr><td><a href="/doc/{{ d.id }}"><code>{{ d.doc_id }}</code></a></td><td>{{ d.title }}</td>
+        <td>{% if d.status %}<span class="badge {{ 'badge-success' if d.status == 'reviewed' else 'badge-warn' }}">{{ d.status }}</span>{% endif %}</td>
+        <td class="num">{{ d.chunks }}</td>
+        <td>{% if d.url %}<a href="{{ d.url }}" target="_blank" rel="noopener">{{ "GitHub" if "://github.com/" in d.url else "Original" }} ↗</a>{% endif %}</td></tr>
+    {% else %}
+      <tr><td colspan="5">Nothing indexed yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div></div>
+<style>.filter-input { font: inherit; font-size: 13px; padding: 6px 9px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); color: var(--text); width: 240px; }</style>
+{% endblock %}
+{% block scripts %}
+<script>
+document.getElementById('filter').addEventListener('input', function (e) {
+  var q = e.target.value.toLowerCase();
+  document.querySelectorAll('#docs tbody tr').forEach(function (tr) { tr.hidden = q && tr.textContent.toLowerCase().indexOf(q) < 0; });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,7 @@
+{% if auth %}
+<div class="token-bar">
+  <label for="api-token">API token</label>
+  <input id="api-token" type="password" placeholder="ASK_API_TOKEN from .env" autocomplete="off">
+  <span class="hint">Needed to change anything on this page. Kept in this browser only.</span>
+</div>
+{% endif %}

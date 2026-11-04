@@ -1,0 +1,96 @@
+"""A stand-in for Ollama, for tests without a GPU or a model download.
+
+    python ask/scripts/fake_ollama.py            # listens on 127.0.0.1:11555
+
+Embeddings are hashed bag-of-words vectors (so keyword overlap still finds the
+right chunks), and the chat model replies with a short answer that quotes the
+first sources it was given. Only the endpoints vCommunity Ask uses exist."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import re
+import sys
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+DIM = 256
+MODELS = [
+    {"name": "nomic-embed-text:latest", "size": 274302450, "capabilities": ["embedding"],
+     "details": {"parameter_size": "137M"}},
+    {"name": "qwen3.8:27b-mlx", "size": 18174721847, "capabilities": ["completion", "tools", "thinking"],
+     "details": {"parameter_size": ""}},
+    {"name": "gemma3:27b", "size": 17396936941, "capabilities": ["completion", "vision"],
+     "details": {"parameter_size": "27.4B"}},
+]
+
+
+def embed(text: str) -> list[float]:
+    v = [0.0] * DIM
+    for w in re.findall(r"[a-z0-9]+", text.lower()):
+        h = int(hashlib.md5(w.encode()).hexdigest(), 16)
+        v[h % DIM] += 1.0 if (h >> 8) % 2 else -1.0
+    n = math.sqrt(sum(x * x for x in v)) or 1.0
+    return [x / n for x in v]
+
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a):  # quiet
+        pass
+
+    def _json(self, obj, code=200):
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path == "/api/version":
+            return self._json({"version": "0.0.0-fake"})
+        if self.path == "/api/tags":
+            return self._json({"models": MODELS})
+        self._json({"error": "not found"}, 404)
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+        if self.path == "/api/embed":
+            inputs = body.get("input")
+            inputs = [inputs] if isinstance(inputs, str) else inputs
+            return self._json({"model": body.get("model"), "embeddings": [embed(t) for t in inputs]})
+        if self.path == "/api/chat":
+            user = body["messages"][-1]["content"]
+            ids = re.findall(r"^\[(\d+)\] id: (\S+)", user, re.M)
+            q = user.rsplit("Question:", 1)[-1].strip()
+            if ids:
+                lines = [f"**Stand-in answer** for: _{q}_", "", "The knowledge base covers this:"]
+                for n, i in ids[:3]:
+                    lines.append(f"- `{i}` explains part of it [{n}].")
+                lines += ["", "| Source | Id |", "|---|---|"] + [f"| [{n}] | `{i}` |" for n, i in ids[:3]]
+                text = "\n".join(lines)
+            else:
+                text = "The sources do not cover this question."
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            if body.get("think"):
+                for w in ["Looking ", "at ", "the ", "sources…"]:
+                    self.wfile.write((json.dumps({"message": {"role": "assistant", "content": "", "thinking": w}}) + "\n").encode())
+            for tok in re.findall(r"\S+\s*|\n", text):
+                self.wfile.write((json.dumps({"message": {"role": "assistant", "content": tok}, "done": False}) + "\n").encode())
+                self.wfile.flush()
+                time.sleep(0.01)
+            self.wfile.write((json.dumps({"message": {"role": "assistant", "content": ""}, "done": True,
+                                          "eval_count": 60, "eval_duration": 1_500_000_000,
+                                          "prompt_eval_count": len(user) // 4}) + "\n").encode())
+            return
+        self._json({"error": "not found"}, 404)
+
+
+if __name__ == "__main__":
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 11555
+    print(f"fake Ollama on http://127.0.0.1:{port}", flush=True)
+    ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()

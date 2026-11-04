@@ -1,0 +1,74 @@
+# vCommunity Ask configuration.
+# The image ships this file as /app/config/ask.yaml. To change it, copy it to
+# ask/config/ask.yaml and uncomment the matching volume line in docker-compose.yml.
+# Secrets never go in this file: a key ending in "_env" holds the NAME of an
+# environment variable (set in .env), not the secret itself.
+#
+# Most of this can also be changed in the web UI (Settings and Knowledge sources
+# pages). Values saved there win over this file.
+
+data_dir: data            # ask.db and the cloned repositories (a Docker volume)
+
+# Folders scanned for source plug-ins. Later folders win, so a plug-in dropped
+# into /sources overrides the built-in copy (how a patched plug-in is shipped).
+sources_dirs:
+  - sources
+  - /sources
+
+settings:
+  # Environment variables win over these: ASK_OLLAMA_URL, ASK_CHAT_MODEL, ASK_EMBED_MODEL.
+  ollama_url: http://host.docker.internal:11434
+  chat_model: qwen3.8:27b-mlx
+  embed_model: nomic-embed-text
+  think: false
+  temperature: 0.2
+  num_ctx: 16384
+  top_k: 8
+  context_chars: 24000
+  expand_links: true
+  history_turns: 3
+  keep_alive: 10m
+  observability_url: http://localhost:8080   # sidebar link back to the dashboards
+
+api:
+  tokens:
+    - name: ui                # needed to change Settings and Sources, and for /api/*
+      token_env: ASK_API_TOKEN
+
+# Seeded into the database on first start. After that, edit them on the
+# Knowledge sources page.
+sources:
+  - name: isvara
+    plugin: markdown-repo
+    title: Isvara knowledge (vSphere metrics)
+    interval_hours: 24
+    options:
+      repo_url: https://github.com/e1-rahabok/isvara-2
+      branch: main
+      include:
+        - "knowledge/**/*.md"
+      exclude:
+        - "knowledge/_templates/**"
+        - "knowledge/raw-input/**"
+      metadata: isvara
+    examples:
+      - What does VM CPU Co-stop mean, and when is it a problem?
+      - What is the difference between VM CPU Ready and Co-stop?
+      - How do I check whether a VM is short of CPU? Walk me through the steps.
+      - Why is there no universal threshold for disk latency?
+
+  # Example: a blog crawled from its sitemap/RSS feed, only posts from the last two years.
+  # Uncomment to seed it on first start (or add it on the Knowledge sources page).
+  # - name: vcrocs
+  #   plugin: web-site
+  #   title: vCROCS blog
+  #   interval_hours: 24
+  #   options:
+  #     site_url: https://www.vcrocs.info/
+  #     discovery: auto
+  #     last_days: 730
+  #     undated: skip
+  #     max_pages: 500
+  #     delay_seconds: 1
+  #   examples:
+  #     - What has the blog written about VCF Operations dashboards?

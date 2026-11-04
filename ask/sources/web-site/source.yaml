@@ -1,0 +1,79 @@
+# Knowledge source plug-in: posts and pages from a web site (a blog, docs site, ...).
+#
+# Same contract as markdown-repo (see sources/markdown-repo/source.yaml): the core
+# passes options in ASK_SOURCE_OPTIONS, a work folder in ASK_SOURCE_WORKDIR and
+# the last state in ASK_SOURCE_STATE; the script prints one JSON object.
+#
+# How pages are found (discovery = auto): the site's sitemap.xml (also any
+# Sitemap: lines in robots.txt) plus its RSS/Atom feed. If neither exists, it
+# crawls links from the start URL, staying on the same site. robots.txt is
+# always respected, requests are spaced by `delay_seconds`, and `max_pages` caps
+# how many pages are fetched. Each page's article text is pulled out with
+# trafilatura (menus, footers and sidebars dropped) and stored as markdown.
+#
+# Date range: the publish date comes from the feed, then the page itself
+# (article:published_time, JSON-LD datePublished, <time>, URL dates, ...).
+# Pages outside the range are dropped; pages with no date follow `undated`.
+name: web-site
+title: Web site (blog crawler)
+description: Crawls a web site or blog (sitemap, RSS feed or links) and indexes its posts, optionally only a date range.
+version: 0.1.0
+runtime: python
+entry: fetch_site.py
+timeout_seconds: 3600
+options:
+  - key: site_url
+    label: Site URL
+    hint: "Start page, e.g. https://www.vcrocs.info/ . Only pages on this host are fetched."
+  - key: discovery
+    label: Find pages from
+    type: select
+    choices: [auto, sitemap, feed, crawl]
+    default: auto
+    hint: "auto = sitemap.xml and RSS/Atom feed, falling back to following links. Feeds often list only the newest posts."
+  - key: feed_url
+    label: Feed URL
+    hint: "Optional. Defaults to trying /index.xml, /feed, /rss.xml, /atom.xml, /feed.xml."
+  - key: url_include
+    label: Include URL paths (globs)
+    type: list
+    default: []
+    hint: "One pattern per line, matched against the URL path, e.g. /blog/** or /20*/**. Empty = every page."
+  - key: url_exclude
+    label: Exclude URL paths (globs)
+    type: list
+    default: ["/tags/**", "/categories/**", "/page/**", "/author/**", "/search/**"]
+    hint: "List pages, tag pages and paging that only repeat post summaries."
+  - key: date_from
+    label: Published from
+    type: date
+    hint: "Optional. Keep posts published on or after this date."
+  - key: date_to
+    label: Published to
+    type: date
+    hint: "Optional. Keep posts published on or before this date."
+  - key: last_days
+    label: Or only the last N days
+    type: number
+    min: 0
+    hint: "Optional rolling window, e.g. 365. Used instead of Published from when set (0 or empty = off)."
+  - key: undated
+    label: Pages with no date
+    type: select
+    choices: [skip, keep]
+    default: skip
+    hint: "skip = only dated posts (when a date range is set). keep = also index pages with no publish date (About, docs pages)."
+  - key: max_pages
+    label: Max pages per sync
+    type: number
+    min: 1
+    default: 500
+  - key: delay_seconds
+    label: Delay between requests (s)
+    type: number
+    min: 0
+    step: 0.1
+    default: 1
+  - key: user_agent
+    label: User-Agent
+    default: "vCommunity-Ask/0.1 (local knowledge indexer)"

@@ -4,6 +4,7 @@ An open-source framework that collects data from **vCenter** and **VCF Operation
 
 - **Custom dashboards** served by the app itself, styled after VCF Operations (Clarity look, light and dark theme). No Grafana and no CDN, so it works at dark sites.
 - **REST endpoints for VCF Operations Management Pack Builder**, so MP Builder can pull the data back into VCF Operations.
+- **vCommunity Ask**, a second container with a chat prompt in the same look, answered by your local **Ollama** only from knowledge sources you choose (for example a GitHub repository of markdown files). See [vCommunity Ask](#vcommunity-ask-local-ai-chat).
 
 The core stays small. Every feature is an **add-on module** that can be written in **Python or PowerShell**, switched on or off, and patched on its own.
 
@@ -15,9 +16,11 @@ The core stays small. Every feature is an **add-on module** that can be written 
 
 - [Requirements and design goals](#requirements-and-design-goals)
 - [How it fits together](#how-it-fits-together)
+- [Data storage (SQLite)](#data-storage-sqlite)
 - [Quick start](#quick-start)
 - [Using the web UI](#using-the-web-ui)
 - [Modules included](#modules-included)
+- [vCommunity Ask (local AI chat)](#vcommunity-ask-local-ai-chat)
 - [Configuration reference](#configuration-reference)
 - [Docker image and runtime](#docker-image-and-runtime)
 - [Using it from MP Builder](#using-it-from-mp-builder)
@@ -61,7 +64,42 @@ The core stays small. Every feature is an **add-on module** that can be written 
 
 - **One container, one job.** Uvicorn (FastAPI) is the single main process. The scheduler runs inside it, and collectors and exports are short-lived child processes that start, write JSON and exit. SQLite is one file per module, so a single container avoids cross-container locking and keeps dark-site installs to one image. Split it only if you move to Postgres, need HA on Kubernetes, or want PowerCLI in its own image.
 - **Collectors** are plain scripts. The core passes connection details in environment variables and reads one JSON object back. That is the whole contract, which is why a module can be Python or PowerShell.
-- **Storage** is one SQLite file per module in `data/`, plus `data/_core.db` for core state (run history, module switches and order, settings saved in the UI, export schedules).
+- **Storage** is one SQLite file per module in `data/`, plus `data/_core.db` for core state (run history, module switches and order, settings saved in the UI, export schedules). See [Data storage (SQLite)](#data-storage-sqlite).
+
+## Data storage (SQLite)
+
+SQLite is the only data store. It runs inside the Python process, so there is no database server to install, patch or secure, which suits offline and dark-site installs. Everything lives in the `data/` folder (the `/app/data` volume in Docker).
+
+**One database file per module.** Each module gets its own file, for example `data/vcenter-inventory.db` or `data/host-health.db`. Modules stay isolated, and deleting a module's file removes its data.
+
+- Tables come from the `tables:` section of the module's `module.yaml`. The core creates them on start, and when a module update adds columns, the core adds them with `ALTER TABLE`. Columns are only ever added, never dropped, so there are no migration scripts to write.
+- Collectors (Python or PowerShell) only print rows as JSON. The core writes them and stamps every row with `collected_at` (UTC).
+- Each table has a `mode`:
+
+| Mode | What a collector run does | Use it for |
+| --- | --- | --- |
+| `snapshot` | Deletes all rows, then inserts the new ones | Current state, such as inventory |
+| `append` | Inserts the new rows and deletes rows older than `retention_days` (default 90) | History and trends |
+
+**`data/_core.db` holds the app's own state:**
+
+| Table | Contents |
+| --- | --- |
+| `runs` | Collector run history (status, row count, error message), trimmed to the last 1000 runs |
+| `module_state`, `module_order` | Module on/off switches and menu order set in the UI or API |
+| `connection_settings`, `collector_settings` | Connections and collector intervals edited on the Settings page; they win over `config.yaml` and `.env` |
+| `vcenter_instances` | The vCenter list managed on the Settings page (multi-vCenter). When it has any rows, it wins over `config.yaml` for vCenter |
+| `export_schedules` | Scheduled export definitions and their last result |
+
+Passwords saved on the Settings page are stored **unencrypted** in `_core.db`, so protect `data/` as you would `.env`.
+
+**Reads are read-only.** Dashboards and the REST endpoints that MP Builder calls open module databases with a read-only connection (`mode=ro`), and manifest queries must be `SELECT`. Only collectors write.
+
+**vCommunity Ask has its own database**, `ask.db` in its own volume, completely separate from these files. See [The Ask database](#the-ask-database-askdb).
+
+To back up or move everything, stop the container and copy `data/`. Any SQLite tool, such as DB Browser for SQLite, can open the files.
+
+The databases are never committed to git: `.gitignore` excludes `data/` and `ask-data/`, plus any `*.db` file and SQLite's `*.db-wal` and `*.db-shm` side files wherever they are, as a safety net for a test run with a different data path. They hold unencrypted passwords, customer inventory and chat history, and they are rebuilt automatically.
 
 ## Quick start
 
@@ -205,6 +243,343 @@ Port of the Impact view (`collect/js/impact.js`). Pick a host or datastore under
 Each collection answers the question for every host and datastore, so the answers are also REST endpoints for MP Builder (`/api/dbh-impact/hosts` gives severity, VMs running, memory to restart and headroom per host). Memory figures use assigned VM memory, which is what an HA restart admits against, so they are estimates.
 
 `dbh-topology` and `dbh-impact` share one collector library, `fabric.py`. Each module keeps an identical copy so it stays self-contained; the smoke test fails if the copies drift. HA and DRS state come from the same vSphere session (`configuration.dasConfig.enabled`), so no extra credentials are needed.
+
+## vCommunity Ask (local AI chat)
+
+A second container, `vco-ask`, gives you a chat prompt in the same VCF Operations look (same header, left sidebar and light/dark theme). You ask questions and it answers **only from knowledge sources you point it at**: the markdown files of a GitHub repository, or the posts of a web site or blog (optionally only a date range). Your local **Ollama** writes the answers, so nothing leaves your machine.
+
+![vCommunity Ask chat](docs/screenshots/ask-chat.png)
+
+> Status: v0.1.0 (phase 1). Tested end to end against the [isvara-2](https://github.com/e1-rahabok/isvara-2) knowledge base (198 files, 1,095 chunks) with a stand-in for Ollama (`ask/scripts/fake_ollama.py`); the screenshots show that stand-in's answers. Answers from a real model on your Mac have not been tested here.
+
+### How it works
+
+The model is **not trained or fine-tuned**. It uses retrieval-augmented generation (RAG):
+
+```
+ GitHub repo / local folder ──▶ source plug-in (.py or .ps1) ──JSON documents──▶
+ ┌──────────────────────────── vco-ask container ─────────────────────────────┐
+ │ Indexer: split by "## " heading ─▶ Ollama /api/embed (nomic-embed-text)    │
+ │          ─▶ data/ask.db: FTS5 keyword index + sqlite-vec vector index      │
+ │ Chat:    question ─▶ hybrid search ─▶ follow links ─▶ numbered sources     │
+ │          ─▶ Ollama /api/chat (streamed) ─▶ answer with [n] citations       │
+ │ FastAPI: /chat  /sources  /settings  /doc  /api/*  /docs                   │
+ └────────────────────────────────────────────────────────────────────────────┘
+                     │ http://host.docker.internal:11434
+              Ollama on the Mac (uses the GPU there)
+```
+
+1. **Sync.** A source plug-in clones or pulls the repository and prints its markdown files as JSON. Only files whose content changed since the last sync are re-embedded.
+2. **Index.** Each file is split at `## ` headings (long sections on blank lines). Each chunk is embedded together with the file title and id, so a chunk makes sense on its own. Everything lives in one SQLite file, `data/ask.db`: documents, chunks, the FTS5 keyword index, the sqlite-vec vector index, chats and settings.
+3. **Retrieve.** A question is embedded and searched two ways, by meaning (sqlite-vec, cosine) and by keyword (FTS5, BM25). The two rankings are merged with reciprocal rank fusion, with at most two chunks per file.
+4. **Follow links.** Files that the matches link to in their metadata are added: `same_name` first (it stops the model mixing the VM and ESXi meaning of the same metric label), then `internal_derive`, `same_meaning` and `related`. They show as **Linked files** under the answer.
+5. **Answer.** The numbered sources, the last few turns of the chat and the question go to the Ollama chat model with the system prompt (answer only from the sources, cite them as `[n]`, say when the sources don't cover it, flag `status: draft` content, follow diagnosis steps in order). The answer streams back word by word.
+
+The sections [The Ask database](#the-ask-database-askdb), [From prompt to answer](#from-prompt-to-answer), [How Ollama and the chat model are used](#how-ollama-and-the-chat-model-are-used) and [Tuning the answers](#tuning-the-answers) below go into each step in detail.
+
+### Start it on Rancher Desktop
+
+Ollama stays on the Mac, not in a container: Docker on macOS has no GPU passthrough, so Ollama inside a container would run on CPU only.
+
+1. **Let containers reach Ollama** (once). Rancher Desktop runs containers in a VM, so Ollama must listen on all addresses, not only `127.0.0.1`:
+   ```bash
+   launchctl setenv OLLAMA_HOST 0.0.0.0     # then quit and reopen Ollama
+   lsof -nP -iTCP:11434 -sTCP:LISTEN        # should show *:11434
+   ```
+   `launchctl setenv` is lost at reboot. To keep it, add a LaunchAgent (`~/Library/LaunchAgents/setenv.OLLAMA_HOST.plist` running `launchctl setenv OLLAMA_HOST 0.0.0.0` at load) or run the command again after a restart. Ollama now accepts connections from your network without a password, so keep the macOS firewall on when you are away from home.
+2. **Pull the models** (once): `ollama pull nomic-embed-text` for search; the default chat model is `qwen3.8:27b-mlx` (any installed chat model can be picked on the Settings page).
+3. **Check that a container can reach Ollama:**
+   ```bash
+   docker run --rm curlimages/curl -s http://host.docker.internal:11434/api/tags   # lists your models
+   ```
+4. **Set a token and start it:**
+   ```bash
+   # in .env (see .env.example):  ASK_API_TOKEN=<long random string>
+   docker context use rancher-desktop            # container engine: dockerd (moby)
+   docker compose up -d --build vco-ask          # or "docker compose up -d --build" for both containers
+   ```
+5. Open http://localhost:8081. On first start the `isvara` source (from `ask.example.yaml`) syncs by itself after about 5 seconds: watch it on **Knowledge sources**. Indexing ~200 files with `nomic-embed-text` takes a few minutes.
+
+With the `containerd` engine use `nerdctl compose up -d --build vco-ask` and set `ASK_OLLAMA_URL=http://host.lima.internal:11434` in `.env`.
+
+Run it without Docker (from the `ask/` folder, Python 3.11+, git on the PATH):
+
+```bash
+cd ask && python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+ASK_OLLAMA_URL=http://127.0.0.1:11434 uvicorn app.main:create_app --factory --port 8081
+```
+
+### Using the chat UI
+
+- **New chat** shows example questions (set per source) and how much is indexed. Type a question; **Enter** sends, **Shift+Enter** adds a line. **Sources** picks all sources or just one. **Stop** ends an answer early (what was written so far is kept).
+- Each answer starts with a compact **Sources** strip: one numbered pill per matching section (title · heading), plus a **+N linked** pill for files added by link expansion. It stays small while the answer streams, so the answer is what you read.
+- Numbered **citation chips** `[n]` in the answer, and the pills in the strip, open **Source details** and jump to the matching card. **Source details** (folded by default) holds the full cards: title, section, file id, `draft`/`reviewed` badge, a snippet, linked diagrams, **Open** (the full file in the app, with its images and metadata) and **View on GitHub**, then a **Linked files** group showing what link expansion added and why.
+- While an answer streams the page follows it to the bottom. Scroll up to read something and it stops following; scroll back to the bottom and it follows again.
+- The footer shows the model, the time and tokens per second, and **Copy answer**. With **Show model thinking** on (Settings), thinking models show their reasoning above the answer.
+- Chats are saved: **Recent chats** in the sidebar reopens them, **Delete chat** removes one. Follow-up questions see the last turns (Settings → Chat history).
+
+### Knowledge sources page
+
+![Knowledge sources](docs/screenshots/ask-sources.png)
+
+One card per source with a status ring (green OK, blue syncing, red error, amber new), document and chunk counts, repository and branch (or site and date range), the commit it indexed (or page count and newest post), last sync, re-sync interval and progress while it runs.
+
+- **Sync now** pulls and re-embeds what changed. **Re-index all** re-embeds every file. **Documents** lists every indexed file (with a filter), and each opens in the document view. **Edit** changes options. **Delete** removes the source and its index (not the repository itself). The switch turns a source off without deleting it.
+- **Add source** opens a form built from the chosen plug-in's options. For **Markdown repository**: repository URL and branch (or a local folder), include and exclude globs, metadata format, link base and a token env var for private repositories. For **Web site (blog crawler)**: site URL, where to find pages, URL include/exclude globs, **Published from / Published to** dates or **last N days**, what to do with undated pages, max pages and delay. Every source also has a name, title, re-sync interval and up to six example questions.
+- Sources are re-synced automatically when their interval has passed (checked every 10 minutes); the plug-in reports "no changes" cheaply when the commit hasn't moved.
+- Sources from `ask.yaml` are seeded into the database on first start (badge **ask.yaml**); after that the page owns them.
+
+![Document view](docs/screenshots/ask-document.png)
+
+### Settings page
+
+![Ask settings](docs/screenshots/ask-settings.png)
+
+| Setting | Default | Notes |
+| --- | --- | --- |
+| Ollama URL | `http://host.docker.internal:11434` | **Test connection** shows the Ollama version and fills the model lists |
+| Chat model | `qwen3.8:27b-mlx` | Only models whose capabilities include `completion` are listed |
+| Embedding model | `nomic-embed-text` | Only `embedding` models are listed. **Changing it clears the index and re-embeds every source** (vectors from two models can't be compared) |
+| Show model thinking | off | Sends `think: true` to Ollama |
+| Keep model loaded | `10m` | Ollama `keep_alive` |
+| Chunks to retrieve | 8 | Direct matches; linked files are added on top |
+| Context budget (chars) | 24000 | Cap for all sources together (about 4 characters per token) |
+| Model context (tokens) | 16384 | Ollama `num_ctx`; must hold the sources, history and answer |
+| Temperature | 0.2 | Low keeps answers close to the sources |
+| Chat history (turns) | 3 | 0 = every question stands alone |
+| Follow links | on | Link expansion (step 4 above) |
+| Observability URL | `http://localhost:8080` | Sidebar link back to the dashboards |
+| System prompt | built in | Editable; **Reset to the default** restores it |
+
+Saved values live in `data/ask.db` and win over `ask.yaml` and environment variables; they apply on the next question. Saving needs the API token when `ASK_API_TOKEN` is set (enter it in the bar at the top; it is kept in that browser only). The first container's sidebar shows an **Ask (AI chat)** link (set `VCO_ASK_URL`, default `http://localhost:8081`, empty hides it).
+
+### The Ask database (`ask.db`)
+
+Ask keeps everything in one SQLite file, `data/ask.db` (the `./ask-data` volume). It is both the document store and the search engine, so no separate vector database is needed and nothing has to be downloaded at run time.
+
+| Table | Contents |
+| --- | --- |
+| `settings` | Values saved on the Settings page (Ollama URL, models, top_k and the rest). They win over `ask.yaml` and environment variables |
+| `sources` | Each knowledge source: plug-in, title, options, re-sync interval, example questions, on/off switch, and whether it came from `ask.yaml` or the UI |
+| `source_state` | Per source: status, progress, last start/end/success, last error and the version indexed (commit or page count) |
+| `documents` | One row per markdown file or web page: title, path, URL, `status` (draft/reviewed), metadata, links to other documents, images, full text and a content hash |
+| `chunks` | Each document split into sections. These are what get searched |
+| `chunks_fts` | SQLite FTS5 full-text index over the chunks (`porter unicode61` tokenizer, so "datastores" also matches "datastore"); ranked with BM25 |
+| `chunks_vec` | sqlite-vec `vec0` table with one embedding per chunk, compared by cosine distance. Its size is set by the embedding model |
+| `chats`, `messages` | Chat history. An answer is saved with its source cards, the model used, timing stats and (with thinking on) the model's reasoning |
+
+**Indexing.** The source plug-in clones the repository or crawls the site and returns documents as JSON. Each document's content hash is compared with the stored one, so unchanged files are skipped. A changed file is split at `## ` headings (long sections are split again on blank lines), each chunk is embedded through Ollama `/api/embed` with the file title and id in front of it, and both indexes are updated. Deleting a source removes its documents, chunks and index entries.
+
+- The database runs in WAL mode, so a sync can write while you keep chatting.
+- To back up Ask, copy `ask.db`. To start over, stop the container and delete it; the sources in `ask.yaml` are seeded again and re-indexed on the next start (chat history, saved settings and sources added in the UI are lost).
+- Vectors from two embedding models can't be compared. Changing the embedding model on the Settings page clears the index and re-embeds every source.
+
+### From prompt to answer
+
+What happens between pressing **Send** and the finished answer:
+
+```
+ YOU (browser, ask.js)
+   │  type a question, press Send
+   ▼
+ [1] POST /ui/chat  { question, chat_id, scope }        (REST clients: POST /api/ask)
+   ▼
+ [2] FastAPI (main.py) creates the chat if it is new, loads its history,
+   │  and saves your question in ask.db (messages)
+   ▼
+ [3] EMBED THE QUESTION ──────────────▶ Ollama /api/embed (nomic-embed-text)
+   │                    ◀──────────────  one vector
+   ▼
+ [4] SEARCH ask.db (two searches)
+   │   a) sqlite-vec: chunks closest in MEANING to the vector
+   │   b) FTS5/BM25:  chunks containing the KEYWORDS (stop words removed)
+   ▼
+ [5] MERGE with reciprocal rank fusion
+   │   at most 2 chunks per document, keep the best top_k (default 8)
+   ▼
+ [6] FOLLOW LINKS (expand_links)
+   │   add the first section of linked documents:
+   │   same_name, internal_derive, same_meaning, related
+   ▼
+ [7] FIT TO context_chars (24000), number the sources [1] [2] ...
+   │   browser gets a "meta" event: the source cards appear
+   ▼
+ [8] BUILD THE MESSAGES
+   │   system prompt + last history_turns Q&A pairs + (numbered sources + question)
+   ▼
+ [9] GENERATE ────────────────────────▶ Ollama /api/chat (chat model, stream: true)
+   │              ◀─────────────────────  "thinking" and "token" events
+   ▼
+ [10] Browser renders the markdown live (marked + DOMPurify, vendored);
+   │   [n] citations open the matching source card
+   ▼
+ [11] Answer + source cards + model + stats saved to ask.db
+      (also when you press Stop half way)
+```
+
+1. **Send.** The browser posts the question, the current chat id and the source scope (all sources or one) as a server-sent event (SSE) stream request.
+2. **Save.** A new chat is created if needed. The earlier messages are loaded for history, then your question is stored.
+3. **Embed.** The question goes to the Ollama embedding model (with the `search_query: ` prefix that nomic-embed-text expects) and comes back as a vector, a list of numbers that represents its meaning.
+4. **Search.** The vector search finds sections that mean the same thing even in other words. The keyword search finds exact terms such as metric names or error codes. Each search returns up to `max(30, top_k × 4)` candidates.
+5. **Merge.** Reciprocal rank fusion combines the two rankings. A chunk found by both searches rises to the top. At most two chunks come from one file, and the best `top_k` are kept.
+6. **Follow links.** Documents the hits link to in their metadata are added, `same_name` first. This is what keeps, for example, the VM and ESXi meanings of the same metric label apart. These show as **Linked files**.
+7. **Fit and number.** Direct hits go first, then linked files, until `context_chars` is used up. The sources are numbered and sent to the browser, which shows the **Sources** strip.
+8. **Build the messages.** See the next section for exactly what the model receives.
+9. **Generate.** Ollama streams the answer back in small pieces, and Ask passes each one to the browser as it arrives.
+10. **Display.** The answer appears as formatted markdown with numbered citation chips.
+11. **Save.** The answer, its sources, the model and the stats (tokens, tokens per second, seconds) are stored, so the chat is there when you come back.
+
+Nothing leaves your network. The only calls out of the container go to your own Ollama: one embedding and one chat request per question.
+
+### How Ollama and the chat model are used
+
+Ollama runs two models with separate jobs:
+
+| Model (default) | Job | When it runs |
+| --- | --- | --- |
+| `nomic-embed-text` (embedding model) | Turns text into vectors so search works by meaning | For every chunk during indexing, and once per question |
+| `qwen3.8:27b-mlx` (chat model) | Reads the numbered sources and writes the answer | Once per question |
+
+The chat model does not search and never sees the whole knowledge base or the internet, only the handful of sources picked for that question. That is why answers carry citations, and why "the sources don't cover this" is a valid answer.
+
+Ask calls Ollama's native REST API with `requests` (no SDK), by default at `http://host.docker.internal:11434`, which is the Ollama on your Mac reached from inside Docker. The chat call is `POST /api/chat` with `stream: true`, and the messages are, in order:
+
+1. The **system prompt**: answer only from the numbered sources, cite every fact as `[n]`, say so plainly when the sources don't cover the question, keep VM, host and cluster metrics apart, quote thresholds only when a source states them, flag `status: draft` sources, and follow diagnosis steps in order. It can be edited on the Settings page.
+2. Up to `history_turns` earlier questions and answers from this chat, as plain text (their old sources are not resent).
+3. One user message with the numbered sources, then the question.
+
+Ollama options sent with every question: `temperature`, `num_ctx`, `think` and `keep_alive`. `keep_alive` (default `10m`) keeps the model loaded after a question so follow-ups don't wait for a 27B model to load again.
+
+**Swapping models.** The Settings page lists the models installed in Ollama, split into chat and embedding models. Any chat model (Llama, Gemma, a smaller Qwen) can be picked with no code change, or set `ASK_CHAT_MODEL` in `.env`. A new chat model applies on the next question. Only a new embedding model needs a re-index.
+
+### Tuning the answers
+
+#### Temperature
+
+Temperature controls how adventurous the model is when it picks each next word. These ranges are general guidance for LLMs, not measured on this app:
+
+| Temperature | Effect |
+| --- | --- |
+| 0.0–0.2 (default 0.2) | Picks the most likely words. The same question gives nearly the same answer, close to the wording of the sources. Best for metric definitions, thresholds and procedures |
+| 0.5–0.7 | More natural, varied wording and more examples. Mostly still grounded, but paraphrases more loosely and repeat questions give different answers |
+| 0.8 and above | Much more creative, and riskier: it may blend in general training knowledge, mix up similar terms (such as the VM and ESXi versions of a metric), change exact names or numbers, or cite a source for a claim the source doesn't make |
+
+Temperature has no effect on which sources are found, because retrieval happens before the model runs. It can't fix a "not found" answer. If answers miss information, raise `top_k` or `context_chars` instead. Keep 0.1–0.3 for technical questions; try 0.5–0.6 if answers feel stiff, for example for a blog-style summary.
+
+#### Chat history (`history_turns`)
+
+One turn is one question plus its answer. The default of 3 sends your last 3 questions and the last 3 answers (6 messages) with the new question.
+
+- History is what makes follow-ups like "explain that more simply" or "give me a PowerShell example of that" work.
+- **0** makes every question stand alone: the most predictable, and the least use of `num_ctx`.
+- **Higher values** help long conversations, but old answers take room in `num_ctx` (16384 tokens) away from the sources, make each answer slower, and can let earlier topics bleed into new answers.
+- **History goes only to the model, not to the search.** Retrieval uses only the new question. After "What is CPU Ready?", the follow-up "what about on ESXi?" searches only for those words and may find weak sources. Make follow-ups self-contained ("What is CPU Ready on ESXi?") for the best results.
+- **New chat** starts with no history. Each chat keeps its own.
+
+#### Thinking (`think`)
+
+Qwen 3.x and some other models can reason step by step before they answer. The **Show model thinking** setting sends `think` to Ollama.
+
+- **Off (default).** The model goes straight to the answer: the first words appear much sooner and the whole answer takes less time. That is enough for most look-it-up questions, since the sources already hold the answer.
+- **On.** The model reasons first, then answers. Ask streams the reasoning separately (the `thinking` event), shows it above the answer and saves it with the message. It helps multi-step questions such as comparing two metrics or a troubleshooting walk-through. It costs a slower start and many more tokens, and the reasoning uses up `num_ctx`, which can crowd out sources or cut the answer short. Consider raising `num_ctx` if you use it often.
+- Thinking does not find new sources. It reasons over the same retrieved sources.
+- Ask always sends the flag, even when it is off, because Ollama lets thinking models think by default when `think` is missing. Models without thinking ignore it.
+
+### Ask configuration
+
+`ask/config/ask.example.yaml` is built into the image as `/app/config/ask.yaml`. To use your own, copy it to `ask/config/ask.yaml` and uncomment the volume line in `docker-compose.yml`.
+
+| Key | Meaning |
+| --- | --- |
+| `data_dir` | Where `ask.db` and cloned repositories live (`/app/data`, the `./ask-data` volume) |
+| `sources_dirs` | Folders scanned for source plug-ins; later wins, so a plug-in in `/sources` (`./ask-sources`) overrides the built-in one |
+| `settings.*` | Defaults for every Settings page value (table above) |
+| `api.tokens` | `token_env` names the variable holding the token (`ASK_API_TOKEN`) |
+| `sources` | Sources seeded on first start: `name`, `plugin`, `title`, `interval_hours`, `options`, `examples` |
+
+| Environment variable | Meaning |
+| --- | --- |
+| `ASK_API_TOKEN` | Token for changing Settings and Sources and for `/api/*` (header `X-API-Key` or `Authorization: Bearer`) |
+| `ASK_OLLAMA_URL`, `ASK_CHAT_MODEL`, `ASK_EMBED_MODEL` | Override the yaml defaults (the Settings page still wins) |
+| `ASK_OBSERVABILITY_URL` | Sidebar link to the dashboards |
+| `ASK_CONFIG`, `ASK_DATA_DIR`, `ASK_SHARED_DIR` | Config file, data folder, folder holding the shared `app.css` (set in the image) |
+| `ASK_GITHUB_TOKEN` (any name) | Read-only token for a private repository; put the variable's **name** in the source's "Token env var" |
+| `VCO_ASK_URL` | First container: sidebar link to Ask |
+
+### Source plug-ins
+
+A source plug-in is a folder with `source.yaml` and a script in **Python or PowerShell**, the same idea as collector modules. The core runs the script with:
+
+| Variable | Content |
+| --- | --- |
+| `ASK_SOURCE_OPTIONS` | The source's options as JSON (fields declared under `options:` in `source.yaml`, which also build the Add source form) |
+| `ASK_SOURCE_WORKDIR` | A private folder under `data/sources/<name>` (for clones or caches) |
+| `ASK_SOURCE_STATE` | JSON the script returned last time (for example the commit), `{}` on a full re-index |
+| `ASK_SOURCE_FULL` | `1` on **Re-index all** |
+
+The script prints **one JSON object** to stdout (logs go to stderr; a non-zero exit marks the sync failed):
+
+```json
+{"version": "b59055ce…", "root": "/app/data/sources/isvara/repo", "unchanged": false,
+ "state": {"version": "b59055ce…"},
+ "documents": [{"id": "vsphere/cpu/metrics/virtual-motherboard/co-stop", "title": "VM CPU Co-stop",
+                "path": "knowledge/vsphere/cpu/metrics/virtual-motherboard/co-stop.md", "url": "https://github.com/…",
+                "text": "# VM CPU Co-stop\n## Meaning\n…", "status": "draft", "meta": {"object": ["VirtualMachine"]},
+                "links": {"related": ["vsphere/cpu/metrics/virtual-motherboard/ready"]},
+                "images": [{"path": "knowledge/vsphere/cpu/images/….png", "alt": "…"}], "hash": "86194afe…"}]}
+```
+
+`unchanged: true` with no documents means "nothing changed". `root` is the folder images are served from (`/files/<source>/<path>`, images only, never outside that folder). The core does all chunking, embedding and storage, so a plug-in never touches vectors.
+
+**Built-in plug-ins:**
+
+**`markdown-repo`.** Clones (`git clone --depth 1`) or pulls a repository, or reads a folder mounted at `/knowledge` (`./ask-knowledge`). Options: `repo_url`, `branch`, `path`, `include`/`exclude` globs (`**` crosses folders), `metadata` (`auto`, `isvara`, `none`), `web_url` (defaults to the GitHub blob URL) and `token_env`. With isvara metadata, the trailing `## Metadata` YAML block becomes `status`, `links`, `images` and filter fields and is **not** embedded, as the isvara README asks.
+
+**`web-site` (blog crawler).** Indexes the posts of a web site you don't have the markdown for. It finds pages from the site's `sitemap.xml` (and `Sitemap:` lines in `robots.txt`) plus its RSS/Atom feed; if neither exists it follows links from the start URL. It only fetches the start URL's host, always respects `robots.txt` (including `Crawl-delay`), waits `delay_seconds` between requests and stops after `max_pages` downloads per sync. [trafilatura](https://github.com/adbar/trafilatura) (Apache-2.0) pulls the article out of each page (menus, sidebars and footers dropped) as markdown, so it goes through the same chunking, embedding and search as repository files.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `site_url` | | Start page, e.g. `https://www.vcrocs.info/` |
+| `discovery` | `auto` | `auto` (sitemap + feed, else crawl), `sitemap`, `feed` or `crawl`. Feeds often list only the newest posts |
+| `feed_url` | | Optional; otherwise `/index.xml`, `/feed`, `/rss.xml`, `/atom.xml`, `/feed.xml` are tried |
+| `url_include` / `url_exclude` | – / `/tags/**`, `/categories/**`, `/page/**`, `/author/**`, `/search/**` | Globs on the URL path. Excluded pages are still followed for links when crawling, just not indexed |
+| `date_from`, `date_to` | | Keep posts published inside this range (either end optional) |
+| `last_days` | | Rolling window instead of `date_from`, e.g. `365` |
+| `undated` | `skip` | With a date range set: `skip` or `keep` pages with no publish date (About pages, docs) |
+| `max_pages` | `500` | Network downloads per sync (pages already cached still count as indexed) |
+| `delay_seconds` | `1` | Pause between requests (a larger robots.txt `Crawl-delay` wins, up to 30 s) |
+| `user_agent` | `vCommunity-Ask/0.1 (local knowledge indexer)` | Sent with every request |
+
+The publish date comes from the feed first, then the page itself (`article:published_time`, JSON-LD `datePublished`, `<time>`, dates in the URL). It is stored as `published`, added to the text as a `Published:` line (so "posts from 2024" matches), shown as a badge on source cards and given to the model. Source cards link to the live post (**View on <host>**). Re-syncs are cheap: if the sitemap and feed list the same URLs and dates as last time the plug-in reports "no changes" without downloading anything; otherwise pages are cached in `data/sources/<name>/pages/` and re-requested with `If-None-Match` / `If-Modified-Since`, so only changed posts are downloaded and re-embedded. If the site can't be reached at all, the sync fails and the existing index is kept.
+
+For a blog whose markdown is in a Git repository (Hugo, Jekyll and similar), `markdown-repo` gives cleaner text with no crawling; `web-site` is for sites you don't have the source for.
+
+### Ask REST API
+
+All under token auth when `ASK_API_TOKEN` is set; Swagger UI at http://localhost:8081/docs.
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /api/health` | Status and counts (open) |
+| `POST /api/ask` | `{"question": "...", "sources": "all" \| "isvara" \| [...], "chat_id": "..."}` → answer, source cards, stats, chat id (pass it back for follow-ups) |
+| `GET /api/search?q=...` | Retrieval only: which chunks a question would get, and the FTS query used |
+| `GET /api/chats`, `GET /api/chats/{id}` | Saved chats and their messages |
+| `GET /api/sources`, `POST /api/sources/{name}/sync?full=false`, `GET /api/sources/{name}/documents` | Sources, sync, indexed files |
+
+```powershell
+$h = @{ 'X-API-Key' = $env:ASK_API_TOKEN }
+Invoke-RestMethod -Method Post -Uri http://localhost:8081/api/ask -Headers $h -ContentType 'application/json' `
+  -Body (@{ question = 'What does VM CPU Co-stop mean?'; sources = 'isvara' } | ConvertTo-Json)
+```
+
+### Ask image
+
+- `ask/Dockerfile`, built from the repository root (it copies `core/static/app.css` and the vendored Swagger UI, so a theme fix lands in both containers). Python 3.13 slim + git, native arm64 on Apple Silicon, no PowerShell.
+- Runs as non-root user `ask` (uid 10002) on port 8081, health check on `/api/health`.
+- Volumes: `./ask-data` → `/app/data` (index, chats, clones), `./ask-knowledge` → `/knowledge` (read-only, local folders), `./ask-sources` → `/sources` (extra or patched plug-ins).
+- Front-end libraries are vendored in `ask/app/static/vendor/` with their licences: marked 18.1.3 (MIT) and DOMPurify 3.4.17 (Apache-2.0/MPL-2.0). Every answer and document is sanitised by DOMPurify before display.
+- On a Linux Docker host, uncomment `extra_hosts: host.docker.internal:host-gateway` in `docker-compose.yml`. Leave it commented on Rancher Desktop and Docker Desktop: it replaces their own mapping to the Mac, and Ollama then refuses the connection.
 
 ## Configuration reference
 
@@ -400,6 +775,7 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 - Secrets live in `.env`, never in `config.yaml`. A password saved on the Settings page is stored **unencrypted** in `data/_core.db`, so protect the `data` folder as you would `.env`.
 - The container runs as a non-root user. Collectors only receive the connections they list in `module.yaml`.
 - `verify_ssl: false` is the default for lab use; turn it on where vCenter has a trusted certificate.
+- **vCommunity Ask:** the chat UI has no login either (like the dashboards); changing Settings or Sources needs `ASK_API_TOKEN`, and the UI endpoints refuse requests sent from other web sites (Origin check). Answers and documents are rendered through DOMPurify. Indexed documents could contain text aimed at the model (prompt injection); in phase 1 the model has no tools, so the worst case is a wrong answer. Image serving is limited to image files inside each source's folder. Ollama itself has no authentication: with `OLLAMA_HOST=0.0.0.0` it is reachable from your network.
 
 ## Patching and updates
 
@@ -409,11 +785,13 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 - PowerShell is pinned with `PWSH_VERSION`, PowerCLI optionally with `POWERCLI_VERSION`.
 - A single module is patched by dropping its folder into `/modules` (see above).
 - SQLite data lives on the `/app/data` volume and survives image upgrades.
+- vCommunity Ask has its own lock file: `cd ask && uv pip compile --universal --generate-hashes --python-version 3.13 --upgrade-package fastapi requirements.in -o requirements.txt`, then `docker compose up -d --build vco-ask`. Vendored JavaScript (marked, DOMPurify) is replaced by dropping the new file into `ask/app/static/vendor/<lib>/` and updating its `VERSION`. A source plug-in is patched by dropping its folder into `./ask-sources`.
 
 ## Dark sites
 
 - No runtime internet access is needed: the UI has no JavaScript frameworks or CDN links, and Swagger UI's files are vendored into the image. (`github-status` is the one module that needs internet, by design; switch it off at a dark site.)
 - Build a bundle on a connected machine: `./scripts/New-OfflineBundle.ps1 -Version 0.1.0 -Target core-pwsh`. It saves the image as a gzipped tarball with a `.sha256`.
+- vCommunity Ask at a dark site: copy the Ollama models (`~/.ollama/models`) from a connected machine, save the `vcommunity-ask` image with `docker save`, and use a **local folder** source (copy the repository into `./ask-knowledge`, or use a `git bundle`) instead of a GitHub URL. A `web-site` source works only against sites reachable from the dark site (an internal wiki or docs server). The UI loads nothing from the internet.
 - At the dark site: verify the `.sha256`, then `docker load -i vco-core-pwsh-0.1.0.tar.gz` and `docker compose up -d`.
 
 ## Troubleshooting
@@ -427,12 +805,29 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 | `AttributeError: 'str' object has no attribute '_moId'` in a collector | A managed object was compared with `==`; see the pyVmomi tip under [Writing a module](#writing-a-module) |
 | vCenter password is empty | `config.yaml` must have `password_env: VCO_VCENTER_PASSWORD` (the variable's name), with the password in `.env`, or set it on the Settings page |
 | Dashboard shows "collector failed" | The message is the collector's stderr. **Run collectors now** on the Modules page (or **Refresh** on the dashboard) retries; `docker compose logs -f` shows more |
+| Ask: "Connection refused" to `host.docker.internal:11434` although `docker run --rm curlimages/curl -s http://host.docker.internal:11434/api/tags` works | An `extra_hosts: host.docker.internal:host-gateway` line in `docker-compose.yml` points the name at the Rancher VM instead of the Mac. Remove it, then `docker compose up -d vco-ask` |
+| Ask: Settings shows "Cannot reach Ollama at http://host.docker.internal:11434" | Ollama listens only on 127.0.0.1. Run `launchctl setenv OLLAMA_HOST 0.0.0.0`, quit and reopen Ollama, check `lsof -nP -iTCP:11434 -sTCP:LISTEN` shows `*:11434`. With nerdctl/containerd use `http://host.lima.internal:11434` |
+| Ask: source card is red with "embedding with 'nomic-embed-text' failed: model not found" | `ollama pull nomic-embed-text` on the Mac, then **Sync now** |
+| Ask: answer says "Nothing is indexed yet" | Open **Knowledge sources** and press **Sync now**; watch the card for errors (git clone needs internet, or use a local folder) |
+| Ask: answers are slow or cut off | Use a smaller chat model, lower **Chunks to retrieve** / **Context budget**, or raise **Model context (tokens)** if the model supports it. The first answer after a while is slower while Ollama loads the model (**Keep model loaded**) |
+| Ask: web-site source is red with "could not reach https://..." | The container can't reach the site (DNS, proxy or firewall). Test with `docker compose exec vco-ask python -c "import requests;print(requests.get('https://SITE/').status_code)"`. Behind a proxy, set `HTTPS_PROXY` for the `vco-ask` service. The previous index is kept |
+| Ask: web-site source indexed 0 pages or misses posts | Check the log (`docker compose logs vco-ask`): `out_of_range` = outside the date range, `too_short` = pages with under 200 characters of article text (list pages), `blocked` = robots.txt. Widen the date range, set **Pages with no date** to `keep`, adjust the URL globs, or raise **Max pages per sync** |
+| Ask: "The last sync was interrupted (app restarted)" | The container stopped during a sync. Press **Sync now** |
 | Changes to modules or templates don't show | Built-in modules are in the image: `docker compose up -d --build` |
 
 ## Testing
 
 ```bash
 python scripts/smoke_test.py     # runs every module with sample data, checks every endpoint, page, export and Settings flow
+```
+
+vCommunity Ask can be tested without a GPU or model downloads, using a stand-in for Ollama (hashed bag-of-words embeddings and a canned answer that cites the sources it received):
+
+```bash
+python3 ask/scripts/fake_ollama.py &                                   # listens on 127.0.0.1:11555
+cd ask && ASK_DATA_DIR=/tmp/ask-test ASK_OLLAMA_URL=http://127.0.0.1:11555 \
+  uvicorn app.main:create_app --factory --port 8081                    # syncs the isvara repo on start
+curl -s "localhost:8081/api/search?q=VM%20CPU%20Co-stop"                 # retrieval only
 ```
 
 The smoke test also checks that the DBH sheet tables match `module.yaml`, that the two `fabric.py` copies are identical, that Impact gives the same answers as the original website for the sample lab, and that schedules save, verify, edit, run, pause and remove correctly.
@@ -454,8 +849,24 @@ modules/                built-in modules (one folder each)
 config/                 config.example.yaml
 scripts/                smoke_test.py, New-OfflineBundle.ps1
 docs/screenshots/       screenshots used in this README
+ask/                    vCommunity Ask (second container)
+  app/main.py           routes: chat, sources, settings, document view, REST API
+  app/rag.py            hybrid retrieval, link expansion, prompt, streamed answers
+  app/indexer.py        source plug-ins, chunking, embedding, scheduled syncs
+  app/db.py             SQLite: documents, chunks, FTS5, sqlite-vec, chats, settings
+  app/ollama.py         Ollama client (version, models, embed, chat stream)
+  app/config.py         ask.yaml + env + defaults (and the default system prompt)
+  app/templates/        chat, sources, documents, settings pages
+  app/static/           ask.css, ask.js, admin.js, vendored marked + DOMPurify
+  sources/markdown-repo/  built-in source plug-in (Git repo or folder of markdown)
+  sources/web-site/     built-in source plug-in (blog/site crawler: sitemap, feed, links, date range)
+  config/               ask.example.yaml
+  scripts/fake_ollama.py  stand-in for Ollama, for tests
+  Dockerfile            vcommunity-ask image (build from the repo root)
+  requirements.in/.txt  direct dependencies / hashed lock file
 Dockerfile              core and core-pwsh image targets
-docker-compose.yml      single-container deployment
+docker-compose.yml      vco (dashboards) and vco-ask (chat) services
+.dockerignore           keeps data, .env and docs out of both images
 requirements.in/.txt    direct dependencies / hashed lock file
 .env.example            secrets and build settings template
 ```
@@ -467,10 +878,16 @@ requirements.in/.txt    direct dependencies / hashed lock file
 - Script-backed API routes (a `.py` or `.ps1` handler for an endpoint, not just a query)
 - CI: Dependabot or Renovate, `pip-audit`, and Trivy image scans
 - Trend charts (line widget) using `append` tables
+- vCommunity Ask phase 2: a `vco-live` source (answer from the dashboards' live vCenter data), metadata filters from the question (object, technology), Mermaid flowcharts in documents
+- vCommunity Ask phase 3: tool calling against the dashboards' REST API for live questions; answer feedback
 
 ## Changelog
 
 | Date | Change |
 | --- | --- |
+| 2026-11-04 | README: new **Data storage (SQLite)** section (module databases, `snapshot`/`append` tables, `_core.db`); Ask sections **The Ask database**, **From prompt to answer** (diagram), **How Ollama and the chat model are used** and **Tuning the answers** (temperature, chat history, thinking). `.gitignore` now also excludes `*.db`, `*.db-wal` and `*.db-shm` |
+| 2026-11-04 | **vCommunity Ask** second container (`vco-ask`, port 8081): chat UI in the same theme answered by local Ollama via RAG; SQLite with FTS5 + sqlite-vec; `markdown-repo` source plug-in with isvara metadata and link expansion; Knowledge sources, Settings and document pages; REST API; stand-in Ollama for tests. Dashboards sidebar link to Ask (`VCO_ASK_URL`); `.dockerignore` added |
+| 2026-11-04 | Ask: new `web-site` source plug-in crawls a blog or site (sitemap, RSS/Atom feed or links; robots.txt, delay, max pages) with a **Published from/to** or **last N days** range; article text via trafilatura (added to the lock file); publish date shown on source cards and given to the model; source links name the site; date and number fields in the source form |
+| 2026-11-04 | Ask chat answers: compact numbered **Sources** strip above each answer, full source cards folded into **Source details**, citation and pill clicks open and jump to the card, auto-scroll stops when you scroll up |
 | 2026-11-02 | Multi-vCenter support (Settings instances, `VCO_VCENTERS`, `vcenter` identity on rows); `dbh-topology` and `dbh-impact` modules; GitHub Status redesigned with VCF Operations-style cards; PowerShell 7.6.9 LTS default with `PWSH_VERSION` and `DOTNET_HWINTRINSIC` settings; `init: true` in Compose; this README rewritten |
 | 2026-11-01 | Settings page (connections, intervals); scheduled export with folder picker, edit and verified save; `dbh-insights` module with XLSX/CSV export; module on/off switches and menu order; offline Swagger UI; `vcenter-inventory` and `github-status` modules; VCF Operations look with light and dark theme; first prototype with `datastore-capacity` and `host-health` |

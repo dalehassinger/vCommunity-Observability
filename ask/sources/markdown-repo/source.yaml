@@ -1,0 +1,49 @@
+# Knowledge source plug-in: markdown files from a Git repository or a local folder.
+#
+# Contract (same for every source plug-in, Python or PowerShell):
+#   - The core runs `entry` with the source's options as JSON in ASK_SOURCE_OPTIONS,
+#     a private work folder in ASK_SOURCE_WORKDIR and the last run's state in ASK_SOURCE_STATE.
+#   - The script prints ONE JSON object to stdout:
+#       {"version": "<commit or timestamp>", "root": "<folder images are served from>",
+#        "state": {...saved for next run...}, "unchanged": false,
+#        "documents": [{"id", "title", "path", "url", "text", "status", "meta", "links", "images", "hash"}]}
+#   - Log lines go to stderr. A non-zero exit code marks the sync as failed.
+#   - "unchanged": true (and no documents) tells the core nothing changed since the last run.
+name: markdown-repo
+title: Markdown repository
+description: Clones or pulls a Git repository (or reads a mounted folder) and indexes its markdown files.
+version: 0.1.0
+runtime: python          # python or pwsh
+entry: fetch_markdown.py
+timeout_seconds: 900
+options:
+  - key: repo_url
+    label: Git repository URL
+    hint: "https://github.com/owner/repo. Leave empty to read a local folder instead."
+  - key: branch
+    label: Branch
+    default: main
+  - key: path
+    label: Local folder
+    hint: "Only when Repository URL is empty: a folder inside the container, e.g. /knowledge/my-docs (compose mounts ./ask-knowledge there)."
+  - key: include
+    label: Include (globs)
+    type: list
+    default: ["**/*.md"]
+    hint: "One pattern per line, relative to the repo root, e.g. knowledge/**/*.md"
+  - key: exclude
+    label: Exclude (globs)
+    type: list
+    default: []
+  - key: metadata
+    label: Metadata format
+    type: select
+    choices: [auto, isvara, none]
+    default: auto
+    hint: "isvara = trailing '## Metadata' YAML block (id, status, links, images). auto detects it per file."
+  - key: web_url
+    label: Link base for files
+    hint: "Optional. Defaults to https://github.com/owner/repo/blob/<branch>/ for GitHub repositories."
+  - key: token_env
+    label: Token env var
+    hint: "Private repositories only: NAME of the environment variable (in .env) holding a read-only token."

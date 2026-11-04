@@ -7,6 +7,7 @@ so the app works the same at connected and dark sites.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import secrets
 import threading
@@ -294,6 +295,8 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
     app.state.core = core
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     templates = Jinja2Templates(directory=HERE / "templates")
+    # Sidebar link to the vCommunity Ask chat container (empty = no link).
+    templates.env.globals["ask_url"] = os.environ.get("VCO_ASK_URL", "")
     # Module templates are addressed as "<module>/<file>" and can extend base.html.
     from jinja2 import ChoiceLoader, FileSystemLoader, PrefixLoader
     templates.env.loader = ChoiceLoader([

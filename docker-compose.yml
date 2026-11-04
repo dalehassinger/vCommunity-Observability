@@ -21,6 +21,34 @@ services:
     environment:
       VCO_CONFIG: /app/config/config.yaml
       VCO_EXPORT_DIR: /app/exports
+      VCO_ASK_URL: ${VCO_ASK_URL:-http://localhost:8081}   # sidebar link to vCommunity Ask (empty = hide)
       # TZ: America/New_York                              # default time zone offered for scheduled exports
     restart: unless-stopped
     init: true               # tiny init (tini) reaps finished collector subprocesses and passes stop signals
+
+  # vCommunity Ask: chat UI answered by your local Ollama from your own knowledge
+  # sources (see ask/README section in README.md). Python only; no PowerShell.
+  vco-ask:
+    build:
+      context: .                 # repo root: the image reuses core/static (theme, Swagger UI)
+      dockerfile: ask/Dockerfile
+    image: vcommunity-ask:0.1.0
+    container_name: vco-ask
+    ports:
+      - "8081:8081"
+    env_file: .env
+    environment:
+      # Ollama runs on the Mac itself (it uses the GPU there). Rancher Desktop (moby)
+      # and Docker Desktop reach the Mac at host.docker.internal.
+      ASK_OLLAMA_URL: ${ASK_OLLAMA_URL:-http://host.docker.internal:11434}
+    # Linux Docker hosts only: uncomment so host.docker.internal resolves. Do NOT use it on
+    # Rancher Desktop or Docker Desktop: it overrides their own mapping to the Mac and Ollama is refused.
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
+    volumes:
+      - ./ask-data:/app/data                   # ask.db (index + chats) and cloned repositories
+      - ./ask-knowledge:/knowledge:ro          # optional: local markdown folders for "local folder" sources
+      - ./ask-sources:/sources                 # optional: extra or patched source plug-ins
+      # - ./ask/config/ask.yaml:/app/config/ask.yaml:ro   # optional: your own copy of ask.example.yaml
+    restart: unless-stopped
+    init: true

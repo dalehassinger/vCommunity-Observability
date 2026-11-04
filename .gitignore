@@ -7,3 +7,10 @@ dist/
 config/*.bak
 *.bak
 exports/
+ask-data/
+ask-knowledge/
+ask-sources/
+ask/config/ask.yaml
+*.db
+*.db-wal
+*.db-shm

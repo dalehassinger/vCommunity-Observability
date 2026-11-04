@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}vCommunity Ask{% endblock %}</title>
+  <link rel="stylesheet" href="/shared/app.css">
+  <link rel="stylesheet" href="/static/ask.css">
+  {% block head %}{% endblock %}
+  <script>
+    // Same theme switch as vCommunity-Observability (and the same saved choice key).
+    (function () {
+      var t = null;
+      try { t = localStorage.getItem('vco-theme'); } catch (e) {}
+      if (!t) t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+</head>
+<body class="{% block body_class %}{% endblock %}">
+<header class="app-header">
+  <button class="icon-btn nav-toggle" aria-label="Toggle navigation" onclick="document.body.classList.toggle('nav-open')">
+    <svg viewBox="0 0 24 24" width="20" height="20"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </button>
+  <a class="brand" href="/chat">
+    <svg class="logo" viewBox="0 0 32 32" width="26" height="26" aria-hidden="true">
+      <rect x="2" y="2" width="28" height="28" rx="6" fill="currentColor" opacity=".18"/>
+      <path d="M8 10.5h16a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-8l-5 3.5v-3.5H8A1.5 1.5 0 0 1 6.5 20v-8A1.5 1.5 0 0 1 8 10.5z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>
+      <path d="M11 16h.01M16 16h.01M21 16h.01" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+    </svg>
+    <span class="brand-name">vCommunity <b>Ask</b></span>
+  </a>
+  <div class="header-spacer"></div>
+  <span class="header-model" title="Chat model (change it on the Settings page)">
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    {{ settings.chat_model }}
+  </span>
+  <button class="icon-btn" aria-label="Switch light or dark theme" title="Light / dark" onclick="
+      var r=document.documentElement, t=r.getAttribute('data-theme')==='dark'?'light':'dark';
+      r.setAttribute('data-theme',t); try{localStorage.setItem('vco-theme',t)}catch(e){}">
+    <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z" fill="currentColor"/></svg>
+  </button>
+</header>
+
+<div class="layout">
+  <nav class="sidenav">
+    <a class="nav-link new-chat {{ 'active' if active == '/chat' else '' }}" href="/chat">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      New chat
+    </a>
+    <div class="nav-section">Recent chats</div>
+    {% for c in chats %}
+      <a class="nav-link sub chat-link {{ 'active' if active == '/chat/' ~ c.id else '' }}" href="/chat/{{ c.id }}" title="{{ c.title }}">{{ c.title }}</a>
+    {% else %}
+      <div class="nav-empty">No chats yet</div>
+    {% endfor %}
+    <div class="nav-section">Knowledge</div>
+    <a class="nav-link {{ 'active' if active == '/sources' else '' }}" href="/sources">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 5.5C4 4.1 7.6 3 12 3s8 1.1 8 2.5S16.4 8 12 8 4 6.9 4 5.5zM4 5.5v13C4 19.9 7.6 21 12 21s8-1.1 8-2.5v-13M4 12c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+      Knowledge sources
+    </a>
+    <div class="nav-section">Administration</div>
+    <a class="nav-link {{ 'active' if active == '/settings' else '' }}" href="/settings">
+      <svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      Settings
+    </a>
+    <a class="nav-link" href="/docs" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M8 4l-5 8 5 8M16 4l5 8-5 8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      API docs (Swagger)
+    </a>
+    {% if observability_url %}
+    <a class="nav-link" href="{{ observability_url }}">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+      Observability dashboards
+    </a>
+    {% endif %}
+  </nav>
+
+  <main class="content {% block content_class %}{% endblock %}">
+    {% block body %}{% endblock %}
+  </main>
+</div>
+{% block scripts %}{% endblock %}
+</body>
+</html>

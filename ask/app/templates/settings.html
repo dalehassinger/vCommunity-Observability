@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Settings · vCommunity Ask{% endblock %}
+{% block body %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb">Administration</div>
+    <h1>Settings</h1>
+    <p class="subtle">Saved in <code>data/ask.db</code>. A saved value wins over <code>ask.yaml</code> and <code>.env</code>
+      (marked <span class="override">saved</span>) and takes effect on the next question, no restart needed.</p>
+  </div>
+</div>
+
+{% include "_token.html" %}
+
+<div class="form-grid">
+  <div class="card">
+    <div class="card-header">Ollama</div>
+    <div class="card-block">
+      <div class="ollama-status" id="ollama-status"><span class="status"><i></i></span><span>Checking Ollama…</span></div>
+      <div class="field"><label for="s-ollama_url">Ollama URL{% if 'ollama_url' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><input type="text" id="s-ollama_url" data-key="ollama_url" value="{{ settings.ollama_url }}">
+          <div class="hint">From Rancher Desktop or Docker Desktop: <code>http://host.docker.internal:11434</code>
+            (containerd/nerdctl: <code>http://host.lima.internal:11434</code>). Ollama must listen on all addresses:
+            <code>launchctl setenv OLLAMA_HOST 0.0.0.0</code>, then restart Ollama.</div></div></div>
+      <div class="field"><label></label><div><button class="btn btn-outline" type="button" id="test-ollama">Test connection</button></div></div>
+      <div class="field"><label for="s-chat_model">Chat model{% if 'chat_model' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><select id="s-chat_model" data-key="chat_model" data-current="{{ settings.chat_model }}"><option>{{ settings.chat_model }}</option></select>
+          <div class="hint">Answers the questions. 27-32B models follow "answer only from the sources" best.</div></div></div>
+      <div class="field"><label for="s-embed_model">Embedding model{% if 'embed_model' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><select id="s-embed_model" data-key="embed_model" data-current="{{ settings.embed_model }}"><option>{{ settings.embed_model }}</option></select>
+          <div class="hint">Turns text into vectors for search. <b>Changing it clears the index and re-embeds every source.</b></div></div></div>
+      <div class="field"><label for="s-think">Show model thinking{% if 'think' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><label class="switch"><input type="checkbox" id="s-think" data-key="think" {{ 'checked' if settings.think else '' }}><span></span>On</label>
+          <div class="hint">For thinking models (Qwen 3.x and others): slower, but the reasoning is shown above the answer.</div></div></div>
+      <div class="field"><label for="s-keep_alive">Keep model loaded{% if 'keep_alive' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><input type="text" id="s-keep_alive" data-key="keep_alive" value="{{ settings.keep_alive }}"><div class="hint">How long Ollama keeps the models in memory after a question, e.g. 10m, 1h, 0.</div></div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">Answers and retrieval</div>
+    <div class="card-block">
+      {% for key, label, hint in [
+        ('top_k', 'Chunks to retrieve', 'Best-matching sections sent to the model (linked files come on top).'),
+        ('context_chars', 'Context budget (chars)', 'Upper limit for all sources together. About 4 characters per token.'),
+        ('num_ctx', 'Model context (tokens)', 'Ollama num_ctx. Must hold the sources, the chat history and the answer.'),
+        ('temperature', 'Temperature', 'Low (0.1-0.3) keeps answers close to the sources.'),
+        ('history_turns', 'Chat history (turns)', 'Earlier questions and answers sent along for follow-up questions. 0 = none.')] %}
+      <div class="field"><label for="s-{{ key }}">{{ label }}{% if key in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><input type="number" id="s-{{ key }}" data-key="{{ key }}" value="{{ settings[key] }}" step="{{ '0.05' if key == 'temperature' else '1' }}"><div class="hint">{{ hint }}</div></div></div>
+      {% endfor %}
+      <div class="field"><label for="s-expand_links">Follow links{% if 'expand_links' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><label class="switch"><input type="checkbox" id="s-expand_links" data-key="expand_links" {{ 'checked' if settings.expand_links else '' }}><span></span>On</label>
+          <div class="hint">Add files the matches link to (same_name, internal_derive, same_meaning, related).</div></div></div>
+      <div class="field"><label for="s-observability_url">Observability URL{% if 'observability_url' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><input type="text" id="s-observability_url" data-key="observability_url" value="{{ settings.observability_url }}" placeholder="http://localhost:8080">
+          <div class="hint">Adds a sidebar link back to the vCommunity-Observability dashboards.</div></div></div>
+    </div>
+  </div>
+
+  <div class="card span-all">
+    <div class="card-header">System prompt{% if 'system_prompt' in overridden %}<span class="override">saved</span>{% endif %}</div>
+    <div class="card-block">
+      <div class="field" style="grid-template-columns: 1fr"><textarea class="prompt" id="s-system_prompt" data-key="system_prompt">{{ settings.system_prompt }}</textarea>
+        <div class="hint">The rules the model follows. The numbered sources and the question are added after it.
+          <button class="link-btn" type="button" id="reset-prompt">Reset to the default</button></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="form-actions card-actions">
+  <button class="btn btn-primary" type="button" id="save">Save settings</button>
+  <span class="form-msg" id="save-msg"></span>
+</div>
+<p class="subtle">Config file: <code>{{ config_path }}</code></p>
+{% endblock %}
+{% block scripts %}
+<script src="/static/admin.js"></script>
+<script>
+(function () {
+  var DEFAULT_PROMPT = {{ defaults.system_prompt | tojson }};
+  var status = document.getElementById('ollama-status');
+  function setStatus(ok, text) {
+    status.innerHTML = '';
+    var s = document.createElement('span'); s.className = 'status ' + (ok ? 'status-green' : 'status-red'); s.innerHTML = '<i></i>';
+    var t = document.createElement('span'); t.textContent = text;
+    status.appendChild(s); status.appendChild(t);
+  }
+  function fill(select, models) {
+    var cur = select.dataset.current;
+    select.innerHTML = '';
+    var names = models.map(function (m) { return m.name; });
+    // Ollama lists "nomic-embed-text" as "nomic-embed-text:latest": treat them as the same model.
+    if (cur && names.indexOf(cur) < 0 && cur.indexOf(':') < 0 && names.indexOf(cur + ':latest') >= 0) {
+      models = models.map(function (m) { return m.name === cur + ':latest' ? Object.assign({}, m, { name: cur, label: m.name }) : m; });
+      names = models.map(function (m) { return m.name; });
+    }
+    if (cur && names.indexOf(cur) < 0) models = [{ name: cur, missing: true }].concat(models);
+    models.forEach(function (m) {
+      var o = document.createElement('option'); o.value = m.name;
+      o.textContent = (m.label || m.name) + (m.parameter_size ? ' (' + m.parameter_size + ')' : '') + (m.missing ? ' (not installed)' : '');
+      select.appendChild(o);
+    });
+    select.value = cur;
+  }
+  async function test() {
+    setStatus(true, 'Checking…');
+    var url = document.getElementById('s-ollama_url').value;
+    try {
+      var d = await (await fetch('/ui/ollama?url=' + encodeURIComponent(url))).json();
+      if (!d.ok) { setStatus(false, d.error); return; }
+      var chat = d.models.filter(function (m) { return m.kind === 'chat'; });
+      var emb = d.models.filter(function (m) { return m.kind === 'embedding'; });
+      setStatus(true, 'Connected to Ollama ' + d.version + ' at ' + d.url + ': ' + chat.length + ' chat and ' + emb.length + ' embedding models.');
+      fill(document.getElementById('s-chat_model'), chat);
+      fill(document.getElementById('s-embed_model'), emb);
+    } catch (e) { setStatus(false, e.message); }
+  }
+  document.getElementById('test-ollama').onclick = test;
+  document.getElementById('reset-prompt').onclick = function () { document.getElementById('s-system_prompt').value = DEFAULT_PROMPT; };
+  document.getElementById('save').onclick = async function () {
+    var values = {};
+    document.querySelectorAll('[data-key]').forEach(function (i) { values[i.dataset.key] = i.type === 'checkbox' ? i.checked : i.value; });
+    var emb = document.getElementById('s-embed_model');
+    if (emb.value !== emb.dataset.current && !confirm('Changing the embedding model clears the index and re-embeds every source. Continue?')) return;
+    var m = document.getElementById('save-msg');
+    try {
+      var r = await AskAdmin.post('/ui/settings', { values: values });
+      m.textContent = r.reindex ? 'Saved. Re-indexing all sources with the new embedding model.' : 'Saved.';
+      m.className = 'form-msg ok';
+      setTimeout(function () { location.reload(); }, 1200);
+    } catch (e) { m.textContent = 'Not saved: ' + e.message; m.className = 'form-msg bad'; }
+  };
+  test();
+})();
+</script>
+{% endblock %}
