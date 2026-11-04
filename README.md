@@ -17,7 +17,7 @@ The core stays small. Every feature is an **add-on module** that can be written 
 - [Requirements and design goals](#requirements-and-design-goals)
 - [How it fits together](#how-it-fits-together)
 - [Data storage (SQLite)](#data-storage-sqlite)
-- [Quick start](#quick-start)
+- [Getting started](#getting-started)
 - [Using the web UI](#using-the-web-ui)
 - [Modules included](#modules-included)
 - [vCommunity Ask (local AI chat)](#vcommunity-ask-local-ai-chat)
@@ -101,37 +101,158 @@ To back up or move everything, stop the container and copy `data/`. Any SQLite t
 
 The databases are never committed to git: `.gitignore` excludes `data/` and `ask-data/`, plus any `*.db` file and SQLite's `*.db-wal` and `*.db-shm` side files wherever they are, as a safety net for a test run with a different data path. They hold unencrypted passwords, customer inventory and chat history, and they are rebuilt automatically.
 
-## Quick start
+## Getting started
 
-### Try it with sample data (no vCenter needed)
+These steps take a fresh clone to both containers running: the dashboards on port **8080** and vCommunity Ask on port **8081**. Each step has bash (macOS, Linux) and PowerShell (Windows) commands.
+
+### Prerequisites
+
+| What | macOS | Windows | Linux |
+| --- | --- | --- | --- |
+| Container engine | Rancher Desktop (Container Engine `dockerd (moby)`) or Docker Desktop | Docker Desktop (WSL 2 backend) or Rancher Desktop | Docker Engine with the Compose plugin |
+| git | Xcode command line tools or Homebrew | Git for Windows | distro package |
+| Ollama (only for Ask) | ollama.com app | ollama.com app | ollama.com install script |
+| Models (only for Ask) | `nomic-embed-text` plus a chat model | same | same |
+| Memory for the chat model | A 27B model needs roughly 20 GB free; 8B models run in roughly 6–8 GB | same | same |
+| vCenter (optional) | Reachable from the container, with a read-only account | same | same |
+
+No vCenter yet? Set `VCO_MOCK=1` in `.env` and every dashboard runs on built-in sample data. No Ollama? The dashboards work without it; only Ask needs it.
+
+### 1. Get the code
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\Activate.ps1
+git clone https://github.com/dalehassinger/vCommunity-Observability.git
+cd vCommunity-Observability
+```
+
+### 2. Create your config and secrets
+
+```bash
+cp config/config.example.yaml config/config.yaml
+cp .env.example .env
+openssl rand -hex 32          # run twice: one token for VCO_API_TOKEN_MPBUILDER, one for ASK_API_TOKEN
+```
+
+```powershell
+Copy-Item config/config.example.yaml config/config.yaml
+Copy-Item .env.example .env
+[Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))   # run twice, one per token
+```
+
+Copy `config/config.yaml` **before** the first `docker compose up`. If it is missing, Docker creates a folder with that name and the `vco` container fails to start.
+
+In `config/config.yaml`, change only what applies to you (the example uses the author's lab names):
+
+| Key | Set it to |
+| --- | --- |
+| `connections.vcenter.host`, `user` | Your vCenter FQDN and a read-only account (or leave them and set the vCenter on the **Settings** page later) |
+| `connections.vcenter.verify_ssl` | `true` if vCenter has a trusted certificate |
+| `connections.vcfops.*` | Your VCF Operations, or leave it if you don't use it |
+| `modules.dbh-*.settings.vcenter_name` | Your vCenter name (shown in the DBH sheets) |
+| `modules.github-status.enabled` | `false` if the machine has no internet |
+
+In `.env`, set:
+
+| Variable | Value |
+| --- | --- |
+| `VCO_VCENTER_PASSWORD` | The vCenter password (`VCO_VCFOPS_PASSWORD` for VCF Operations) |
+| `VCO_API_TOKEN_MPBUILDER` | The first token. Needed for saves on the Settings page and for the REST API |
+| `ASK_API_TOKEN` | The second token. Needed to change Ask's Settings and Knowledge sources |
+| `VCO_MOCK` | Uncomment `VCO_MOCK=1` for sample data instead of a live vCenter |
+| `ASK_CHAT_MODEL` | Only if you won't use the default `qwen3.8:27b-mlx` (see step 4) |
+
+Never commit `.env` or `config/config.yaml`; both are in `.gitignore`.
+
+### 3. Create the data folders
+
+The containers run as non-root users (`vco` uid 10001 and `ask` uid 10002), so they need folders they can write to.
+
+```bash
+mkdir -p data exports extra-modules ask-data ask-knowledge ask-sources
+# Linux only: give the folders to the container users
+sudo chown -R 10001 data exports extra-modules
+sudo chown -R 10002 ask-data
+# macOS: Docker Desktop and Rancher Desktop map ownership for you; if a scheduled export can't write, run: chmod 777 exports
+```
+
+```powershell
+New-Item -ItemType Directory -Force data, exports, extra-modules, ask-data, ask-knowledge, ask-sources | Out-Null
+```
+
+### 4. Set up Ollama (for Ask)
+
+Ollama runs on the host, not in a container, so it can use the GPU. Two things are needed: Ollama must accept connections from containers, and the models must be pulled.
+
+| OS | Let containers reach Ollama |
+| --- | --- |
+| macOS | `launchctl setenv OLLAMA_HOST 0.0.0.0`, then quit and reopen Ollama. Details and how to keep it after a reboot: [Start it on Rancher Desktop](#start-it-on-rancher-desktop) |
+| Windows | `setx OLLAMA_HOST 0.0.0.0` in PowerShell, then quit Ollama from the tray and start it again |
+| Linux | `sudo systemctl edit ollama`, add `[Service]` and `Environment="OLLAMA_HOST=0.0.0.0"`, then `sudo systemctl restart ollama`. Also uncomment the `extra_hosts` lines under `vco-ask` in `docker-compose.yml` |
+
+Then pull the models:
+
+```bash
+ollama pull nomic-embed-text      # embeddings (search); required
+ollama pull qwen3.8:27b-mlx       # default chat model on an Apple Silicon Mac with enough memory
+```
+
+The `-mlx` tags are built for Apple Silicon. On Windows, Linux or a smaller Mac, pull a chat model that fits your memory, for example `ollama pull qwen3:8b` or `ollama pull llama3.1:8b`, and set `ASK_CHAT_MODEL` to it in `.env` (or pick it on Ask's Settings page later). Check that a container can reach Ollama:
+
+```bash
+docker run --rm curlimages/curl -s http://host.docker.internal:11434/api/tags   # lists your models
+```
+
+With Rancher Desktop's `containerd` engine, set `ASK_OLLAMA_URL=http://host.lima.internal:11434` in `.env` instead.
+
+### 5. Build and start
+
+```bash
+docker context use rancher-desktop     # Rancher Desktop only
+docker compose up -d --build           # builds and starts both containers (first build takes several minutes)
+docker compose ps                      # both should show "healthy" after a minute
+```
+
+The commands are the same in PowerShell. With the `containerd` engine use `nerdctl compose up -d --build`. To start only one container, name it: `docker compose up -d --build vco` or `... vco-ask`. If PowerShell fails to build with `Illegal instruction`, see [Troubleshooting](#troubleshooting).
+
+Quick health checks: http://localhost:8080/api/core/health and http://localhost:8081/api/health.
+
+### 6. First steps
+
+**Dashboards (http://localhost:8080)**
+
+1. Open **Settings**. Under Connections, check the vCenter address and user, enter the password if it isn't in `.env`, and press **Save and test**. Paste `VCO_API_TOKEN_MPBUILDER` into the card's token field when asked.
+2. Open **Modules & API** and press **Run collectors now** on a module, or wait for its first scheduled run.
+3. Open a dashboard from the sidebar. If it shows "collector failed", the message says why; `docker compose logs -f vco` shows more.
+4. Optional: turn off modules you don't need, and set collection intervals on **Settings**.
+
+**vCommunity Ask (http://localhost:8081)**
+
+1. Paste `ASK_API_TOKEN` into the token bar at the top (kept in that browser only).
+2. Open **Settings** and press **Test connection**. It should show the Ollama version and fill the model lists. Pick your chat model if it isn't the default.
+3. Open **Knowledge sources**. The example `isvara` source (a public GitHub repository of vSphere metric docs) starts syncing about 5 seconds after the first start, which needs internet. Indexing about 200 files takes a few minutes. Don't want it? Turn its switch off; deleting it isn't enough, because sources from `ask.yaml` are added back on the next start unless you use your own `ask.yaml` (see [Ask configuration](#ask-configuration)).
+4. **Add source** for your own GitHub markdown repository, local folder (copied into `./ask-knowledge`) or blog.
+5. Open **New chat** and ask one of the example questions.
+
+### Try it with sample data without Docker
+
+For a quick look on a laptop with Python 3.11+ and no container engine:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp config/config.example.yaml config/config.yaml
 VCO_MOCK=1 uvicorn core.app:create_app --factory --port 8080
 ```
 
 ```powershell
-# PowerShell equivalent
+python -m venv .venv; .venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item config/config.example.yaml config/config.yaml
 $env:VCO_MOCK = '1'
 uvicorn core.app:create_app --factory --port 8080
 ```
 
-Open http://localhost:8080. A **Sample data** badge shows in the header while mock mode is on. The `host-health` module needs PowerShell 7 (`pwsh`) on the PATH; PowerCLI is only needed for live data.
-
-### Run against your lab with Docker
-
-```bash
-cp config/config.example.yaml config/config.yaml   # set your vCenter host and user
-cp .env.example .env                               # set passwords and the API token
-mkdir -p data exports extra-modules && chmod 777 exports
-docker compose up -d --build
-```
-
-Open http://localhost:8080. Passwords and tokens are never written to `config.yaml`: any key ending in `_env` names an environment variable (set in `.env`) holding the real value. After the first start you can change the vCenter address, user, password and collection intervals on the **Settings** page instead.
-
-Works with Docker Desktop and **Rancher Desktop** (set Container Engine to `dockerd (moby)`, then `docker context use rancher-desktop`). With the `containerd` engine use `nerdctl compose up -d --build` instead.
+Open http://localhost:8080. A **Sample data** badge shows in the header while mock mode is on. The `host-health` module needs PowerShell 7 (`pwsh`) on the PATH; PowerCLI is only needed for live data. To run Ask without Docker, see [Start it on Rancher Desktop](#start-it-on-rancher-desktop).
 
 ## Using the web UI
 
@@ -287,7 +408,7 @@ Ollama stays on the Mac, not in a container: Docker on macOS has no GPU passthro
    lsof -nP -iTCP:11434 -sTCP:LISTEN        # should show *:11434
    ```
    `launchctl setenv` is lost at reboot. To keep it, add a LaunchAgent (`~/Library/LaunchAgents/setenv.OLLAMA_HOST.plist` running `launchctl setenv OLLAMA_HOST 0.0.0.0` at load) or run the command again after a restart. Ollama now accepts connections from your network without a password, so keep the macOS firewall on when you are away from home.
-2. **Pull the models** (once): `ollama pull nomic-embed-text` for search; the default chat model is `qwen3.8:27b-mlx` (any installed chat model can be picked on the Settings page).
+2. **Pull the models** (once): `ollama pull nomic-embed-text` for search; the default chat model is `qwen3.8:27b-mlx` (any installed chat model can be picked on the Settings page). The `-mlx` tags are for Apple Silicon; on another machine pull a model that fits its memory, such as `qwen3:8b`, and set `ASK_CHAT_MODEL`.
 3. **Check that a container can reach Ollama:**
    ```bash
    docker run --rm curlimages/curl -s http://host.docker.internal:11434/api/tags   # lists your models
@@ -298,7 +419,9 @@ Ollama stays on the Mac, not in a container: Docker on macOS has no GPU passthro
    docker context use rancher-desktop            # container engine: dockerd (moby)
    docker compose up -d --build vco-ask          # or "docker compose up -d --build" for both containers
    ```
-5. Open http://localhost:8081. On first start the `isvara` source (from `ask.example.yaml`) syncs by itself after about 5 seconds: watch it on **Knowledge sources**. Indexing ~200 files with `nomic-embed-text` takes a few minutes.
+5. Open http://localhost:8081. On first start the `isvara` source (from `ask.example.yaml`) syncs by itself after about 5 seconds: watch it on **Knowledge sources**. Indexing ~200 files with `nomic-embed-text` takes a few minutes. This first sync clones from GitHub, so it needs internet. To skip it, turn the source's switch off (deleting it is not enough: sources from `ask.yaml` are added back on the next start unless you mount your own `ask.yaml` without them).
+
+On **Windows or Linux**, the Ollama steps differ: see [Getting started, step 4](#4-set-up-ollama-for-ask).
 
 With the `containerd` engine use `nerdctl compose up -d --build vco-ask` and set `ASK_OLLAMA_URL=http://host.lima.internal:11434` in `.env`.
 
@@ -789,15 +912,34 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 
 ## Dark sites
 
-- No runtime internet access is needed: the UI has no JavaScript frameworks or CDN links, and Swagger UI's files are vendored into the image. (`github-status` is the one module that needs internet, by design; switch it off at a dark site.)
-- Build a bundle on a connected machine: `./scripts/New-OfflineBundle.ps1 -Version 0.1.0 -Target core-pwsh`. It saves the image as a gzipped tarball with a `.sha256`.
-- vCommunity Ask at a dark site: copy the Ollama models (`~/.ollama/models`) from a connected machine, save the `vcommunity-ask` image with `docker save`, and use a **local folder** source (copy the repository into `./ask-knowledge`, or use a `git bundle`) instead of a GitHub URL. A `web-site` source works only against sites reachable from the dark site (an internal wiki or docs server). The UI loads nothing from the internet.
-- At the dark site: verify the `.sha256`, then `docker load -i vco-core-pwsh-0.1.0.tar.gz` and `docker compose up -d`.
+- No runtime internet access is needed: the UI has no JavaScript frameworks or CDN links, and Swagger UI, marked and DOMPurify are vendored into the images. (`github-status` is the one module that needs internet, by design; set `enabled: false` for it at a dark site.)
+- **On a connected machine**, build both images and save them as gzipped tarballs with `.sha256` files:
+  ```powershell
+  ./scripts/New-OfflineBundle.ps1 -Version 0.1.0 -Target core-pwsh
+  # dist/vco-core-pwsh-0.1.0.tar.gz and dist/vco-ask-0.1.0.tar.gz (add -SkipAsk for the dashboards image only)
+  ```
+- **Copy to the dark site:**
+
+| What | Why |
+| --- | --- |
+| `dist/*.tar.gz` and `*.sha256` | The two images |
+| The repository folder (or at least `docker-compose.yml`, `config/` and `.env.example`) | Compose file and configuration |
+| Ollama installer and the models (`~/.ollama/models` on macOS, `/usr/share/ollama/.ollama/models` for the Linux service, `%USERPROFILE%\.ollama\models` on Windows) | Ask's embedding and chat models |
+| Your knowledge files (a copy of the repository, or a `git bundle`) | Ask can't clone from GitHub there |
+
+- **At the dark site:**
+  1. Verify each tarball against its `.sha256`, then `docker load -i vco-core-pwsh-0.1.0.tar.gz` and `docker load -i vco-ask-0.1.0.tar.gz`.
+  2. Follow [Getting started](#getting-started) steps 2 to 4 (config, folders, Ollama). Put the knowledge files under `./ask-knowledge`.
+  3. Start with `docker compose up -d --no-build`, so Compose uses the loaded images and never tries to build.
+  4. In Ask, switch off the `isvara` source (it needs GitHub) and add a **Markdown repository** source with **Repository URL** empty and **Local folder** set to `/knowledge/<folder>`. A `web-site` source works only against sites reachable from the dark site, such as an internal wiki.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 | --- | --- |
+| `vco` won't start: "not a directory" or "Are you trying to mount a directory onto a file" for `config.yaml` | `config/config.yaml` didn't exist at the first `docker compose up`, so Docker created a folder with that name. Remove the folder, `cp config/config.example.yaml config/config.yaml`, then `docker compose up -d` |
+| Linux: "unable to open database file", "readonly database" or "Permission denied" under `/app/data` | The host folder is owned by your user, but the containers run as uid 10001 (`vco`) and 10002 (`ask`). `sudo chown -R 10001 data exports extra-modules` and `sudo chown -R 10002 ask-data`, then restart |
+| Ask: an answer fails with "model ... not found" | The chat model isn't pulled in Ollama. `ollama pull <model>`, or pick an installed model on Ask's Settings page. `qwen3.8:27b-mlx` is for Apple Silicon only; on other machines use, for example, `qwen3:8b` |
 | Scheduled export won't save: "Can't write to /app/exports/..." | The host `./exports` folder isn't writable by the container user. Run `chmod 777 exports` (or `chown 10001 exports`) |
 | "Not saved: enter a valid API token" | Enter the token from `.env` (`VCO_API_TOKEN_MPBUILDER`) in the card's API token field |
 | `failed to connect to the docker API at unix:///.../docker.sock` | The Docker CLI points at an engine that isn't running. `docker context ls`, then `docker context use rancher-desktop` (or start Docker Desktop) |
@@ -885,6 +1027,7 @@ requirements.in/.txt    direct dependencies / hashed lock file
 
 | Date | Change |
 | --- | --- |
+| 2026-11-04 | README: **Getting started** replaces Quick start (prerequisites per OS, clone, config and `.env` keys, data folders and Linux ownership, Ollama per OS and non-Mac chat models, start, first steps for both containers, bash and PowerShell); Ask notes for the first isvara sync and Windows/Linux; Dark sites copy list and `--no-build` start; three Troubleshooting rows. `New-OfflineBundle.ps1` now also saves the Ask image (`-SkipAsk` to leave it out) |
 | 2026-11-04 | README: new **Data storage (SQLite)** section (module databases, `snapshot`/`append` tables, `_core.db`); Ask sections **The Ask database**, **From prompt to answer** (diagram), **How Ollama and the chat model are used** and **Tuning the answers** (temperature, chat history, thinking). `.gitignore` now also excludes `*.db`, `*.db-wal` and `*.db-shm` |
 | 2026-11-04 | **vCommunity Ask** second container (`vco-ask`, port 8081): chat UI in the same theme answered by local Ollama via RAG; SQLite with FTS5 + sqlite-vec; `markdown-repo` source plug-in with isvara metadata and link expansion; Knowledge sources, Settings and document pages; REST API; stand-in Ollama for tests. Dashboards sidebar link to Ask (`VCO_ASK_URL`); `.dockerignore` added |
 | 2026-11-04 | Ask: new `web-site` source plug-in crawls a blog or site (sitemap, RSS/Atom feed or links; robots.txt, delay, max pages) with a **Published from/to** or **last N days** range; article text via trafilatura (added to the lock file); publish date shown on source cards and given to the model; source links name the site; date and number fields in the source form |
