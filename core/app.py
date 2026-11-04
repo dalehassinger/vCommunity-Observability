@@ -19,7 +19,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Depends, FastAPI, HTTPException, Request, Security
 from fastapi.security import APIKeyHeader
 from fastapi.openapi.docs import get_swagger_ui_html
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -35,6 +35,15 @@ from .vcenters import mirror_primary, normalize_vcenter, valid_id
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("vco")
 HERE = Path(__file__).parent
+REPO_URL = "https://github.com/dalehassinger/vCommunity-Observability"
+
+
+def find_readme() -> Path | None:
+    """README.md for the About page: /app/README.md in the image, the repo root otherwise."""
+    for p in (os.environ.get("VCO_README"), HERE.parent / "README.md"):
+        if p and Path(p).is_file():
+            return Path(p)
+    return None
 
 
 class LazyQueries:
@@ -857,6 +866,30 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
             return xs.browse(xs.make_folder(form.get("path", ""), form.get("name", "")))
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+
+    # -- About: project summary and the README ------------------------------
+    @app.get("/about", response_class=HTMLResponse, include_in_schema=False)
+    def about(request: Request):
+        import platform
+        import shutil
+        readme = find_readme()
+        mods = list(core.modules.values())
+        return templates.TemplateResponse(request, "about.html", {
+            "nav": nav(), "mock": core.cfg.mock, "active": "/about",
+            "readme": readme.read_text(encoding="utf-8") if readme else "",
+            "version": CORE_VERSION, "core_api": CORE_API, "repo": REPO_URL,
+            "modules_total": len(mods), "modules_ok": sum(1 for m in mods if m.available),
+            "dashboards": len(nav()), "pwsh": bool(shutil.which("pwsh")),
+            "python": platform.python_version(),
+        })
+
+    @app.get("/about/screenshots/{name}", include_in_schema=False)
+    def about_screenshot(name: str):
+        readme = find_readme()
+        folder = readme.parent / "docs" / "screenshots" if readme else None
+        if not folder or not re.fullmatch(r"[\w.-]+\.(png|jpe?g|gif|svg|webp)", name, re.I) or not (folder / name).is_file():
+            raise HTTPException(404, "Not found")
+        return FileResponse(folder / name)
 
     @app.get("/modules", response_class=HTMLResponse, include_in_schema=False)
     def modules_page(request: Request):

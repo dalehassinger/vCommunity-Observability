@@ -16,6 +16,9 @@ RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 COPY core ./core
 COPY modules ./modules
 COPY config/config.example.yaml ./config/config.yaml
+# The About page shows the README and its screenshots.
+COPY README.md ./README.md
+COPY docs/screenshots ./docs/screenshots
 # Make app files readable whatever permissions they had on the build machine.
 RUN chmod -R a+rX /app \
  && useradd --system --uid 10001 vco && mkdir -p /app/data /app/exports /modules && chown -R vco /app/data /app/exports /modules

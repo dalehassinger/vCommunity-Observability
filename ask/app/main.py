@@ -32,6 +32,15 @@ from .ollama import Ollama, OllamaError
 from . import rag
 
 HERE = Path(__file__).resolve().parent
+REPO_URL = "https://github.com/dalehassinger/vCommunity-Observability"
+
+
+def find_readme() -> Path | None:
+    """The project README for the About page: /app/README.md in the image, the repo root otherwise."""
+    for p in (os.environ.get("ASK_README"), HERE.parent / "README.md", HERE.parent.parent / "README.md"):
+        if p and Path(p).is_file():
+            return Path(p)
+    return None
 log = logging.getLogger("ask")
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 UPLOAD_TYPES = {".xlsx", ".csv"}
@@ -45,6 +54,17 @@ def shared_dir() -> Path:
         if p and (Path(p) / "app.css").exists():
             return Path(p)
     raise RuntimeError("Theme not found: set ASK_SHARED_DIR to the folder holding app.css")
+
+
+def interval_hours(value: Any) -> float:
+    """Re-sync interval from a form or ask.yaml: empty = 24, 0 (or less) = never, else at least 0.25."""
+    if value is None or str(value).strip() == "":
+        return 24.0
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 24.0
+    return 0.0 if v <= 0 else max(0.25, v)
 
 
 def ago(ts: float | None) -> str:
@@ -103,7 +123,8 @@ def create_app() -> FastAPI:
             if not s["enabled"] or indexer.is_running(s["name"]):
                 continue
             last = s.get("last_end") or 0
-            if s["status"] == "never" or now - last > s["interval_hours"] * 3600:
+            # 0 hours = never re-sync on a schedule (only the first sync and "Sync now").
+            if s["status"] == "never" or (s["interval_hours"] > 0 and now - last > s["interval_hours"] * 3600):
                 indexer.start(s["name"])
 
     @asynccontextmanager
@@ -224,6 +245,22 @@ def create_app() -> FastAPI:
             linked[t] = [{"doc_id": i, "row": found[i]["id"] if i in found else None,
                           "title": found[i]["title"] if i in found else i} for i in ids]
         return page(request, "doc.html", "/sources", doc=d, body=body, linked=linked)
+
+    @app.get("/about", response_class=HTMLResponse, include_in_schema=False)
+    def about(request: Request):
+        import platform
+        readme = find_readme()
+        return page(request, "about.html", "/about", repo=REPO_URL, counts=db.stats(),
+                    readme=readme.read_text(encoding="utf-8") if readme else "",
+                    python=platform.python_version())
+
+    @app.get("/about/screenshots/{name}", include_in_schema=False)
+    def about_screenshot(name: str):
+        readme = find_readme()
+        folder = readme.parent / "docs" / "screenshots" if readme else None
+        if not folder or not re.fullmatch(r"[\w.-]+\.(png|jpe?g|gif|svg|webp)", name, re.I) or not (folder / name).is_file():
+            raise HTTPException(404, "Not found")
+        return FileResponse(folder / name)
 
     @app.get("/settings", response_class=HTMLResponse, include_in_schema=False)
     def settings_page(request: Request):
@@ -348,7 +385,7 @@ def create_app() -> FastAPI:
         is_new = db.get_source(name) is None
         db.upsert_source({"name": name, "plugin": plugin.name, "title": body.get("title") or name,
                           "enabled": bool(body.get("enabled", True)),
-                          "interval_hours": max(0.25, float(body.get("interval_hours") or 24)),
+                          "interval_hours": interval_hours(body.get("interval_hours")),
                           "options": options, "examples": examples[:6], "origin": "ui"})
         if body.get("sync_now", is_new):
             indexer.start(name, full=True)

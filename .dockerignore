@@ -7,7 +7,9 @@ extra-modules/
 ask-data/
 ask-knowledge/
 ask-sources/
-docs/
+# docs/ is left out except the screenshots, which the About pages show.
+docs/*
+!docs/screenshots/
 **/__pycache__/
 **/*.pyc
 .venv/

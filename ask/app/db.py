@@ -125,7 +125,7 @@ class DB:
                            options=excluded.options, examples=excluded.examples""",
                       {"name": src["name"], "plugin": src["plugin"], "title": src.get("title") or src["name"],
                        "enabled": 1 if src.get("enabled", True) else 0,
-                       "interval_hours": float(src.get("interval_hours") or 24),
+                       "interval_hours": (lambda v: 24.0 if v in (None, "") else max(0.0, float(v)))(src.get("interval_hours")),
                        "options": json.dumps(src.get("options") or {}),
                        "examples": json.dumps(src.get("examples") or []),
                        "origin": src.get("origin", "ui"), "position": pos})

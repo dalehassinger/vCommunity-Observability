@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}About · vCommunity-Observability{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/about.css">{% endblock %}
+{% block body %}
+<div class="card about-hero">
+  <div>
+    <h1>vCommunity <b>Observability</b> <span class="badge badge-info">v{{ version }}</span></h1>
+    <p>An open-source framework that collects data from vCenter and VCF Operations, stores it locally in SQLite, and serves it as dashboards styled after VCF Operations and as REST endpoints for VCF Operations Management Pack Builder. It works offline, so it suits dark sites. Collector modules are plug-ins written in Python or PowerShell.</p>
+  </div>
+  <div class="about-links">
+    <a class="btn btn-outline" href="{{ repo }}" target="_blank" rel="noopener">GitHub</a>
+    <a class="btn btn-outline" href="https://www.vcrocs.info/" target="_blank" rel="noopener">vcrocs.info</a>
+    <a class="btn btn-outline" href="/docs" target="_blank" rel="noopener">API docs</a>
+  </div>
+</div>
+<div class="about-facts">
+  <div class="about-fact"><div class="k">Version</div><div class="v">{{ version }} <small>core API {{ core_api }}</small></div></div>
+  <div class="about-fact {{ 'ok' if modules_ok == modules_total else 'warn' }}"><div class="k">Modules available</div><div class="v">{{ modules_ok }} <small>of {{ modules_total }}</small></div></div>
+  <div class="about-fact"><div class="k">Dashboards</div><div class="v">{{ dashboards }}</div></div>
+  <div class="about-fact {{ 'ok' if pwsh else '' }}"><div class="k">PowerShell</div><div class="v">{{ 'Installed' if pwsh else 'Not in this image' }}</div></div>
+  <div class="about-fact {{ 'warn' if mock else 'ok' }}"><div class="k">Data</div><div class="v">{{ 'Sample data' if mock else 'Live' }}</div></div>
+  <div class="about-fact"><div class="k">Python</div><div class="v">{{ python }}</div></div>
+</div>
+<div class="about-layout">
+  <aside class="card about-side">
+    <input id="about-filter" type="search" placeholder="Filter sections" aria-label="Filter sections">
+    <div class="k">On this page</div>
+    <nav id="about-toc"></nav>
+  </aside>
+  <div class="card about-md" id="about-body"></div>
+</div>
+<script type="application/json" id="about-md">{{ readme | tojson }}</script>
+<script>window.ABOUT = { repo: {{ repo | tojson }}, screenshots: '/about/screenshots/' };</script>
+<script src="/static/vendor/marked/marked.umd.js"></script>
+<script src="/static/vendor/dompurify/purify.min.js"></script>
+<script src="/static/about.js"></script>
+{% endblock %}

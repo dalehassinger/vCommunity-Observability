@@ -55,8 +55,8 @@
 </div>
 {% endblock %}
 {% block scripts %}
-<script src="/static/vendor/marked/marked.umd.js"></script>
-<script src="/static/vendor/dompurify/purify.min.js"></script>
+<script src="/shared/vendor/marked/marked.umd.js"></script>
+<script src="/shared/vendor/dompurify/purify.min.js"></script>
 <script>
   window.ASK = {
     chatId: {{ (chat.id if chat else "") | tojson }},

@@ -45,7 +45,7 @@ for m in mods["items"]:
         assert r.status_code == 200, (ep, r.text)
         print(f"  {ep}: {r.json()['count']} items")
 inv = "/dash/vcenter-inventory/inventory"
-pages = ["/", "/modules", "/docs", "/dash/datastore-capacity/overview",
+pages = ["/", "/modules", "/docs", "/about", "/dash/datastore-capacity/overview",
          inv, inv + "?type=vcenter&tab=hosts", inv + "?type=vcenter&tab=vms",
          inv + "?type=cluster&name=CL-01", inv + "?type=cluster&name=CL-02&tab=hosts", inv + "?type=cluster&name=CL-01&tab=vms",
          inv + "?type=host&name=esx9-01.vcrocs.local", inv + "?type=host&name=esx9-01.vcrocs.local&tab=vms",

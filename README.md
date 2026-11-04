@@ -300,6 +300,12 @@ When API tokens are configured, every save on this page needs one of them (there
 
 `/docs` is Swagger UI (vendored, works offline) for every endpoint. `/openapi.json` is the machine-readable spec.
 
+### About
+
+**About** (last item in the sidebar, `/about`) shows what the project is, its version, how many modules are available, the number of dashboards, whether PowerShell is in the image, live or sample data, and the Python version, with links to GitHub, vcrocs.info and the API docs. Below that is this README, rendered in the app: an **On this page** list (h2 and h3 headings, the current section highlighted), a **Filter sections** box that hides sections that don't mention the text, working `#` links, screenshots served from the image (`/about/screenshots/<file>`) and links to repository files that open on GitHub. GitHub callouts such as the development warning show as alert boxes.
+
+The README and `docs/screenshots/` are copied into both images at build time, so the page always matches the code you built, works offline, and needs no change when the README changes (rebuild to pick up a new README). Rendering is done in the browser by the vendored marked and DOMPurify (`core/static/vendor/`), with `core/static/about.js` and `about.css` shared by both containers. Ask has the same page, with its own version, models and index counts at the top.
+
 ## Modules included
 
 | Module | Language | What it collects and shows | API endpoints (`/api/<module>...`) |
@@ -444,6 +450,7 @@ ASK_OLLAMA_URL=http://127.0.0.1:11434 uvicorn app.main:create_app --factory --po
 - While an answer streams the page follows it to the bottom. Scroll up to read something and it stops following; scroll back to the bottom and it follows again.
 - The footer shows the model, the time and tokens per second, and **Copy answer**. With **Show model thinking** on (Settings), thinking models show their reasoning above the answer.
 - Chats are saved: **Recent chats** in the sidebar reopens them, **Delete chat** removes one. Follow-up questions see the last turns (Settings → Chat history).
+- **About** in the sidebar shows Ask's version, chat and embedding models, sources, documents, chunks and chats, then the full project README (the same page as the dashboards' [About](#about)).
 
 ### Knowledge sources page
 
@@ -452,8 +459,8 @@ ASK_OLLAMA_URL=http://127.0.0.1:11434 uvicorn app.main:create_app --factory --po
 One card per source with a status ring (green OK, blue syncing, red error, amber new), document and chunk counts, repository and branch (or site and date range), the commit it indexed (or page count and newest post), last sync, re-sync interval and progress while it runs.
 
 - **Sync now** pulls and re-embeds what changed. **Re-index all** re-embeds every file. **Documents** lists every indexed file (with a filter), and each opens in the document view. **Edit** changes options. **Delete** removes the source and its index (not the repository itself). The switch turns a source off without deleting it.
-- **Add source** opens a form built from the chosen plug-in's options. For **Markdown repository**: repository URL and branch (or a local folder), include and exclude globs, metadata format, link base and a token env var for private repositories. For **Web site (blog crawler)**: site URL, where to find pages, URL include/exclude globs, **Published from / Published to** dates or **last N days**, what to do with undated pages, max pages and delay. Every source also has a name, title, re-sync interval and up to six example questions.
-- Sources are re-synced automatically when their interval has passed (checked every 10 minutes); the plug-in reports "no changes" cheaply when the commit hasn't moved.
+- **Add source** opens a form built from the chosen plug-in's options. For **Markdown repository**: repository URL and branch (or a local folder), include and exclude globs, metadata format, link base and a token env var for private repositories. For **Web site (blog crawler)**: site URL, where to find pages, URL include/exclude globs, **Published from / Published to** dates or **last N days**, what to do with undated pages, max pages and delay. Every source also has a name, title, re-sync interval (**Re-sync every (hours)**, `0` = never) and up to six example questions.
+- Sources are re-synced automatically when their interval has passed (checked every 10 minutes); the plug-in reports "no changes" cheaply when the commit hasn't moved. Set **Re-sync every (hours)** to `0` to never re-sync on a schedule: the card shows "never (Sync now only)", the source keeps its index, and it changes only when you press **Sync now** or **Re-index all**. A new source still gets its first sync. The smallest other value is 0.25 (15 minutes).
 - Sources from `ask.yaml` are seeded into the database on first start (badge **ask.yaml**); after that the page owns them.
 
 ![Document view](docs/screenshots/ask-document.png)
@@ -617,7 +624,7 @@ Qwen 3.x and some other models can reason step by step before they answer. The *
 
 The `spreadsheet` source plug-in reads `.xlsx` and `.csv` files, for example an RVTools export or the dashboards' **DBH Insights** XLSX export. It can read them in two ways (the **Files from** option):
 
-- **folder (default).** A folder inside the container. Compose mounts the dashboards' `./exports` folder read-only at `/exports`, so a scheduled DBH Insights export is picked up automatically: Ask re-checks the folder on the source's **Re-sync every** interval (as low as 0.25 h, 15 minutes) and re-indexes only when a matching file is new or changed (name, size and modified time).
+- **folder (default).** A folder inside the container. Compose mounts the dashboards' `./exports` folder read-only at `/exports`, so a scheduled DBH Insights export is picked up automatically: Ask re-checks the folder on the source's **Re-sync every** interval (as low as 0.25 h, 15 minutes) and re-indexes only when a matching file is new or changed (name, size and modified time). With `0` (never) a new export is not picked up until you press **Sync now**.
 - **upload.** Drag a file onto the source's card on the **Knowledge sources** page (or click **choose a file**). Ask saves it under `data/uploads/<source>/` and re-indexes. By default a new upload replaces the earlier files (**When a file is uploaded again** = `replace`); `keep` keeps them all. **Remove** deletes an uploaded file. Uploading needs the API token when `ASK_API_TOKEN` is set. Only `.xlsx` and `.csv` are accepted, up to `ASK_UPLOAD_MAX_MB` (default 50).
 
 **Add a spreadsheet source.** On **Knowledge sources** press **Add source**, pick **Spreadsheet (xlsx / csv)**, keep the defaults to read the newest `dbh-insights-*.xlsx` from `/exports` (or set **Files from** to `upload`), and save. Spreadsheet sources are not created automatically. If you have both a spreadsheet source and other sources, pick the spreadsheet source in the chat's sources menu when you ask data questions, so Ask knows which tables you mean.
@@ -666,7 +673,7 @@ Tips for good data answers:
 | `sources_dirs` | Folders scanned for source plug-ins; later wins, so a plug-in in `/sources` (`./ask-sources`) overrides the built-in one |
 | `settings.*` | Defaults for every Settings page value (table above) |
 | `api.tokens` | `token_env` names the variable holding the token (`ASK_API_TOKEN`) |
-| `sources` | Sources seeded on first start: `name`, `plugin`, `title`, `interval_hours`, `options`, `examples` |
+| `sources` | Sources seeded on first start: `name`, `plugin`, `title`, `interval_hours` (default 24, `0` = never re-sync), `options`, `examples` |
 
 | Environment variable | Meaning |
 | --- | --- |
@@ -749,10 +756,10 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8081/api/ask -Headers $h -C
 
 ### Ask image
 
-- `ask/Dockerfile`, built from the repository root (it copies `core/static/app.css` and the vendored Swagger UI, so a theme fix lands in both containers). Python 3.13 slim + git, native arm64 on Apple Silicon, no PowerShell.
+- `ask/Dockerfile`, built from the repository root (it copies `core/static/app.css`, the About page files, the vendored front-end libraries and the README with its screenshots, so a theme or library fix lands in both containers). Python 3.13 slim + git, native arm64 on Apple Silicon, no PowerShell.
 - Runs as non-root user `ask` (uid 10002) on port 8081, health check on `/api/health`.
 - Volumes: `./ask-data` → `/app/data` (index, chats, clones), `./ask-knowledge` → `/knowledge` (read-only, local folders), `./ask-sources` → `/sources` (extra or patched plug-ins), `./exports` → `/exports` (read-only, the dashboards' exports for `spreadsheet` sources).
-- Front-end libraries are vendored in `ask/app/static/vendor/` with their licences: marked 18.1.3 (MIT) and DOMPurify 3.4.17 (Apache-2.0/MPL-2.0). Every answer and document is sanitised by DOMPurify before display.
+- Front-end libraries are vendored once, in `core/static/vendor/`, with their licences: Swagger UI, marked 18.1.3 (MIT) and DOMPurify 3.4.17 (Apache-2.0/MPL-2.0). The dashboards serve them at `/static/vendor/`, Ask at `/shared/vendor/`. Every answer, document and About page is sanitised by DOMPurify before display.
 - On a Linux Docker host, uncomment `extra_hosts: host.docker.internal:host-gateway` in `docker-compose.yml`. Leave it commented on Rancher Desktop and Docker Desktop: it replaces their own mapping to the Mac, and Ollama then refuses the connection.
 
 ## Configuration reference
@@ -959,7 +966,7 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 - PowerShell is pinned with `PWSH_VERSION`, PowerCLI optionally with `POWERCLI_VERSION`.
 - A single module is patched by dropping its folder into `/modules` (see above).
 - SQLite data lives on the `/app/data` volume and survives image upgrades.
-- vCommunity Ask has its own lock file: `cd ask && uv pip compile --universal --generate-hashes --python-version 3.13 --upgrade-package fastapi requirements.in -o requirements.txt`, then `docker compose up -d --build vco-ask`. Vendored JavaScript (marked, DOMPurify) is replaced by dropping the new file into `ask/app/static/vendor/<lib>/` and updating its `VERSION`. A source plug-in is patched by dropping its folder into `./ask-sources`.
+- vCommunity Ask has its own lock file: `cd ask && uv pip compile --universal --generate-hashes --python-version 3.13 --upgrade-package fastapi requirements.in -o requirements.txt`, then `docker compose up -d --build vco-ask`. Vendored JavaScript (marked, DOMPurify, Swagger UI) is replaced by dropping the new file into `core/static/vendor/<lib>/` and updating its `VERSION`; rebuild both images. A source plug-in is patched by dropping its folder into `./ask-sources`.
 
 ## Dark sites
 
@@ -1011,6 +1018,7 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 | Ask: upload refused | Only `.xlsx` and `.csv` (an `.xlsx` must be a real Excel file, not a renamed one), up to `ASK_UPLOAD_MAX_MB` (default 50), and the API token must be entered when `ASK_API_TOKEN` is set |
 | Ask: "The sources do not contain the individual rows" after a spreadsheet import | The question went through search, which only finds a few matching rows plus the sheet overview. Ask it as a data question ("show all hosts from the vHost sheet", "how many ...") with the spreadsheet source selected; the answer then has a **Query and result** card. Sheets with more rows than **Max searchable rows per sheet** (default 5000, for example a large vInfo) are not searchable at all, only queryable |
 | Ask: a counting question got a search answer instead of numbers | The question didn't use a data word (*how many*, *total*, *top 10*, *per cluster* ...), no spreadsheet source was selected, **Data questions** is off, or the model's query failed the checks (the stats show `data_error`). Rephrase, or pick the spreadsheet source in the sources menu |
+| About page says "README.md was not found in this image" or shows no screenshots | The image was built from an older Dockerfile or `.dockerignore`. Rebuild with `docker compose up -d --build` |
 | Changes to modules or templates don't show | Built-in modules are in the image: `docker compose up -d --build` |
 
 ## Testing
@@ -1043,8 +1051,8 @@ core/                   FastAPI app, scheduler, module loader, runner, storage
   modules.py            module.yaml parsing and validation
   runner.py             runs collectors and exports as subprocesses
   storage.py            SQLite: one db per module + _core.db
-  templates/            base layout, home, dashboards, Modules, Settings
-  static/               CSS and vendored Swagger UI
+  templates/            base layout, home, dashboards, Modules, Settings, About
+  static/               app.css, about.css/about.js (About page, shared with Ask), vendored Swagger UI, marked, DOMPurify
 modules/                built-in modules (one folder each)
 config/                 config.example.yaml
 scripts/                smoke_test.py, New-OfflineBundle.ps1
@@ -1058,7 +1066,7 @@ ask/                    vCommunity Ask (second container)
   app/ollama.py         Ollama client (version, models, embed, chat stream)
   app/config.py         ask.yaml + env + defaults (and the default system prompt)
   app/templates/        chat, sources, documents, settings pages
-  app/static/           ask.css, ask.js, admin.js, vendored marked + DOMPurify
+  app/static/           ask.css, ask.js, admin.js (marked and DOMPurify come from core/static/vendor)
   sources/markdown-repo/  built-in source plug-in (Git repo or folder of markdown)
   sources/web-site/     built-in source plug-in (blog/site crawler: sitemap, feed, links, date range)
   sources/spreadsheet/  built-in source plug-in (xlsx/csv from /exports or uploads, sheets into tables.db)
@@ -1088,6 +1096,8 @@ requirements.in/.txt    direct dependencies / hashed lock file
 
 | Date | Change |
 | --- | --- |
+| 2026-11-04 | Ask: **Re-sync every (hours)** accepts `0` = never re-sync on a schedule (first sync and **Sync now** only); source cards show "never (Sync now only)"; `interval_hours: 0` works in `ask.yaml` |
+| 2026-11-04 | **About** page in both containers (sidebar, `/about`): project summary and live facts (version, modules, dashboards, PowerShell, data mode; Ask: models and index counts) above the README rendered in the app with an **On this page** list, section filter, working anchors, screenshots and GitHub links. README and `docs/screenshots/` are now copied into both images (`.dockerignore` keeps the screenshots); marked and DOMPurify moved from `ask/app/static/vendor/` to `core/static/vendor/` so both containers use one copy; smoke test checks `/about` |
 | 2026-11-04 | README: development warning added at the top |
 | 2026-11-04 | Ask data questions: listing questions ("show all hosts", "list the VMs", "which datastores") and questions naming a sheet (one typo allowed) now use a SQL query instead of search; the named sheet is always given to the model; the result card shows every returned row (up to 500) with **Download CSV**; the model is told the full table is shown so it summarizes long lists |
 | 2026-11-04 | Ask: new `spreadsheet` source plug-in reads `.xlsx`/`.csv` (RVTools, DBH Insights) from the dashboards' `./exports` folder (mounted read-only at `/exports`, re-indexed when a new export lands) or from uploads on the Knowledge sources page (`ASK_UPLOAD_MAX_MB`); one document per row plus cluster and sheet summaries; every sheet loaded into SQLite for **data questions**, where the model writes one checked, read-only SELECT and the chat shows the query and result. New **Data questions** setting, `ASK_SOURCE_UPLOAD_DIR` for plug-ins, openpyxl added to the lock file, `make_sample_rvtools.py` test workbook |

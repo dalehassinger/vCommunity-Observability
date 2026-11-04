@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}About · vCommunity Ask{% endblock %}
+{% block head %}<link rel="stylesheet" href="/shared/about.css">{% endblock %}
+{% block body %}
+<div class="card about-hero">
+  <div>
+    <h1>vCommunity <b>Ask</b> <span class="badge badge-info">v{{ version }}</span></h1>
+    <p>A chat prompt answered by your local Ollama, only from the knowledge sources you choose: markdown in a Git repository, the posts of a web site or blog, or spreadsheets such as RVTools and the DBH Insights export. Nothing leaves your machine. It is the second container of vCommunity-Observability, and the full project README is below.</p>
+  </div>
+  <div class="about-links">
+    <a class="btn btn-outline" href="#vcommunity-ask-local-ai-chat">Ask docs</a>
+    <a class="btn btn-outline" href="{{ repo }}" target="_blank" rel="noopener">GitHub</a>
+    <a class="btn btn-outline" href="https://www.vcrocs.info/" target="_blank" rel="noopener">vcrocs.info</a>
+  </div>
+</div>
+<div class="about-facts">
+  <div class="about-fact"><div class="k">Version</div><div class="v">{{ version }}</div></div>
+  <div class="about-fact"><div class="k">Chat model</div><div class="v" style="font-size:15px">{{ settings.chat_model }}</div></div>
+  <div class="about-fact"><div class="k">Embedding model</div><div class="v" style="font-size:15px">{{ settings.embed_model }}</div></div>
+  <div class="about-fact {{ 'ok' if counts.chunks else 'warn' }}"><div class="k">Knowledge sources</div><div class="v">{{ sources | length }} <small>{{ counts.documents }} documents · {{ counts.chunks }} chunks</small></div></div>
+  <div class="about-fact"><div class="k">Chats</div><div class="v">{{ counts.chats }}</div></div>
+  <div class="about-fact"><div class="k">Python</div><div class="v">{{ python }}</div></div>
+</div>
+<div class="about-layout">
+  <aside class="card about-side">
+    <input id="about-filter" type="search" placeholder="Filter sections" aria-label="Filter sections">
+    <div class="k">On this page</div>
+    <nav id="about-toc"></nav>
+  </aside>
+  <div class="card about-md" id="about-body"></div>
+</div>
+<script type="application/json" id="about-md">{{ readme | tojson }}</script>
+{% endblock %}
+{% block scripts %}
+<script>window.ABOUT = { repo: {{ repo | tojson }}, screenshots: '/about/screenshots/' };</script>
+<script src="/shared/vendor/marked/marked.umd.js"></script>
+<script src="/shared/vendor/dompurify/purify.min.js"></script>
+<script src="/shared/about.js"></script>
+{% endblock %}
