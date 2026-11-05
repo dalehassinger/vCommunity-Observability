@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Reports · vCommunity Ask{% endblock %}
+{% block body %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb">Knowledge</div>
+    <h1>Reports</h1>
+    <p class="subtle">HTML reports made in the chat. Ask for one with words such as <i>"HTML report of VMs by OS from the vInfo sheet"</i>
+      or <i>"Dashboard report of the vInfo sheet"</i>, with a spreadsheet source selected. Each report is one self-contained
+      <code>.html</code> file (data, charts and styles inside), so it opens offline and can be emailed. Saved in <code>data/reports/</code>.</p>
+  </div>
+</div>
+{% include "_token.html" %}
+<div class="card">
+  {% if reports %}
+  <table class="datagrid">
+    <thead><tr><th>Report</th><th>Type</th><th>Source</th><th>Created</th><th class="num">Size</th><th></th></tr></thead>
+    <tbody>
+    {% for r in reports %}
+      <tr>
+        <td><a href="/reports/{{ r.id }}.html" target="_blank" rel="noopener">{{ r.title }}</a>
+          {% if r.question %}<div class="subtle" style="font-size:12px">“{{ r.question | truncate(120) }}”</div>{% endif %}</td>
+        <td><span class="badge {{ 'badge-info' if r.kind == 'dashboard' else '' }}" style="margin:0">{{ r.kind | capitalize }}</span></td>
+        <td>{{ r.source or '' }}</td>
+        <td>{{ r.created | ago }}</td>
+        <td class="num">{{ r.size_kb }} KB</td>
+        <td style="white-space:nowrap">
+          <a class="link-btn" href="/reports/{{ r.id }}.html" target="_blank" rel="noopener">Open</a> ·
+          <a class="link-btn" href="/reports/{{ r.id }}.html?download=1">Download</a>
+          {% if r.chat_id %} · <a class="link-btn" href="/chat/{{ r.chat_id }}">Chat</a>{% endif %} ·
+          <button class="link-btn" type="button" data-rdel="{{ r.id }}" data-title="{{ r.title }}">Delete</button>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="form-msg" id="r-msg" style="padding:8px 16px"></div>
+  {% else %}
+  <div class="card-block subtle">No reports yet. Pick a spreadsheet source in the chat and ask for an HTML report or a dashboard report.</div>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/admin.js?v={{ asset_v }}"></script>
+<script>
+  document.querySelectorAll('[data-rdel]').forEach(function (b) {
+    b.onclick = async function () {
+      if (!confirm('Delete the report "' + b.dataset.title + '"?')) return;
+      var m = document.getElementById('r-msg');
+      try { await AskAdmin.post('/ui/reports/' + b.dataset.rdel + '/delete', {}); location.reload(); }
+      catch (e) { m.textContent = e.message; m.className = 'form-msg bad'; }
+    };
+  });
+</script>
+{% endblock %}

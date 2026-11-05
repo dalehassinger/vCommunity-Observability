@@ -20,6 +20,9 @@ from urllib.parse import quote
 from . import data
 from .db import DB
 from .indexer import embed_prefixes
+
+log = __import__("logging").getLogger("ask.rag")
+REPORTS = None   # app.reports.Reports, set by create_app; makes HTML reports for report questions
 from .ollama import Ollama, OllamaError
 
 RRF_K = 60
@@ -161,6 +164,15 @@ def build_data_messages(cfg: dict[str, Any], res: dict[str, Any], question: str,
         for m in history[-turns * 2:]:
             if m["role"] in ("user", "assistant") and m["content"]:
                 msgs.append({"role": m["role"], "content": m["content"]})
+    if res.get("panels"):
+        block = (f"[1] id: dashboard | spreadsheet source \"{res['source_title']}\" (tables: {', '.join(res['tables'])})\n"
+                 "These dashboard panels were each computed with an SQL query on the complete data, so the numbers are exact:\n\n"
+                 f"{data.panels_markdown(res)}\n\n"
+                 "The reader gets these panels as an HTML dashboard report (KPI cards, charts and tables) under your answer. "
+                 "Write a short executive summary of it: 3 to 6 bullet points with the most important numbers and what stands "
+                 "out, citing [1]. Do not repeat every table, do not draw charts in text and do not say you cannot make reports.")
+        msgs.append({"role": "user", "content": f"Sources:\n\n{block}\n\n=====\n\nRequest: {question}"})
+        return msgs
     block = (f"[1] id: data query | spreadsheet source \"{res['source_title']}\" (tables: {', '.join(res['tables'])})\n"
              f"This SQL query was run on the complete data, so its result is exact:\n```sql\n{res['sql']}\n```\n"
              f"Result:\n{data.result_markdown(res)}\n\n"
@@ -168,7 +180,13 @@ def build_data_messages(cfg: dict[str, Any], res: dict[str, Any], question: str,
              "does not answer the question (wrong columns, no rows), say so plainly. The complete result table "
              f"({len(res['rows'])}{'+' if res['truncated'] else ''} rows) is shown to the reader right under your answer, so do not "
              "copy long tables: summarize them (how many rows, notable values) and never say rows are missing "
-             "because only some are listed here.")
+             "because only some are listed here."
+             + (f" A {res['chart']['type']} chart of this result ({res['chart']['title']}) is also drawn for the reader "
+                "under your answer, so do not draw charts in text or say you cannot make charts; describe what it shows."
+                if res.get("chart") else "")
+             + (" The reader also gets this result as an HTML report (KPI cards, chart and table) under your answer: write "
+                "a short summary for it (what was counted, the totals, what stands out) and do not say you cannot make reports."
+                if res.get("report") else ""))
     msgs.append({"role": "user", "content": f"Sources:\n\n{block}\n\n=====\n\nQuestion: {question}"})
     return msgs
 
@@ -191,7 +209,16 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
         res = None
         srcs = data.tables_for(db, sources) if cfg.get("data_questions", True) else []
         if srcs and data.is_data_question(question, srcs):
-            res = data.query(cfg, data.pick_source(srcs, question), question)
+            rkind = data.report_kind(question)
+            src = data.pick_source(srcs, question)
+            if rkind == "dashboard":
+                res = data.dashboard(cfg, src, question)
+            else:
+                res = data.query(cfg, src, question)
+                if rkind and not res.get("error"):
+                    res["chart"] = res.get("chart") or data.auto_chart(res["columns"], res["rows"])
+            if not res.get("error"):
+                res["report"] = rkind
             if res.get("error"):
                 stats["data_error"] = res["error"]
                 res = None
@@ -221,6 +248,17 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
                 stats = {**stats, "tokens": ev, "tok_per_s": round(ev / (ed / 1e9), 1) if ed else None,
                          "prompt_tokens": obj.get("prompt_eval_count"),
                          "seconds": round(time.time() - t0, 1)}
+        if res and res.get("report") and REPORTS is not None:
+            # The HTML report: built from the results (and the summary just written), saved,
+            # and linked from the card.
+            try:
+                meta = REPORTS.create(res, question, content, model, chat_id)
+                cards[0]["report"] = {"id": meta["id"], "title": meta["title"], "kind": meta["kind"],
+                                      "url": f"/reports/{meta['id']}.html"}
+                yield sse("report", cards[0]["report"])
+            except Exception as e:  # a failed report must not lose the answer
+                log.exception("report failed")
+                stats["report_error"] = str(e)
         yield sse("done", {"stats": stats, "model": model})
     except OllamaError as e:
         content = content or ""
@@ -243,6 +281,8 @@ def answer(db: DB, cfg: dict[str, Any], chat_id: str, question: str, sources: li
             text += payload
         elif event.endswith("meta"):
             cards = payload["sources"]
+        elif event.endswith("report") and cards:
+            cards[0]["report"] = payload
         elif event.endswith("done"):
             stats = payload["stats"]
         elif event.endswith("error"):

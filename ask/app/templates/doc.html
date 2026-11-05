@@ -38,8 +38,8 @@
 </div>
 {% endblock %}
 {% block scripts %}
-<script src="/shared/vendor/marked/marked.umd.js"></script>
-<script src="/shared/vendor/dompurify/purify.min.js"></script>
+<script src="/shared/vendor/marked/marked.umd.js?v={{ asset_v }}"></script>
+<script src="/shared/vendor/dompurify/purify.min.js?v={{ asset_v }}"></script>
 <script>
   document.getElementById('doc-body').innerHTML = DOMPurify.sanitize(marked.parse({{ body | tojson }}));
 </script>

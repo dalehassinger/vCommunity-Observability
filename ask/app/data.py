@@ -8,6 +8,7 @@ SQL and the result table, so a reader can check the numbers."""
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import time
@@ -34,6 +35,17 @@ LIST_WORDS = re.compile(
     rf"\b((show|list|display|give|get|print|export|find|return)( me)?( all| every| the| each)?( of)?( the| my)? ([a-z0-9_-]+ )?{ENTITY}|"
     rf"(all|every|each) (the |my |of the )?([a-z0-9_-]+ )?{ENTITY}|(which|what) ([a-z0-9_-]+ )?{ENTITY}|"
     r"(sheet|table|tab|column|spreadsheet|workbook|xlsx|rvtools)s?)\b", re.I)
+# Chart requests: "pie chart of VMs per cluster", "donut of datastores by type", "bar graph ...".
+CHART_WORDS = re.compile(r"\b(pie|donut|doughnut|bar|column|line|area)?\s*(chart|graph|plot|diagram)s?\b|\b(pie|donut|doughnut)\b|"
+                         r"\b(chart|graph|plot|visuali[sz]e)\b", re.I)
+CHART_TYPES = ("pie", "donut", "bar", "line")
+MAX_SLICES = 12           # pie and donut: the largest slices, the rest becomes "Other"
+MAX_CATEGORIES = 50       # bar and line: categories drawn
+MAX_SERIES = 4            # bar and line: numeric columns drawn
+# HTML reports: "HTML report of VMs by OS", "dashboard report of the vInfo sheet".
+REPORT_WORDS = re.compile(r"\b(html|web)\s+(page|report|dashboard)\b|\breports?\b|\bdashboards?\b", re.I)
+MAX_PANELS = 8            # dashboard: panels kept (KPIs count too)
+PANEL_ROWS = 200          # dashboard: rows kept per panel
 FORBIDDEN = re.compile(r"\b(attach|detach|pragma|insert|update|delete|drop|create|alter|replace|vacuum|reindex|"
                        r"analyze|load_extension|readfile|writefile|begin|commit|rollback|savepoint)\b", re.I)
 
@@ -75,9 +87,30 @@ def named_tables(src: dict[str, Any], question: str) -> set[str]:
     return out
 
 
+def chart_type(question: str) -> str | None:
+    """The chart the question asks for (pie, donut, bar or line), or None."""
+    if not CHART_WORDS.search(question):
+        return None
+    q = question.lower()
+    if re.search(r"\b(donut|doughnut|ring)\b", q):
+        return "donut"
+    if re.search(r"\bpie\b", q):
+        return "pie"
+    if re.search(r"\b(line|area|trend|over time|timeline)\b", q):
+        return "line"
+    return "bar"
+
+
+def report_kind(question: str) -> str | None:
+    """'dashboard' (several panels), 'report' (one query as a report page) or None."""
+    if not REPORT_WORDS.search(question):
+        return None
+    return "dashboard" if re.search(r"\bdashboards?\b", question, re.I) else "report"
+
+
 def is_data_question(question: str, srcs: list[dict[str, Any]] | None = None) -> bool:
-    """Counting, totals, top-N and listing questions, or any question that names a sheet."""
-    if DATA_WORDS.search(question) or LIST_WORDS.search(question):
+    """Counting, totals, top-N, listing, chart and report questions, or any question that names a sheet."""
+    if DATA_WORDS.search(question) or LIST_WORDS.search(question) or chart_type(question) or report_kind(question):
         return True
     return any(named_tables(s, question) for s in srcs or [])
 
@@ -91,7 +124,8 @@ def tables_for(db: DB, sources: list[str] | None) -> list[dict[str, Any]]:
         st = db.get_state(s["name"])["state"]
         path = st.get("tables_db")
         if path and st.get("tables") and Path(path).exists():
-            out.append({"source": s["name"], "title": s["title"], "path": path, "tables": st["tables"]})
+            out.append({"source": s["name"], "title": s["title"], "path": path, "tables": st["tables"],
+                        "files": st.get("files") or []})
     return out
 
 
@@ -188,7 +222,14 @@ def query(cfg: dict[str, Any], src: dict[str, Any], question: str) -> dict[str, 
     result, or {"error": ...} when no working query came back."""
     tables = pick_tables(src, question)
     allowed = {t["table"] for t in src["tables"]}  # every table of this source may be read
-    msgs = [{"role": "system", "content": SQL_SYSTEM},
+    system = SQL_SYSTEM
+    kind = chart_type(question)
+    if kind:
+        system += (f"\n- The result will be drawn as a {kind} chart: return the category (label) column first, then "
+                   + ("ONE numeric value column" if kind in ("pie", "donut") else "one to four numeric value columns")
+                   + ", one row per category (GROUP BY it), ordered by "
+                   + ("the category (time order)." if kind == "line" else "the value, largest first."))
+    msgs = [{"role": "system", "content": system},
             {"role": "user", "content": f"Tables:\n\n{describe(tables)}\n\nQuestion: {question}"}]
     ollama = Ollama(cfg["ollama_url"])
     err = ""
@@ -203,7 +244,9 @@ def query(cfg: dict[str, Any], src: dict[str, Any], question: str) -> dict[str, 
                 cols, rows, truncated = run_sql(src["path"], sql, allowed)
                 used = sorted(t for t in allowed if re.search(rf"\b{re.escape(t)}\b", sql, re.I))
                 return {"sql": sql, "columns": cols, "rows": rows, "truncated": truncated,
-                        "tables": used or sorted(t["table"] for t in tables), "source": src["source"], "source_title": src["title"]}
+                        "chart": build_chart(kind, cols, rows) if kind else None,
+                        "tables": used or sorted(t["table"] for t in tables), "source": src["source"], "source_title": src["title"],
+                        "files": src.get("files") or []}
             except sqlite3.Error as e:
                 err = str(e)
                 if "interrupted" in err:
@@ -213,6 +256,145 @@ def query(cfg: dict[str, Any], src: dict[str, Any], question: str) -> dict[str, 
         msgs += [{"role": "assistant", "content": f"```sql\n{sql}\n```"},
                  {"role": "user", "content": f"That query failed: {err}\nWrite a corrected query."}]
     return {"error": err, "sql": sql}
+
+
+def build_chart(kind: str, cols: list[str], rows: list[list[Any]]) -> dict[str, Any] | None:
+    """A chart spec from the query result (no model involved): the first text column gives
+    the labels, the numeric columns the values. None when the result can't be charted."""
+    if kind not in CHART_TYPES or not rows or len(cols) < 2:
+        return None
+
+    def numeric(i: int) -> bool:
+        vals = [r[i] for r in rows if r[i] is not None]
+        return bool(vals) and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in vals)
+    nums = [i for i in range(len(cols)) if numeric(i)]
+    label = next((i for i in range(len(cols)) if i not in nums), None)
+    if label is None:           # every column is a number: the first one is the label (a year, a size bucket)
+        label = 0
+        nums = [i for i in nums if i != 0]
+    if not nums:
+        return None
+    nums = nums[:1] if kind in ("pie", "donut") else nums[:MAX_SERIES]
+    data = [("(empty)" if r[label] in (None, "") else str(r[label]), [r[i] or 0 for i in nums]) for r in rows]
+    note = ""
+    if kind in ("pie", "donut"):
+        data = [d for d in data if d[1][0] > 0]
+        data.sort(key=lambda d: d[1][0], reverse=True)
+        if len(data) > MAX_SLICES:
+            rest = data[MAX_SLICES - 1:]
+            data = data[:MAX_SLICES - 1] + [(f"Other ({len(rest)})", [sum(d[1][0] for d in rest)])]
+            note = f"The {MAX_SLICES - 1} largest slices; {len(rest)} smaller ones are grouped as Other."
+        if not data:
+            return None
+    elif len(data) > MAX_CATEGORIES:
+        note = f"The first {MAX_CATEGORIES} of {len(data)} categories are drawn."
+        data = data[:MAX_CATEGORIES]
+    names = [cols[i] for i in nums]
+    return {"type": kind, "label": cols[label], "series": names,
+            "title": f"{', '.join(names[:-1]) + ' and ' if len(names) > 1 else ''}{names[-1]} by {cols[label]}",
+            "categories": [d[0] for d in data],
+            "values": [[round(v, 2) if isinstance(v, float) else v for v in d[1]] for d in data], "note": note}
+
+
+def auto_chart(cols: list[str], rows: list[list[Any]], prefer: str | None = None) -> dict[str, Any] | None:
+    """A chart for a report when the question named none: a donut for up to 8 categories, else bars."""
+    if prefer:
+        return build_chart(prefer, cols, rows)
+    return build_chart("donut" if len(rows) <= 8 else "bar", cols, rows)
+
+
+PLAN_SYSTEM = """You plan a dashboard over the SQLite tables below. Return ONLY a JSON array (no prose, no code fence) of
+4 to 8 panels, each {"title": "...", "chart": "kpi|donut|pie|bar|line|table", "sql": "one SQLite SELECT"}.
+- Start with 2 to 4 "kpi" panels: each query returns exactly ONE row with ONE number (a count, a total or an average).
+- Then charts: "donut"/"pie" = a label column and ONE number, GROUP BY the label, largest first;
+  "bar" = a label column and one to three numbers; "line" = a time or ordered label and numbers;
+  "table" = a top-N list (LIMIT 10 to 20) with the 3 to 6 most useful columns.
+- Titles are short (2 to 6 words) and say what is counted, e.g. "VMs by OS", "Top 10 VMs by storage".
+- Use only the tables and columns listed. Text values are case sensitive; use LIKE or lower() for names.
+- Boolean columns hold the text 'True' or 'False'. Leave templates out (template = 'False') unless asked.
+- Round decimals with round(x, 1) and use readable column aliases."""
+
+
+def _panel_json(text: str) -> list[dict[str, Any]]:
+    m = re.search(r"\[.*\]", text, re.S)
+    if not m:
+        return []
+    try:
+        items = json.loads(m.group(0))
+    except ValueError:
+        return []
+    return [i for i in items if isinstance(i, dict) and isinstance(i.get("sql"), str)][:MAX_PANELS + 2]
+
+
+def dashboard(cfg: dict[str, Any], src: dict[str, Any], question: str) -> dict[str, Any]:
+    """Ask the model for a dashboard plan (panels with SQL), run every panel's query with the
+    same checks as a data question and keep the ones that work. Returns
+    {"kind": "dashboard", "panels": [...], "skipped": [...], ...} or {"error": ...}."""
+    tables = pick_tables(src, question)
+    allowed = {t["table"] for t in src["tables"]}
+    msgs = [{"role": "system", "content": PLAN_SYSTEM},
+            {"role": "user", "content": f"Tables:\n\n{describe(tables)}\n\nDashboard request: {question}"}]
+    ollama = Ollama(cfg["ollama_url"])
+    plan: list[dict[str, Any]] = []
+    for attempt in range(2):
+        reply = ollama.chat(cfg["chat_model"], msgs, options={"temperature": 0, "num_ctx": cfg["num_ctx"]},
+                            think=False, keep_alive=cfg["keep_alive"])
+        plan = _panel_json(reply)
+        if plan:
+            break
+        msgs += [{"role": "assistant", "content": reply[:2000]},
+                 {"role": "user", "content": "Return only the JSON array of panels, nothing else."}]
+    if not plan:
+        return {"error": "The model did not return a dashboard plan."}
+    panels, skipped = [], []
+    for item in plan:
+        if len(panels) >= MAX_PANELS:
+            break
+        title = str(item.get("title") or "Panel")[:80]
+        kind = str(item.get("chart") or "table").lower()
+        kind = kind if kind in ("kpi", "table") + CHART_TYPES else "table"
+        sql = extract_sql(item["sql"])
+        err = check_sql(sql, allowed)
+        if not err:
+            try:
+                cols, rows, truncated = run_sql(src["path"], sql, allowed)
+            except sqlite3.Error as e:
+                err = "took too long" if "interrupted" in str(e) else str(e)
+        if err:
+            skipped.append({"title": title, "sql": sql, "error": err})
+            continue
+        panel: dict[str, Any] = {"title": title, "kind": kind, "sql": sql, "columns": cols,
+                                 "rows": rows[:PANEL_ROWS], "row_count": len(rows), "truncated": truncated or len(rows) > PANEL_ROWS}
+        if kind == "kpi":
+            nums = [v for v in (rows[0] if rows else []) if isinstance(v, (int, float)) and not isinstance(v, bool)]
+            if len(rows) != 1 or not nums:
+                panel["kind"] = "table"
+            else:
+                panel["value"] = round(nums[0], 1) if isinstance(nums[0], float) else nums[0]
+        elif kind in CHART_TYPES:
+            panel["chart"] = build_chart(kind, cols, rows)
+            if not panel["chart"]:
+                panel["kind"] = "table"
+            else:
+                panel["chart"]["title"] = title
+        panels.append(panel)
+    if not panels:
+        return {"error": "None of the dashboard's queries worked: " + "; ".join(s["error"] for s in skipped[:3])}
+    first = next((p for p in panels if p["kind"] != "kpi"), panels[0])
+    return {"kind": "dashboard", "panels": panels, "skipped": skipped, "sql": first["sql"], "columns": first["columns"],
+            "rows": first["rows"], "truncated": first["truncated"], "chart": first.get("chart"),
+            "tables": sorted(t for t in allowed if any(re.search(rf"\b{re.escape(t)}\b", p["sql"], re.I) for p in panels)),
+            "source": src["source"], "source_title": src["title"], "files": src.get("files") or []}
+
+
+def panels_markdown(res: dict[str, Any]) -> str:
+    """Every dashboard panel's query and result for the model (15 rows each)."""
+    out = []
+    for i, p in enumerate(res["panels"], 1):
+        part = f"Panel {i}: {p['title']} ({p['kind']})\n```sql\n{p['sql']}\n```\n"
+        part += result_markdown({**p, "rows": p["rows"][:15], "truncated": p["row_count"] > 15})
+        out.append(part)
+    return "\n\n".join(out)
 
 
 def result_markdown(res: dict[str, Any]) -> str:
@@ -237,7 +419,8 @@ def result_markdown(res: dict[str, Any]) -> str:
 
 def card(res: dict[str, Any]) -> dict[str, Any]:
     """What the UI shows under the answer, saved with the message."""
-    return {"n": 1, "kind": "data", "source": res["source"], "title": f"Data query · {res['source_title']}",
+    return {"n": 1, "kind": "data", "source": res["source"], "title": f"{'Dashboard' if res.get('panels') else 'Data query'} · {res['source_title']}",
             "heading": "", "doc_id": ", ".join(res["tables"]), "doc_row": None, "url": "", "status": "",
-            "sql": res["sql"], "columns": res["columns"], "rows": res["rows"],
+            "sql": res["sql"], "columns": res["columns"], "rows": res["rows"], "chart": res.get("chart"),
+            "panels": res.get("panels"), "skipped": res.get("skipped"),
             "row_count": len(res["rows"]), "truncated": res["truncated"], "snippet": "", "images": []}

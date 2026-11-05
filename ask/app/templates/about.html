@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}About · vCommunity Ask{% endblock %}
-{% block head %}<link rel="stylesheet" href="/shared/about.css">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/shared/about.css?v={{ asset_v }}">{% endblock %}
 {% block body %}
 <div class="card about-hero">
   <div>
@@ -33,7 +33,7 @@
 {% endblock %}
 {% block scripts %}
 <script>window.ABOUT = { repo: {{ repo | tojson }}, screenshots: '/about/screenshots/' };</script>
-<script src="/shared/vendor/marked/marked.umd.js"></script>
-<script src="/shared/vendor/dompurify/purify.min.js"></script>
-<script src="/shared/about.js"></script>
+<script src="/shared/vendor/marked/marked.umd.js?v={{ asset_v }}"></script>
+<script src="/shared/vendor/dompurify/purify.min.js?v={{ asset_v }}"></script>
+<script src="/shared/about.js?v={{ asset_v }}"></script>
 {% endblock %}

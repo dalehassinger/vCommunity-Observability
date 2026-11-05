@@ -61,6 +61,27 @@ class H(BaseHTTPRequestHandler):
             inputs = body.get("input")
             inputs = [inputs] if isinstance(inputs, str) else inputs
             return self._json({"model": body.get("model"), "embeddings": [embed(t) for t in inputs]})
+        if self.path == "/api/chat" and body["messages"][0]["content"].startswith("You plan a dashboard"):
+            # Dashboard reports: a canned plan over the sample RVTools vInfo sheet, with one
+            # broken panel so the "left out" handling is exercised too.
+            plan = [
+                {"title": "Virtual machines", "chart": "kpi", "sql": "SELECT count(*) FROM vinfo WHERE template = 'False'"},
+                {"title": "Powered on", "chart": "kpi", "sql": "SELECT count(*) FROM vinfo WHERE powerstate = 'poweredOn' AND template = 'False'"},
+                {"title": "Total vCPUs", "chart": "kpi", "sql": "SELECT sum(cpus) FROM vinfo WHERE template = 'False'"},
+                {"title": "Memory (GiB)", "chart": "kpi", "sql": "SELECT round(sum(memory) / 1024.0, 1) FROM vinfo WHERE template = 'False'"},
+                {"title": "VMs by OS", "chart": "donut", "sql": "SELECT os_according_to_the_configuration_file AS os, count(*) AS vms FROM vinfo WHERE template = 'False' GROUP BY 1 ORDER BY vms DESC"},
+                {"title": "VMs by power state", "chart": "pie", "sql": "SELECT powerstate, count(*) AS vms FROM vinfo WHERE template = 'False' GROUP BY 1 ORDER BY vms DESC"},
+                {"title": "vCPUs and VMs per cluster", "chart": "bar", "sql": "SELECT cluster, count(*) AS vms, sum(cpus) AS vcpus FROM vinfo WHERE template = 'False' GROUP BY cluster ORDER BY vms DESC"},
+                {"title": "Top 10 VMs by provisioned storage", "chart": "table", "sql": "SELECT vm, cluster, host, round(provisioned_mib / 1024.0, 1) AS provisioned_gib FROM vinfo ORDER BY provisioned_mib DESC LIMIT 10"},
+                {"title": "Broken panel", "chart": "bar", "sql": "SELECT nope FROM vinfo"},
+            ]
+            msg = {"model": body.get("model"), "message": {"role": "assistant", "content": json.dumps(plan)}, "done": True}
+            body_out = (json.dumps(msg) + "\n").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            self.wfile.write(body_out)
+            return
         if self.path == "/api/chat" and body["messages"][0]["content"].startswith("You write ONE SQLite SELECT"):
             # Data questions: a canned query, chosen by a word in the question.
             q = body["messages"][1]["content"].rsplit("Question:", 1)[-1].lower()
@@ -72,6 +93,12 @@ class H(BaseHTTPRequestHandler):
             elif "per host" in q:
                 sql = ("SELECT host, count(*) AS vms, sum(cpus) AS vcpus, round(sum(memory) / 1024.0, 1) AS memory_gib "
                        "FROM vinfo WHERE template = 'False' GROUP BY host ORDER BY vms DESC")
+            elif "per cluster" in q:
+                sql = ("SELECT cluster, count(*) AS vms, sum(cpus) AS vcpus FROM vinfo WHERE template = 'False' "
+                       "GROUP BY cluster ORDER BY vms DESC")
+            elif "by os" in q:
+                sql = ("SELECT os_according_to_the_configuration_file AS os, count(*) AS vms FROM vinfo "
+                       "WHERE template = 'False' GROUP BY 1 ORDER BY vms DESC")
             elif "all hosts" in q:
                 sql = "SELECT host, cluster, cpu_model, num_cpu FROM vhost ORDER BY host"
             else:

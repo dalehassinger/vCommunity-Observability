@@ -46,8 +46,160 @@
     return host === 'github.com' ? 'View on GitHub ↗' : host ? 'View on ' + host + ' ↗' : 'View source ↗';
   }
 
+  // Charts for data questions: Apache ECharts (vendored, loaded on first use). The chart is
+  // built here from the spec the server made from the query result; nothing the model
+  // wrote is run. Charts are redrawn when the theme changes and resized with the window.
+  var charts = [];
+  var echartsLoading = null;
+  var ASSET_V = (document.currentScript && document.currentScript.src.split('?')[1]) || '';
+  function loadECharts() {
+    if (window.echarts) return Promise.resolve(window.echarts);
+    if (!echartsLoading) echartsLoading = new Promise(function (resolve, reject) {
+      var sc = document.createElement('script');
+      sc.src = '/shared/vendor/echarts/echarts.min.js' + (ASSET_V ? '?' + ASSET_V : '');
+      sc.onload = function () { resolve(window.echarts); };
+      sc.onerror = function () { echartsLoading = null; reject(new Error('ECharts did not load')); };
+      document.head.appendChild(sc);
+    });
+    return echartsLoading;
+  }
+  var cssVar = AskCharts.cssVar, chartOption = AskCharts.option;
+  function drawChart(box, c) {
+    loadECharts().then(function (ec) {
+      var chart = ec.init(box, null, { renderer: 'canvas' });
+      chart.setOption(chartOption(c, box._big));
+      box._chart = chart; box._spec = c;
+      charts.push(box);
+      // Folded cards have no size yet: resize when the box becomes visible or changes width.
+      if ('ResizeObserver' in window) new ResizeObserver(function () { chart.resize(); }).observe(box);
+    }).catch(function () { box.textContent = 'The chart library could not be loaded.'; box.className += ' subtle'; });
+  }
+  window.addEventListener('resize', function () { charts.forEach(function (b) { if (b._chart) b._chart.resize(); }); });
+  new MutationObserver(function () {
+    charts.forEach(function (b) { if (b._chart) b._chart.setOption(chartOption(b._spec, b._big), true); });
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+  // Enlarged chart: a full-window panel with the same chart; Esc, the close button or a
+  // click outside closes it.
+  function openChart(c) {
+    var overlay = el('div', 'chart-overlay');
+    var panel = el('div', 'chart-panel');
+    var bar = el('div', 'chart-panel-bar');
+    bar.appendChild(el('span', 'chart-panel-title', c.title));
+    var png = el('button', 'link-btn', 'Save as PNG'); png.type = 'button';
+    var close = el('button', 'icon-btn chart-close', '\u00d7'); close.type = 'button';
+    close.setAttribute('aria-label', 'Close'); close.title = 'Close (Esc)';
+    bar.appendChild(png); bar.appendChild(close);
+    var box = el('div', 'chart-big');
+    box._big = true;
+    panel.appendChild(bar); panel.appendChild(box);
+    if (c.note) panel.appendChild(el('div', 'subtle chart-note', c.note));
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+    document.body.classList.add('chart-open');
+    drawChart(box, c);
+    png.onclick = function () { savePng(box); };
+    function shut() {
+      document.removeEventListener('keydown', onKey);
+      if (box._chart) box._chart.dispose();
+      charts = charts.filter(function (b) { return b !== box; });
+      overlay.remove();
+      document.body.classList.remove('chart-open');
+    }
+    function onKey(e) { if (e.key === 'Escape') shut(); }
+    close.onclick = shut;
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) shut(); });
+    document.addEventListener('keydown', onKey);
+    close.focus();
+  }
+  function savePng(box) {
+    if (!box._chart) return;
+    var a = document.createElement('a');
+    a.href = box._chart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: cssVar('--surface', '#fff') });
+    a.download = 'ask-chart.png'; document.body.appendChild(a); a.click(); a.remove();
+  }
+
   // A data question's source: the SQL the model wrote and the rows it returned.
+  // Links to the HTML report made for a report or dashboard question.
+  function reportLinks(s) {
+    var box = el('div', 'report-links');
+    box.appendChild(el('span', 'report-ico', ''));
+    var open = el('a', 'btn btn-primary', s.report.kind === 'dashboard' ? 'Open dashboard report' : 'Open HTML report');
+    open.href = s.report.url; open.target = '_blank'; open.rel = 'noopener';
+    var dl = el('a', 'btn btn-outline', 'Download .html'); dl.href = s.report.url + '?download=1';
+    var all = el('a', 'link-btn', 'All reports'); all.href = '/reports';
+    box.appendChild(open); box.appendChild(dl); box.appendChild(all);
+    return box;
+  }
+
+  // A dashboard question's card: KPI tiles and small versions of the panels.
+  function dashboardCard(s, prefix) {
+    var card = el('div', 'src-card data');
+    card.id = prefix + '-' + s.n;
+    var head = el('div', 'src-head');
+    head.appendChild(el('span', 'src-n', String(s.n)));
+    head.appendChild(el('span', 'src-title', s.title));
+    card.appendChild(head);
+    var meta = el('div', 'src-meta');
+    meta.appendChild(el('code', null, s.doc_id));
+    meta.appendChild(el('span', 'badge', s.panels.length + ' panels'));
+    card.appendChild(meta);
+    if (s.report) card.appendChild(reportLinks(s));
+    var kpis = s.panels.filter(function (p) { return p.kind === 'kpi'; });
+    if (kpis.length) {
+      var row = el('div', 'dash-kpis');
+      kpis.forEach(function (p) {
+        var k = el('div', 'dash-kpi');
+        k.appendChild(el('div', 'dash-kpi-label', p.title));
+        k.appendChild(el('div', 'dash-kpi-value', typeof p.value === 'number' ? p.value.toLocaleString() : String(p.value)));
+        row.appendChild(k);
+      });
+      card.appendChild(row);
+    }
+    var grid = el('div', 'dash-grid');
+    s.panels.filter(function (p) { return p.kind !== 'kpi'; }).forEach(function (p) {
+      var cell = el('div', 'dash-cell' + (p.chart ? '' : ' wide'));
+      cell.appendChild(el('div', 'dash-cell-title', p.title));
+      if (p.chart) {
+        var box = el('div', 'chart-box small');
+        cell.appendChild(box);
+        var big = el('button', 'icon-btn chart-expand'); big.type = 'button'; big.title = 'Enlarge chart';
+        big.setAttribute('aria-label', 'Enlarge chart');
+        big.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        big.onclick = function () { openChart(p.chart); };
+        cell.appendChild(big);
+        requestAnimationFrame(function () { drawChart(box, Object.assign({}, p.chart, { title: '' })); });
+      } else {
+        var wrap = el('div', 'data-table-wrap'), t = el('table', 'datagrid compact'), tr = el('tr');
+        p.columns.forEach(function (c) { tr.appendChild(el('th', null, c)); });
+        var th = el('thead'); th.appendChild(tr); t.appendChild(th);
+        var tb = el('tbody');
+        p.rows.slice(0, 10).forEach(function (r) {
+          var row = el('tr');
+          r.forEach(function (v) { row.appendChild(el('td', typeof v === 'number' ? 'num' : null, v == null ? '' : (typeof v === 'number' && !Number.isInteger(v) ? String(Math.round(v * 100) / 100) : String(v)))); });
+          tb.appendChild(row);
+        });
+        t.appendChild(tb); wrap.appendChild(t); cell.appendChild(wrap);
+      }
+      grid.appendChild(cell);
+    });
+    card.appendChild(grid);
+    var det = el('details', 'dash-sql');
+    det.appendChild(el('summary', null, 'Queries (' + s.panels.length + ')' + (s.skipped && s.skipped.length ? ', ' + s.skipped.length + ' left out' : '')));
+    s.panels.forEach(function (p) {
+      det.appendChild(el('div', 'dash-cell-title', p.title));
+      var pre = el('pre', 'sql'); pre.appendChild(el('code', null, p.sql)); det.appendChild(pre);
+    });
+    (s.skipped || []).forEach(function (p) {
+      det.appendChild(el('div', 'dash-cell-title', p.title + ' (left out: ' + p.error + ')'));
+      var pre = el('pre', 'sql'); pre.appendChild(el('code', null, p.sql)); det.appendChild(pre);
+    });
+    card.appendChild(det);
+    return card;
+  }
+
   function dataCard(s, prefix) {
+    if (s.panels && s.panels.length) return dashboardCard(s, prefix);
     var card = el('div', 'src-card data');
     card.id = prefix + '-' + s.n;
     var head = el('div', 'src-head');
@@ -58,6 +210,23 @@
     meta.appendChild(el('code', null, s.doc_id));
     meta.appendChild(el('span', 'badge', s.row_count + (s.truncated ? '+' : '') + ' row' + (s.row_count === 1 ? '' : 's')));
     card.appendChild(meta);
+    if (s.report) card.appendChild(reportLinks(s));
+    var chartBox = null;
+    if (s.chart && s.chart.categories && s.chart.categories.length) {
+      var wrapC = el('div', 'chart-wrap');
+      chartBox = el('div', 'chart-box');
+      chartBox.setAttribute('role', 'img');
+      chartBox.setAttribute('aria-label', s.chart.type + ' chart: ' + s.chart.title);
+      var expand = el('button', 'icon-btn chart-expand'); expand.type = 'button';
+      expand.title = 'Enlarge chart'; expand.setAttribute('aria-label', 'Enlarge chart');
+      expand.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      expand.onclick = function () { openChart(s.chart); };
+      wrapC.appendChild(chartBox); wrapC.appendChild(expand);
+      card.appendChild(wrapC);
+      if (s.chart.note) card.appendChild(el('div', 'subtle chart-note', s.chart.note));
+      // Draw once the card is in the page (ECharts needs the box's size).
+      requestAnimationFrame(function () { drawChart(chartBox, s.chart); });
+    }
     var pre = el('pre', 'sql'); pre.appendChild(el('code', null, s.sql)); card.appendChild(pre);
     if (s.columns && s.columns.length && s.rows && s.rows.length) {
       var wrap = el('div', 'data-table-wrap');
@@ -91,6 +260,14 @@
         setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
       };
       links.appendChild(dl);
+    }
+    if (chartBox) {
+      var png = el('button', 'link-btn', 'Save chart as PNG'); png.type = 'button';
+      png.onclick = function () { savePng(chartBox); };
+      links.appendChild(png);
+      var big = el('button', 'link-btn', 'Enlarge chart'); big.type = 'button';
+      big.onclick = function () { openChart(s.chart); };
+      links.appendChild(big);
     }
     card.appendChild(links);
     return card;
@@ -315,6 +492,11 @@
               (payload.sources.length && payload.sources[0].kind === 'data' ? 'Query returned ' + payload.sources[0].row_count + ' rows, asking ' :
                payload.sources.length ? 'Found ' + payload.sources.length + ' sources, asking ' : 'No matching sources, asking ') +
               DOMPurify.sanitize(payload.model) + '…</span>';
+          } else if (ev === 'report') {
+            if (meta && meta.sources && meta.sources[0]) {
+              meta.sources[0].report = payload;
+              sourceCards(a.sources, meta.sources, a.prefix, a.strip);
+            }
           } else if (ev === 'thinking') {
             thinking += payload; a.thinking.hidden = false;
             if (!pending) { pending = true; requestAnimationFrame(paint); }

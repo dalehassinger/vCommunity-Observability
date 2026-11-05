@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}vCommunity Ask{% endblock %}</title>
-  <link rel="stylesheet" href="/shared/app.css">
-  <link rel="stylesheet" href="/static/ask.css">
+  <link rel="stylesheet" href="/shared/app.css?v={{ asset_v }}">
+  <link rel="stylesheet" href="/static/ask.css?v={{ asset_v }}">
   {% block head %}{% endblock %}
   <script>
     // Same theme switch as vCommunity-Observability (and the same saved choice key).
@@ -58,6 +58,10 @@
     <a class="nav-link {{ 'active' if active == '/sources' else '' }}" href="/sources">
       <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 5.5C4 4.1 7.6 3 12 3s8 1.1 8 2.5S16.4 8 12 8 4 6.9 4 5.5zM4 5.5v13C4 19.9 7.6 21 12 21s8-1.1 8-2.5v-13M4 12c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
       Knowledge sources
+    </a>
+    <a class="nav-link {{ 'active' if active == '/reports' else '' }}" href="/reports">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 17v-3M12 17v-6M15 17v-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/></svg>
+      Reports
     </a>
     <div class="nav-section">Administration</div>
     <a class="nav-link {{ 'active' if active == '/settings' else '' }}" href="/settings">

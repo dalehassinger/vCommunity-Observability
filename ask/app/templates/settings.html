@@ -78,7 +78,7 @@
 <p class="subtle">Config file: <code>{{ config_path }}</code></p>
 {% endblock %}
 {% block scripts %}
-<script src="/static/admin.js"></script>
+<script src="/static/admin.js?v={{ asset_v }}"></script>
 <script>
 (function () {
   var DEFAULT_PROMPT = {{ defaults.system_prompt | tojson }};

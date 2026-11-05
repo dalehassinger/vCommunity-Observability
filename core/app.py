@@ -35,6 +35,19 @@ from .vcenters import mirror_primary, normalize_vcenter, valid_id
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("vco")
 HERE = Path(__file__).parent
+def asset_version(*folders: Path) -> str:
+    """Short fingerprint of the static files (names, sizes, times). Added to script and
+    stylesheet URLs as ?v=..., so browsers fetch new files after an update instead of
+    running a cached copy."""
+    import hashlib
+    h = hashlib.sha1()
+    for folder in folders:
+        for p in sorted(Path(folder).rglob("*")):
+            if p.is_file():
+                st = p.stat()
+                h.update(f"{p.relative_to(folder)}:{st.st_size}:{st.st_mtime_ns};".encode())
+    return h.hexdigest()[:10]
+
 REPO_URL = "https://github.com/dalehassinger/vCommunity-Observability"
 
 
@@ -304,6 +317,7 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
     app.state.core = core
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     templates = Jinja2Templates(directory=HERE / "templates")
+    templates.env.globals["asset_v"] = asset_version(HERE / "static")
     # Sidebar link to the vCommunity Ask chat container (empty = no link).
     templates.env.globals["ask_url"] = os.environ.get("VCO_ASK_URL", "")
     # Module templates are addressed as "<module>/<file>" and can extend base.html.

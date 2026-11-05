@@ -199,6 +199,37 @@ a.cite:hover { background: var(--primary); color: #fff; text-decoration: none; }
 .src-card.data { grid-column: 1 / -1; border-left-color: var(--ok); }
 .src-card pre.sql { margin: 6px 0; padding: 8px 10px; background: var(--surface); border: 1px solid var(--border);
   border-radius: 4px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; }
+.chart-wrap { position: relative; }
+.report-links { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0 10px; padding: 10px 12px;
+  border: 1px solid var(--border); border-left: 4px solid var(--primary); border-radius: 4px; background: var(--info-bg); }
+.dash-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 8px 0; }
+.dash-kpi { border: 1px solid var(--border); border-left: 4px solid var(--primary); border-radius: 4px; padding: 8px 12px; background: var(--surface); }
+.dash-kpi:nth-child(2) { border-left-color: var(--ok); } .dash-kpi:nth-child(3) { border-left-color: var(--warn); } .dash-kpi:nth-child(4) { border-left-color: #8939ad; }
+.dash-kpi-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-kpi-value { font-size: 22px; font-weight: 300; }
+.dash-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 8px 0; }
+.dash-cell { position: relative; min-width: 0; }
+.dash-cell.wide { grid-column: 1 / -1; }
+.dash-cell-title { font-size: 12px; font-weight: 600; margin: 6px 0 4px; }
+.chart-box.small { height: 260px; margin: 0; }
+.dash-cell .chart-expand { top: 30px; }
+.dash-sql { margin-top: 6px; font-size: 12px; }
+.dash-sql summary { cursor: pointer; color: var(--subtle); font-weight: 600; }
+@media (max-width: 900px) { .dash-grid { grid-template-columns: minmax(0, 1fr); } }
+.chart-expand { position: absolute; top: 8px; right: 8px; width: 30px; height: 30px; display: grid; place-items: center;
+  border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--subtle); cursor: pointer; z-index: 2; }
+.chart-expand:hover { color: var(--primary); border-color: var(--primary); }
+.chart-overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(10, 18, 23, .55); display: flex; align-items: center; justify-content: center; padding: 3vh 3vw; }
+.chart-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 10px 40px rgba(0, 0, 0, .35);
+  width: 100%; height: 100%; display: flex; flex-direction: column; padding: 10px 14px 12px; box-sizing: border-box; }
+.chart-panel-bar { display: flex; align-items: center; gap: 14px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.chart-panel-title { flex: 1; font-weight: 600; font-size: 14px; }
+.chart-close { width: 32px; height: 32px; font-size: 22px; line-height: 1; border: 0; background: transparent; color: var(--subtle); cursor: pointer; }
+.chart-close:hover { color: var(--text); }
+.chart-big { flex: 1; min-height: 0; margin-top: 8px; }
+body.chart-open { overflow: hidden; }
+.chart-box { height: 340px; margin: 8px 0 4px; border: 1px solid var(--border); border-radius: 4px; padding: 10px 8px 4px; background: var(--surface); }
+.chart-note { margin-bottom: 6px; font-size: 12px; }
 .data-table-wrap { max-height: 320px; overflow: auto; margin: 6px 0; border: 1px solid var(--border); border-radius: 4px; }
 .datagrid.compact th, .datagrid.compact td { padding: 4px 8px; font-size: 12px; white-space: nowrap; }
 .datagrid.compact td.num, .datagrid.compact th.num { text-align: right; font-variant-numeric: tabular-nums; }

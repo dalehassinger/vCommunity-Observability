@@ -30,8 +30,22 @@ from .db import DB
 from .indexer import NAME_RE, Indexer, discover_plugins
 from .ollama import Ollama, OllamaError
 from . import rag
+from .reports import Reports
 
 HERE = Path(__file__).resolve().parent
+def asset_version(*folders: Path) -> str:
+    """Short fingerprint of the static files (names, sizes, times). Added to script and
+    stylesheet URLs as ?v=..., so browsers fetch new files after an update instead of
+    running a cached copy."""
+    import hashlib
+    h = hashlib.sha1()
+    for folder in folders:
+        for p in sorted(Path(folder).rglob("*")):
+            if p.is_file():
+                st = p.stat()
+                h.update(f"{p.relative_to(folder)}:{st.st_size}:{st.st_mtime_ns};".encode())
+    return h.hexdigest()[:10]
+
 REPO_URL = "https://github.com/dalehassinger/vCommunity-Observability"
 
 
@@ -142,6 +156,9 @@ def create_app() -> FastAPI:
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     app.mount("/shared", StaticFiles(directory=shared_dir()), name="shared")
     templates = Jinja2Templates(directory=HERE / "templates")
+    templates.env.globals["asset_v"] = asset_version(HERE / "static", shared_dir())
+    reports = Reports(cfg.data_dir / "reports", templates.env, shared_dir(), HERE / "static")
+    rag.REPORTS = reports
     templates.env.filters["ago"] = ago
 
     # -- auth -----------------------------------------------------------------
@@ -245,6 +262,38 @@ def create_app() -> FastAPI:
             linked[t] = [{"doc_id": i, "row": found[i]["id"] if i in found else None,
                           "title": found[i]["title"] if i in found else i} for i in ids]
         return page(request, "doc.html", "/sources", doc=d, body=body, linked=linked)
+
+    # -- HTML reports (made by report and dashboard questions) --------------------
+    @app.get("/reports", response_class=HTMLResponse, include_in_schema=False)
+    def reports_page(request: Request):
+        return page(request, "reports.html", "/reports", reports=reports.list())
+
+    @app.get("/reports/{rid}.html", include_in_schema=False)
+    def report_file(rid: str, download: bool = False):
+        p = reports.path(rid)
+        if not p:
+            raise HTTPException(404, "Report not found")
+        meta = reports.meta(rid) or {}
+        slug = re.sub(r"[^a-z0-9]+", "-", str(meta.get("title", rid)).lower()).strip("-")[:60] or rid
+        headers = {
+            # Everything the report needs is inside the file: no network access at all.
+            "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+                                       "img-src data: blob:; font-src data:; base-uri 'none'; form-action 'none'",
+            "X-Content-Type-Options": "nosniff",
+        }
+        if download:
+            headers["Content-Disposition"] = f'attachment; filename="ask-report-{slug}.html"'
+        return FileResponse(p, media_type="text/html; charset=utf-8", headers=headers)
+
+    @app.get("/api/reports", tags=["reports"], dependencies=[Depends(require_token)])
+    def api_reports():
+        return {"reports": reports.list()}
+
+    @app.post("/ui/reports/{rid}/delete", include_in_schema=False, dependencies=[Depends(require_admin)])
+    def ui_report_delete(rid: str):
+        if not reports.delete(rid):
+            raise HTTPException(404, "Report not found")
+        return {"ok": True}
 
     @app.get("/about", response_class=HTMLResponse, include_in_schema=False)
     def about(request: Request):

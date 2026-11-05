@@ -108,7 +108,7 @@
 </dialog>
 {% endblock %}
 {% block scripts %}
-<script src="/static/admin.js"></script>
+<script src="/static/admin.js?v={{ asset_v }}"></script>
 <script>
 (function () {
   var SOURCES = {{ sources | tojson }};

@@ -55,8 +55,8 @@
 </div>
 {% endblock %}
 {% block scripts %}
-<script src="/shared/vendor/marked/marked.umd.js"></script>
-<script src="/shared/vendor/dompurify/purify.min.js"></script>
+<script src="/shared/vendor/marked/marked.umd.js?v={{ asset_v }}"></script>
+<script src="/shared/vendor/dompurify/purify.min.js?v={{ asset_v }}"></script>
 <script>
   window.ASK = {
     chatId: {{ (chat.id if chat else "") | tojson }},
@@ -64,5 +64,6 @@
     model: {{ settings.chat_model | tojson }}
   };
 </script>
-<script src="/static/ask.js"></script>
+<script src="/static/charts.js?v={{ asset_v }}"></script>
+<script src="/static/ask.js?v={{ asset_v }}"></script>
 {% endblock %}

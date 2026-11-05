@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}About · vCommunity-Observability{% endblock %}
-{% block head %}<link rel="stylesheet" href="/static/about.css">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/about.css?v={{ asset_v }}">{% endblock %}
 {% block body %}
 <div class="card about-hero">
   <div>
@@ -31,7 +31,7 @@
 </div>
 <script type="application/json" id="about-md">{{ readme | tojson }}</script>
 <script>window.ABOUT = { repo: {{ repo | tojson }}, screenshots: '/about/screenshots/' };</script>
-<script src="/static/vendor/marked/marked.umd.js"></script>
-<script src="/static/vendor/dompurify/purify.min.js"></script>
-<script src="/static/about.js"></script>
+<script src="/static/vendor/marked/marked.umd.js?v={{ asset_v }}"></script>
+<script src="/static/vendor/dompurify/purify.min.js?v={{ asset_v }}"></script>
+<script src="/static/about.js?v={{ asset_v }}"></script>
 {% endblock %}

@@ -1,0 +1,49 @@
+/* HTML report (inlined into each report file together with app.css). */
+:root, [data-theme="light"] { --kpi-0: #0072a3; --kpi-1: #3c8500; --kpi-2: #c27b00; --kpi-3: #8939ad; --kpi-4: #00a1b3; --kpi-5: #db2100; }
+[data-theme="dark"] { --kpi-0: #49afd9; --kpi-1: #5eb715; --kpi-2: #f5c24b; --kpi-3: #c58ae0; --kpi-4: #2fc7d6; --kpi-5: #ff6b52; }
+.r-main { max-width: 1480px; margin: 0 auto; padding: 22px 28px 40px; }
+.r-head { margin-bottom: 16px; }
+.r-head h1 { font-size: 26px; margin: 0 0 6px; }
+.r-meta { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; color: var(--subtle); font-size: 13px; }
+.r-meta .badge { margin: 0; }
+.r-question { margin-top: 6px; color: var(--subtle); font-size: 13px; font-style: italic; }
+.r-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 16px; }
+.r-kpi { background: var(--surface); border: 1px solid var(--border); border-left: 5px solid var(--edge, var(--primary)); border-radius: 4px; padding: 12px 16px; box-shadow: var(--shadow); min-width: 0; }
+.r-kpi-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.r-kpi-value { font-size: 30px; font-weight: 300; line-height: 1.2; margin-top: 4px; }
+.r-kpi-sub { font-size: 12px; color: var(--subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.r-summary-card { margin-bottom: 16px; }
+.r-md { font-size: 14px; line-height: 1.6; }
+.r-md > :first-child { margin-top: 0; } .r-md > :last-child { margin-bottom: 0; }
+.r-md p, .r-md ul, .r-md ol { margin: 0 0 8px; }
+.r-md code { background: var(--surface-2); padding: 1px 4px; border-radius: 3px; }
+.r-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }
+.r-panel.wide { grid-column: 1 / -1; }
+.r-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.r-panel-head .badge { margin: 0; }
+.r-chart { height: 360px; }
+.r-data { margin-top: 8px; font-size: 13px; }
+.r-data summary { cursor: pointer; color: var(--subtle); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+.r-filter { font: inherit; font-size: 13px; padding: 6px 9px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); color: var(--text); width: 280px; max-width: 100%; margin-bottom: 8px; }
+.r-table-wrap { max-height: 520px; overflow: auto; border: 1px solid var(--border); border-radius: 4px; }
+.r-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.r-table th, .r-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+.r-table th { position: sticky; top: 0; background: var(--surface-2); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--subtle); cursor: pointer; user-select: none; }
+.r-table th:hover { color: var(--primary); }
+.r-table th.sorted::after { content: " \25B2"; } .r-table th.sorted.desc::after { content: " \25BC"; }
+.r-table td.num, .r-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.r-table tbody tr:hover { background: var(--info-bg); }
+.r-count { font-size: 12px; color: var(--subtle); margin-top: 6px; }
+.r-note { font-size: 13px; color: var(--subtle); margin-bottom: 16px; }
+.r-queries { margin-bottom: 16px; }
+.r-queries > summary { cursor: pointer; list-style: revert; }
+.r-q-title { font-weight: 600; font-size: 13px; margin: 8px 0 4px; }
+.r-queries pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: 3px; padding: 8px 10px; overflow-x: auto; margin: 0; white-space: pre-wrap; }
+.r-foot { font-size: 12px; color: var(--subtle); border-top: 1px solid var(--border); padding-top: 12px; }
+@media (max-width: 900px) { .r-grid { grid-template-columns: minmax(0, 1fr); } .r-main { padding: 16px; } }
+@media print {
+  .app-header { position: static; } #r-print, #r-theme { display: none; }
+  .r-panel, .r-kpi { break-inside: avoid; box-shadow: none; }
+  .r-table-wrap { max-height: none; overflow: visible; }
+  .r-data[open] summary, .r-filter { display: none; }
+}
