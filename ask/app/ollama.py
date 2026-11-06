@@ -72,11 +72,15 @@ class Ollama:
         return "".join((o.get("message") or {}).get("content") or ""
                        for o in self.chat_stream(model, messages, options=options, think=think, keep_alive=keep_alive))
 
-    def chat_stream(self, model: str, messages: list[dict[str, str]], *, options: dict[str, Any],
-                    think: bool = False, keep_alive: str = "10m") -> Iterator[dict[str, Any]]:
-        """Yield Ollama's streamed chat objects ({"message": {"content", "thinking"}, "done", ...})."""
+    def chat_stream(self, model: str, messages: list[dict[str, Any]], *, options: dict[str, Any],
+                    think: bool = False, keep_alive: str = "10m",
+                    tools: list[dict[str, Any]] | None = None) -> Iterator[dict[str, Any]]:
+        """Yield Ollama's streamed chat objects ({"message": {"content", "thinking", "tool_calls"}, "done", ...}).
+        `tools`: function definitions the model may call (MCP tools); its calls come back in tool_calls."""
         body: dict[str, Any] = {"model": model, "messages": messages, "stream": True,
                                 "options": options, "keep_alive": keep_alive}
+        if tools:
+            body["tools"] = tools
         # Always send it: thinking models (Qwen 3.x and others) otherwise think by default.
         body["think"] = bool(think)
         r = self._post("/api/chat", body, stream=True, timeout=(10, self.timeout))

@@ -49,6 +49,12 @@ SETTINGS: dict[str, dict[str, Any]] = {
     "history_turns":    {"default": 3, "type": "int"},
     "keep_alive":       {"default": "10m", "type": "str"},
     "system_prompt":    {"default": DEFAULT_SYSTEM_PROMPT, "type": "text"},
+    "agent_url":        {"default": "http://host.docker.internal:9101", "env": "ASK_AGENT_URL", "type": "str"},
+    # MCP tools: per-tool policy as JSON {"server/tool": "allow" | "ask" | "off"} (MCP tools page),
+    # how many tool turns one answer may take, and how much of one tool result the model reads.
+    "mcp_tools":        {"default": "{}", "type": "str"},
+    "mcp_max_rounds":   {"default": 6, "type": "int"},
+    "mcp_result_chars": {"default": 16000, "type": "int"},
     "observability_url": {"default": "", "env": "ASK_OBSERVABILITY_URL", "type": "str"},
 }
 

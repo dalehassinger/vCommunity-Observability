@@ -450,6 +450,8 @@ ASK_OLLAMA_URL=http://127.0.0.1:11434 uvicorn app.main:create_app --factory --po
 - While an answer streams the page follows it to the bottom. Scroll up to read something and it stops following; scroll back to the bottom and it follows again.
 - The footer shows the model, the time and tokens per second, and **Copy answer**. With **Show model thinking** on (Settings), thinking models show their reasoning above the answer.
 - Chats are saved: **Recent chats** in the sidebar reopens them, **Delete chat** removes the open one. To remove several, press **Select** next to **Recent chats**: each chat gets a check box (click a chat to tick it, Shift+click ticks a range, **All** ticks every listed chat), then **Delete (n)** removes them after one confirmation. **Cancel** or **Esc** leaves select mode. Follow-up questions see the last turns (Settings → Chat history).
+- **More room:** the menu button at the top left hides the whole sidebar so chats, reports and dashboards use the full width; click it again to bring the sidebar back. Click a sidebar heading (**Recent chats**, **Knowledge**, **Administration**) to fold just that section. Both choices are remembered in the browser.
+- **Tools: &lt;server&gt;** in the Sources menu (group **Tools (MCP)**) lets the model call the tools of your MCP servers; tool calls show in a **Tool calls** box, and tools that change things ask **Run** or **Cancel** first. See [MCP tools](#mcp-tools-your-own-mcp-servers).
 - **Reports** in the sidebar lists the HTML reports and dashboards Ask has made (see [HTML reports and dashboards](#html-reports-and-dashboards)).
 - **About** in the sidebar shows Ask's version, chat and embedding models, sources, documents, chunks and chats, then the full project README (the same page as the dashboards' [About](#about)).
 
@@ -485,6 +487,7 @@ One card per source with a status ring (green OK, blue syncing, red error, amber
 | Follow links | on | Link expansion (step 4 above) |
 | Data questions | on | Counting and totals questions about spreadsheet sources are answered with a read-only SQL query (see [Spreadsheets and data questions](#spreadsheets-and-data-questions)) |
 | Whole-source questions | on | "How many posts…", "summarize this blog", "what does it write about most" are answered from a catalog of every post in the selected sources (see [Whole-source questions](#whole-source-questions)) |
+| Host agent URL | `http://host.docker.internal:9101` | The Ask host agent for the [Performance page](#performance-page-and-host-agent); empty turns it off (`ASK_AGENT_URL`) |
 | Observability URL | `http://localhost:8080` | Sidebar link back to the dashboards |
 | System prompt | built in | Editable; **Reset to the default** restores it |
 
@@ -751,6 +754,94 @@ What is in the page:
 
 Tips: name the sheet ("using the vInfo sheet") and what to group by ("by OS", "per cluster"). For dashboards a model that is good at SQL and JSON matters even more, since it writes up to 8 queries; Qwen 3.x models are. Open **Queries** to check anything that looks wrong.
 
+### Performance page and host agent
+
+**Performance** (sidebar, under Administration) shows how Ask, Ollama and the machine that runs Ollama are doing. Ask takes a sample every 10 seconds and keeps 24 hours of them in `ask.db` (table `perf_samples`, about 5 MB); the page refreshes every 10 seconds and offers 1 h, 6 h and 24 h.
+
+| Part | What it shows | Where it comes from |
+| --- | --- | --- |
+| KPI cards | Host CPU, host GPU, host memory (and memory pressure), Ollama (models loaded, memory, share on the GPU), answer speed (tokens per second and seconds per answer over the last 20 answers), the Ask container. The colored edge is green, amber (70%+) or red (90%+); Ollama turns amber when a model is not fully on the GPU | The three sources below |
+| Host CPU, GPU and Ollama | CPU %, GPU % and the CPU used by Ollama's own processes, over time | Host agent |
+| Host memory | Memory used, memory held by Ollama's loaded models, and memory pressure | Host agent and Ollama |
+| Answer speed | Tokens per second (bars) and answer time per answer, last 24 hours; the tooltip names the chat and model | The stats saved with every answer |
+| Prompt size per answer | Prompt tokens of each answer against a dashed **Model context** line. Bars near the line mean sources or history are being cut: see [Chunks, context budget and model context](#chunks-context-budget-and-model-context) | The stats saved with every answer |
+| Ask container | CPU % (of the CPUs the container may use), memory (like `docker stats`, without page cache), network and disk throughput | The container's own cgroup files (`/sys/fs/cgroup`, v2 or v1). No Docker socket is mounted |
+| Host power and temperature | Total power (W) and GPU temperature, shown only when available | Host agent with [macmon](https://github.com/vladkens/macmon) installed |
+| Ollama table | Version, each loaded model with size, memory, share on the GPU, context length and when it unloads | Ollama `/api/ps` |
+| Host table | Chip, OS, cores (performance and efficiency), load, memory (app, wired, compressed), pressure, swap, GPU memory, Ollama processes, disk, network | Host agent |
+
+A GPU share under 100% means part of the model runs on the CPU, which is many times slower: pick a smaller model or a smaller **Model context**. A container can't see the Mac's hardware, so everything about the host comes from the agent.
+
+**The Ask host agent** (`ask/agent/ask-host-agent.py`) is one Python file that runs on the Mac itself, outside Docker. It uses only the Python standard library (3.9 or newer, as installed with the Xcode Command Line Tools), so there is nothing to download and it works on dark sites. Every 5 seconds it reads, without sudo:
+
+- CPU from `top`, memory from `vm_stat` and `sysctl` (used = app + wired + compressed, as in Activity Monitor; pressure from `kern.memorystatus_level`; swap from `vm.swapusage`);
+- GPU utilization and GPU memory in use from `ioreg` (IOAccelerator performance statistics);
+- network (Wi-Fi and Ethernet, `en*`) from `netstat`, disk space of the data volume, and the CPU and memory of every `ollama` process from `ps`;
+- power and temperature from `macmon pipe` when [macmon](https://github.com/vladkens/macmon) (MIT, `brew install macmon`) is installed; macOS only gives these to root otherwise.
+
+On Linux it reports CPU, memory, network, disk and Ollama from `/proc` (no GPU).
+
+It answers on port 9101: `GET /metrics` (JSON, needs the token as `Authorization: Bearer <token>` or `X-API-Key`) and `GET /health`. It listens on all addresses because the Docker VM reaches the Mac through its own network; the token keeps everyone else out, and it only ever returns numbers.
+
+**Install it** on the Mac, from the repository folder:
+
+```powershell
+pwsh ./ask/agent/Install-AskAgent.ps1          # or: ./ask/agent/install.sh
+```
+
+The installer copies the agent to `~/Library/Application Support/ask-host-agent/`, creates a random token in `~/.config/ask-host-agent/token` (readable only by you), and registers the LaunchAgent `com.vcommunity.ask-host-agent`, which starts at login and is restarted if it stops (log: `~/Library/Logs/ask-host-agent.log`). It prints a line to add to `.env`:
+
+```
+ASK_AGENT_TOKEN=<the printed token>
+```
+
+Then `docker compose up -d vco-ask`. The page finds the agent at `http://host.docker.internal:9101` (the **Host agent URL** setting, or `ASK_AGENT_URL`; leave it empty to turn the host part off). Remove the agent with `pwsh ./ask/agent/Install-AskAgent.ps1 -Uninstall` (or `install.sh --uninstall`). Try it by hand with `python3 ask/agent/ask-host-agent.py --once`, which prints one sample.
+
+The same numbers are at `GET /api/perf?hours=1` (with the API token), for your own monitoring.
+
+### MCP tools (your own MCP servers)
+
+Ask can call the tools of your own **MCP servers**, for example a PowerShell MCP server whose tools are PowerShell functions (PowerCLI, RVTools, VCF Operations, switches). Pick **Tools: &lt;server&gt;** in the chat's **Sources** menu and the model decides which tools to call, with which arguments, and answers from what they return. Each result is one more numbered source, so `[n]` citations point at it.
+
+**Where the server runs.** On the Mac, not in a container: an MCP server's tools usually need what only the Mac has (pwsh, PowerCLI, ImportExcel, Posh-SSH, the lab config file, SSH keys and `known_hosts`). The [Ask host agent](#performance-page-and-host-agent) starts the server, keeps it running and passes Ask's tool calls to it over HTTP, protected by the same token as the Performance page. The server itself is not changed and stays where it is, so you keep editing it in place: add a function, add its name to `$FunctionsToExpose`, and the next question (or **Reload tools**) restarts the server and shows the new tool. The agent restarts a server by itself when its script, or a `.ps1` next to it, changes.
+
+```
+Ask (container) --HTTP + token--> Ask host agent (Mac) --stdio JSON-RPC--> pwsh MCP-Server-OpenAI.ps1
+```
+
+**Set it up** (once):
+
+1. Install or update the host agent with your MCP config. `-McpConfig` takes an `.mcp.json` file (the format Claude Code and other MCP clients use) and copies it to `~/.config/ask-host-agent/mcp.json`:
+
+   ```powershell
+   pwsh ./ask/agent/Install-AskAgent.ps1 -McpConfig ~/Documents/GitHub/PS-TAM-Lab/MCP/.mcp.json
+   # or: ./ask/agent/install.sh --mcp-config ~/Documents/GitHub/PS-TAM-Lab/MCP/.mcp.json
+   ```
+
+   The installer prints the servers and their tools. Only `stdio` servers (a `command`, its `args` and `env`) are used. Example:
+
+   ```json
+   { "mcpServers": { "powershell-mcp": { "type": "stdio", "command": "pwsh",
+       "args": ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", "/Users/you/.../MCP/MCP-Server-OpenAI.ps1"], "env": {} } } }
+   ```
+
+2. `ASK_AGENT_TOKEN` in `.env` (as for the Performance page), then `docker compose up -d --build vco-ask`.
+3. Open **MCP tools** (sidebar, under Knowledge): the server should say **running** and list its tools.
+
+**The MCP tools page** shows each server (running or not, its command, errors and its stderr), **Reload tools**, and every tool with what it does, whether it is **read-only** or **changes things** (from the server's `readOnlyHint`), and a policy:
+
+| Policy | What happens in a chat |
+| --- | --- |
+| **Allowed** | The model calls it whenever it decides to. The default for read-only tools |
+| **Ask first** | The chat shows the tool and its arguments with **Run** and **Cancel**; nothing runs until you press Run (it waits up to 15 minutes). The default for tools that change things (`Send-Email`, `Create-DNS-ARecord`, `Save-HTML-Report`) |
+| **Off** | The model never sees the tool |
+
+Below that: **Tool turns per answer** (default 6: how many times the model may call tools before it must answer) and **Result size the model reads** (default 16,000 characters of one tool result; keep it well under the Model context). Changing them needs the API token, like Settings.
+
+**In the chat:** the Sources strip gets one pill per tool call, and a folded **Tool calls** box under the answer holds a card per call: tool, server, status (done, failed, needs your OK, cancelled), time, the arguments, and the **Result** (formatted JSON; PowerShell results are shown without their `{"data": ...}` wrapper). Tools can be combined with knowledge sources: tick a blog and the tools, and the answer can use both. "Nothing ticked" never includes tools.
+
+**Notes.** The chat model must support tools (Ollama marks it with the `tools` capability; `qwen3.8:27b-mlx` does, `gemma3:27b` does not). Tool results go to the model as text, so a tool that returns thousands of rows uses up the context: give such tools filter parameters. The REST API can use tools too (`"sources": ["mcp:powershell-mcp"]` on `POST /api/ask`), but there a tool set to **Ask first** is refused, because nobody can press Run. Tool calls are not saved in the chat history the model sees on follow-ups, only the answers are.
+
 ### Ask configuration
 
 `ask/config/ask.example.yaml` is built into the image as `/app/config/ask.yaml`. To use your own, copy it to `ask/config/ask.yaml` and uncomment the volume line in `docker-compose.yml`.
@@ -771,6 +862,8 @@ Tips: name the sheet ("using the vInfo sheet") and what to group by ("by OS", "p
 | `ASK_CONFIG`, `ASK_DATA_DIR`, `ASK_SHARED_DIR` | Config file, data folder, folder holding the shared `app.css` (set in the image) |
 | `ASK_GITHUB_TOKEN` (any name) | Read-only token for a private repository; put the variable's **name** in the source's "Token env var" |
 | `ASK_UPLOAD_MAX_MB` | Largest spreadsheet upload in MB (default 50) |
+| `ASK_AGENT_TOKEN` | Token of the Ask host agent (printed by `Install-AskAgent.ps1`), for the Performance page |
+| `ASK_AGENT_URL` | Where Ask reaches the host agent (default `http://host.docker.internal:9101`) |
 | `VCO_ASK_URL` | First container: sidebar link to Ask |
 
 ### Source plug-ins
@@ -835,6 +928,8 @@ All under token auth when `ASK_API_TOKEN` is set; Swagger UI at http://localhost
 | `GET /api/search?q=...&sources=a,b` | Retrieval only: which chunks a question would get, and the FTS query used |
 | `GET /api/chats`, `GET /api/chats/{id}` | Saved chats and their messages |
 | `GET /api/sources`, `POST /api/sources/{name}/sync?full=false`, `GET /api/sources/{name}/documents` | Sources, sync, indexed files |
+| `GET /api/perf?hours=1` | Performance: the latest sample (container, Ollama, host agent), up to 24 h of history and recent answer speeds |
+| `GET /api/mcp` | MCP servers of the host agent, their tools and each tool's policy (allow, ask, off). Use one with `"sources": ["mcp:<server>"]` on `POST /api/ask` (tools set to Ask first are refused there) |
 | `GET /api/reports` | HTML reports and dashboards (id, title, type, source, question, created, size); open one at `/reports/{id}.html`, add `?download=1` to download it |
 
 ```powershell
@@ -1090,6 +1185,7 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 | Scheduled export won't save: "Can't write to /app/exports/..." | The host `./exports` folder isn't writable by the container user. Run `chmod 777 exports` (or `chown 10001 exports`) |
 | "Not saved: enter a valid API token" | Enter the token from `.env` (`VCO_API_TOKEN_MPBUILDER`) in the card's API token field |
 | `failed to connect to the docker API at unix:///.../docker.sock` | The Docker CLI points at an engine that isn't running. `docker context ls`, then `docker context use rancher-desktop` (or start Docker Desktop) |
+| Image build fails in `core-pwsh` with `Source Location 'http://www.powershellgallery.com:8080/...' is not valid` or `Package 'VMware.VimAutomation...' failed to download` | The PowerShell Gallery failed to hand out one of PowerCLI's sub-modules (a gallery-side hiccup). The build now uses PSResourceGet and tries 4 times; if it still fails, build again later. To update Ask in the meantime, build only it: `docker compose up -d --build vco-ask`. |
 | Image build fails in `core-pwsh` with `Illegal instruction` (exit 132) | PowerShell's .NET runtime hit a CPU feature the VM doesn't expose (seen on new Apple Silicon). Use the default `PWSH_VERSION=7.6.9`; if it still fails, try `DOTNET_HWINTRINSIC=0`, `PWSH_VERSION=7.4.13` in `.env`, or set Rancher Desktop's VM emulation to VZ. Or build `target: core` to skip PowerShell |
 | `AttributeError: 'str' object has no attribute '_moId'` in a collector | A managed object was compared with `==`; see the pyVmomi tip under [Writing a module](#writing-a-module) |
 | vCenter password is empty | `config.yaml` must have `password_env: VCO_VCENTER_PASSWORD` (the variable's name), with the password in `.env`, or set it on the Settings page |
@@ -1100,6 +1196,12 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 | Ask: answer says "Nothing is indexed yet" | Open **Knowledge sources** and press **Sync now**; watch the card for errors (git clone needs internet, or use a local folder) |
 | Ask: "how many posts" or a blog summary only knows a few posts | The question didn't read as a whole-source question (use words such as *how many posts*, *summary of this blog*, *most common topics*), **Whole-source questions** is off, or the blog was not selected. Check the **All posts** card under the answer. If the post count itself is low, look at the source's **Date from** (older posts are not indexed) and **Max pages** settings and its document count on Knowledge sources |
 | Ask: one source's answers are poor or cut off after updating to 2026-11-06 | Chunks made before 2026-11-06 could be very large when a crawled page had no blank lines (one was 277,000 characters), and one such chunk could fill the whole model context. New syncs cap chunks at 3,500 characters; press **Re-index all** on Knowledge sources once so existing documents are chunked again |
+| Ask: MCP tools page says the agent has no MCP bridge, or shows no servers | Install the agent again from this repository (version 0.2.0 or later) with `-McpConfig` (see [MCP tools](#mcp-tools-your-own-mcp-servers)); it reads `~/.config/ask-host-agent/mcp.json`. Test on the Mac with `python3 ask/agent/ask-host-agent.py --mcp-list --mcp-config ~/.config/ask-host-agent/mcp.json` |
+| Ask: MCP server "not running" with `Operation not permitted` (stderr) | macOS privacy protection: a LaunchAgent may not read `~/Documents` or `~/Desktop`. Give the Python the installer names Full Disk Access (System Settings → Privacy & Security), then `launchctl kickstart -k gui/$(id -u)/com.vcommunity.ask-host-agent`, or keep the MCP folder outside Documents |
+| Ask: MCP server "not running" with `pwsh` not found or a module error | The agent's PATH has `/opt/homebrew/bin`, `/usr/local/bin` and `/usr/local/microsoft/powershell/7`; put the full path of `pwsh` in `command` otherwise. Modules (PowerCLI, ImportExcel, Posh-SSH, powershell-yaml) must be installed for your user; the server's own messages are under **Server messages (stderr)** |
+| Ask: "The MCP tools are not available" or the model never calls a tool | The chat model needs the `tools` capability (Settings shows the models; `qwen3.8:27b-mlx` has it). Also check the tools aren't all **Off**, and name what you want in the question ("use the RVTools vHost data") |
+| Ask: Performance page says "Host numbers are off" | The agent isn't installed or running (`launchctl print gui/$(id -u)/com.vcommunity.ask-host-agent`, log in `~/Library/Logs/ask-host-agent.log`), `ASK_AGENT_TOKEN` in `.env` doesn't match `~/.config/ask-host-agent/token` (the note says the token was refused), or Ask wasn't restarted after editing `.env` (`docker compose up -d vco-ask`). Check by hand on the Mac: `curl -H "Authorization: Bearer $(cat ~/.config/ask-host-agent/token)" localhost:9101/metrics` |
+| Ask: Performance page shows Host GPU "n/a" or no power and temperature | GPU numbers come from `ioreg` and need macOS on Apple Silicon (or a Mac GPU that reports statistics); power and temperature need `brew install macmon` |
 | Ask: answers are slow or cut off | Use a smaller chat model, lower **Chunks to retrieve** / **Context budget**, or raise **Model context (tokens)** if the model supports it. The first answer after a while is slower while Ollama loads the model (**Keep model loaded**) |
 | Ask: web-site source is red with "could not reach https://..." | The container can't reach the site (DNS, proxy or firewall). Test with `docker compose exec vco-ask python -c "import requests;print(requests.get('https://SITE/').status_code)"`. Behind a proxy, set `HTTPS_PROXY` for the `vco-ask` service. The previous index is kept |
 | Ask: web-site source indexed 0 pages or misses posts | Check the log (`docker compose logs vco-ask`): `out_of_range` = outside the date range, `too_short` = pages with under 200 characters of article text (list pages), `blocked` = robots.txt. Widen the date range, set **Pages with no date** to `keep`, adjust the URL globs, or raise **Max pages per sync** |
@@ -1167,8 +1269,12 @@ ask/                    vCommunity Ask (second container)
   sources/markdown-repo/  built-in source plug-in (Git repo or folder of markdown)
   sources/web-site/     built-in source plug-in (blog/site crawler: sitemap, feed, links, date range)
   sources/spreadsheet/  built-in source plug-in (xlsx/csv from /exports or uploads, sheets into tables.db)
+  app/perf.py           Performance page: container, Ollama and host-agent samples (24 h in ask.db)
+  app/mcp.py            MCP tools: client of the host agent's MCP bridge, tool policy, Run / Cancel approvals
+  agent/ask-host-agent.py  Ask host agent for the Mac (standard library only; performance numbers and the MCP bridge), plus Install-AskAgent.ps1 and install.sh
   config/               ask.example.yaml
-  scripts/fake_ollama.py  stand-in for Ollama, for tests
+  scripts/fake_ollama.py  stand-in for Ollama, for tests (also answers with tool calls)
+  scripts/fake_mcp.py   stand-in stdio MCP server (three tools), for tests
   scripts/make_sample_rvtools.py  made-up RVTools-style workbook, for tests
   Dockerfile            vcommunity-ask image (build from the repo root)
   requirements.in/.txt  direct dependencies / hashed lock file
@@ -1193,6 +1299,11 @@ requirements.in/.txt    direct dependencies / hashed lock file
 
 | Date | Change |
 | --- | --- |
+| 2026-11-06 | Ask: **MCP tools**. The host agent (0.2.0) runs the MCP servers of an `.mcp.json` file on the Mac (stdio, restarted when the script changes) and passes tool calls over HTTP (`GET /mcp`, `POST /mcp/<server>/call`, `/reload`, `--mcp-list`; installers take `-McpConfig` / `--mcp-config`). Ask: **Tools: &lt;server&gt;** in the Sources menu, an Ollama tool-calling loop (results become numbered sources), a **Tool calls** box with Run / Cancel for tools set to Ask first, the **MCP tools** page (status, Reload tools, per-tool Allowed / Ask first / Off, tool turns, result size), `GET /api/mcp`. Test helpers `scripts/fake_mcp.py` and tool calls in `fake_ollama.py` |
+| 2026-11-06 | Ask: the **Catalog and sources** box under a whole-source answer starts folded, like **Source details**, so the reply stays in view while it streams (click it, or a citation, to open it) |
+| 2026-11-06 | Ask sidebar: the menu button (top left) hides the whole sidebar for more page width and shows it again; **Recent chats**, **Knowledge** and **Administration** fold and unfold with a click on their heading; both choices are remembered in the browser |
+| 2026-11-06 | `core-pwsh` image: PowerCLI is installed with PSResourceGet (Install-Module only as a fallback), retried 4 times when the PowerShell Gallery fails a download, and checked with `Import-Module` so a failed install stops the build at the right step |
+| 2026-11-06 | Ask: **Performance** page (container CPU, memory and I/O from cgroups, Ollama loaded models and GPU share, answer speed and prompt size per answer, 24 h history in `ask.db`, `GET /api/perf`) and the **Ask host agent** for the Mac (`ask/agent`: standard-library Python, LaunchAgent installer in PowerShell and bash, token-protected, CPU, memory pressure, GPU, Ollama processes, optional power and temperature with macmon). New **Host agent URL** setting and `ASK_AGENT_TOKEN` / `ASK_AGENT_URL` |
 | 2026-11-06 | Ask: chunks are capped at 3,500 characters. Long sections are split at blank lines, then line breaks, then sentence ends, and only then mid-text with a 200-character overlap, so no text is lost and a single page without blank lines can no longer fill the model context. Run **Re-index all** once to re-chunk existing sources |
 | 2026-11-06 | README: new [Chunks, context budget and model context](#chunks-context-budget-and-model-context) section (what each setting does, how they cap each other, a rule of thumb and recommended values); clearer notes for the three settings in the Settings table |
 | 2026-11-06 | Ask: **whole-source questions**. "How many posts", "summarize this blog", "most common topics" and similar questions get a catalog of every post in the selected sources (exact counts per year and month, frequent title words, every title, date and heading) instead of only the best 8 chunks; new **All posts** card in the chat and **Whole-source questions** setting |

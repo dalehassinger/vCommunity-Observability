@@ -63,7 +63,13 @@
               <label class="scope-item"><input type="checkbox" value="{{ s.name }}" data-plugin="{{ s.plugin }}" {{ 'checked' if s.name in sel else '' }}><span>{{ s.title }}</span></label>
               {% endfor %}
               {% endif %}
-              <p class="scope-foot">Tick one or more. Nothing ticked searches every source except spreadsheets.</p>
+              {% if mcp_servers %}
+              <div class="scope-group"><span>Tools (MCP)</span><a class="link-btn" href="/tools">manage</a></div>
+              {% for m in mcp_servers %}
+              <label class="scope-item" title="{{ m.tools | length }} tools{{ ' (starting)' if m.starting else '' }}{{ ': ' ~ m.error if m.error else '' }}"><input type="checkbox" value="mcp:{{ m.name }}" data-plugin="mcp" {{ 'checked' if ('mcp:' ~ m.name) in sel else '' }}><span>Tools: {{ m.name }}</span></label>
+              {% endfor %}
+              {% endif %}
+              <p class="scope-foot">Tick one or more. Nothing ticked searches every source except spreadsheets{{ ' and tools' if mcp_servers else '' }}.</p>
             </div>
           </details>
         </div>

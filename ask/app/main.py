@@ -5,6 +5,7 @@ In Docker:     see ask/Dockerfile and the vco-ask service in docker-compose.yml"
 
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -29,8 +30,9 @@ from .config import SETTINGS, coerce, load_config
 from .db import DB
 from .indexer import NAME_RE, Indexer, discover_plugins
 from .ollama import Ollama, OllamaError
-from . import rag
+from . import mcp, rag
 from .reports import Reports
+from .perf import SAMPLE_SECONDS, Sampler
 
 HERE = Path(__file__).resolve().parent
 def asset_version(*folders: Path) -> str:
@@ -130,6 +132,9 @@ def create_app() -> FastAPI:
             db.upsert_source({**src, "origin": "config"})
 
     scheduler = BackgroundScheduler(timezone="UTC")
+    sampler = Sampler(db, settings)
+    # The sampler runs every 10 s; don't log "Running job ..." for every run.
+    logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING)
 
     def due_syncs() -> None:
         now = time.time()
@@ -147,6 +152,9 @@ def create_app() -> FastAPI:
         # check runs 5 seconds after start, so a new install indexes without a click.
         scheduler.add_job(due_syncs, "interval", minutes=10, id="due-syncs",
                           next_run_time=datetime.now(timezone.utc) + timedelta(seconds=5))
+        # Performance page: one sample of the container, Ollama and the host agent every 10 s.
+        scheduler.add_job(sampler.sample, "interval", seconds=SAMPLE_SECONDS, id="perf-sample",
+                          max_instances=1, coalesce=True, next_run_time=datetime.now(timezone.utc) + timedelta(seconds=2))
         scheduler.start()
         yield
         scheduler.shutdown(wait=False)
@@ -208,6 +216,16 @@ def create_app() -> FastAPI:
         known = {s["name"] for s in srcs}
         return [n for n in names if n in known] or scope_list("all")
 
+    def split_scope(scope: Any) -> tuple[list[str] | None, list[str]]:
+        """The Sources menu value as (knowledge sources, MCP servers). "mcp:<server>" entries
+        are MCP tools; with only those picked, no knowledge source is searched (an empty list)."""
+        items = [n.strip() for n in scope.split(",")] if isinstance(scope, str) else [str(n) for n in (scope or [])]
+        tools = [n[4:] for n in items if n.startswith("mcp:") and n[4:]]
+        rest = [n for n in items if n and not n.startswith("mcp:")]
+        if tools and not rest:
+            return [], tools
+        return scope_list(rest or "all"), tools
+
     # -- pages ----------------------------------------------------------------
     @app.get("/", include_in_schema=False)
     def home():
@@ -216,7 +234,8 @@ def create_app() -> FastAPI:
     @app.get("/chat", response_class=HTMLResponse, include_in_schema=False)
     def chat_new(request: Request):
         examples = [e for s in db.list_sources() if s["enabled"] for e in s["examples"]][:6]
-        return page(request, "chat.html", "/chat", chat=None, messages=[], examples=examples, stats=db.stats())
+        return page(request, "chat.html", "/chat", chat=None, messages=[], examples=examples, stats=db.stats(),
+                    mcp_servers=mcp.quick_servers(settings()["agent_url"]))
 
     @app.get("/chat/{chat_id}", response_class=HTMLResponse, include_in_schema=False)
     def chat_page(request: Request, chat_id: str):
@@ -224,7 +243,7 @@ def create_app() -> FastAPI:
         if not chat:
             return RedirectResponse("/chat")
         return page(request, "chat.html", f"/chat/{chat_id}", chat=chat, messages=db.messages(chat_id),
-                    examples=[], stats=db.stats())
+                    examples=[], stats=db.stats(), mcp_servers=mcp.quick_servers(settings()["agent_url"]))
 
     @app.get("/sources", response_class=HTMLResponse, include_in_schema=False)
     def sources_page(request: Request):
@@ -301,6 +320,92 @@ def create_app() -> FastAPI:
             raise HTTPException(404, "Report not found")
         return {"ok": True}
 
+    # -- MCP tools ---------------------------------------------------------------
+    def mcp_payload(fresh: bool) -> dict[str, Any]:
+        s = settings()
+        info = mcp.servers(s["agent_url"], fresh=fresh)
+        policy = mcp.load_policy(s["mcp_tools"])
+        for srv in info["servers"]:
+            for t in srv.get("tools") or []:
+                t["policy"] = mcp.policy_of(policy, srv["name"], t)
+                t["read_only"] = mcp.read_only(t)
+        return {**info, "agent_url": s["agent_url"], "agent_token_set": bool(os.environ.get("ASK_AGENT_TOKEN")),
+                "max_rounds": s["mcp_max_rounds"], "result_chars": s["mcp_result_chars"]}
+
+    @app.get("/tools", response_class=HTMLResponse, include_in_schema=False)
+    def tools_page(request: Request):
+        return page(request, "tools.html", "/tools")
+
+    @app.get("/ui/mcp", include_in_schema=False)
+    def ui_mcp(fresh: bool = False):
+        return mcp_payload(fresh)
+
+    @app.get("/api/mcp", tags=["mcp"], dependencies=[Depends(require_token)])
+    def api_mcp():
+        """MCP servers offered by the host agent, their tools and each tool's policy
+        (allow, ask, off). Pick a server for a question with `"sources": ["mcp:<server>"]`
+        on POST /api/ask; tools set to "ask" are refused there (they need the chat page)."""
+        return mcp_payload(True)
+
+    @app.post("/ui/mcp/policy", include_in_schema=False, dependencies=[Depends(require_admin)])
+    def ui_mcp_policy(body: dict = Body(...)):
+        pol = {str(k): v for k, v in (body.get("policy") or {}).items() if v in mcp.POLICIES and "/" in str(k)}
+        old = mcp.load_policy(settings()["mcp_tools"])
+        old.update(pol)
+        db.set_setting("mcp_tools", json.dumps(old, sort_keys=True))
+        for key, lo, hi in (("mcp_max_rounds", 1, 20), ("mcp_result_chars", 1000, 200000)):
+            if body.get(key) not in (None, ""):
+                try:
+                    v = int(body[key])
+                except (TypeError, ValueError):
+                    raise HTTPException(400, f"{key}: not a number")
+                if not lo <= v <= hi:
+                    raise HTTPException(400, f"{key}: use {lo} to {hi}")
+                if v == cfg.defaults.get(key):
+                    db.delete_setting(key)
+                else:
+                    db.set_setting(key, v)
+        return {"ok": True}
+
+    @app.post("/ui/mcp/{name}/reload", include_in_schema=False, dependencies=[Depends(require_admin)])
+    def ui_mcp_reload(name: str):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", name):
+            raise HTTPException(400, "Bad server name")
+        try:
+            return {"ok": True, "server": mcp.reload(settings()["agent_url"], name)}
+        except Exception as e:  # noqa: BLE001 - shown on the page
+            raise HTTPException(502, f"Reload failed: {e}")
+
+    @app.post("/ui/mcp/confirm", include_in_schema=False)
+    def ui_mcp_confirm(request: Request, body: dict = Body(...)):
+        """Run or Cancel for a tool set to "ask". The key is sent only to the chat that asked."""
+        same_origin(request)
+        if not mcp.APPROVALS.answer(str(body.get("key") or ""), bool(body.get("run"))):
+            raise HTTPException(404, "This question is no longer waiting (answered, stopped or timed out).")
+        return {"ok": True}
+
+    # -- performance -----------------------------------------------------------
+    def perf_payload(hours: float) -> dict[str, Any]:
+        s = settings()
+        return {"now": sampler.last or sampler.sample(), "history": sampler.history(hours),
+                "answers": sampler.answers(max(hours, 24.0)), "num_ctx": s["num_ctx"], "chat_model": s["chat_model"],
+                "agent_url": s.get("agent_url") or "", "agent_token_set": bool(os.environ.get("ASK_AGENT_TOKEN")),
+                "sample_seconds": SAMPLE_SECONDS}
+
+    @app.get("/performance", response_class=HTMLResponse, include_in_schema=False)
+    def performance_page(request: Request):
+        return page(request, "performance.html", "/performance")
+
+    @app.get("/ui/perf", include_in_schema=False)
+    def ui_perf(request: Request, hours: float = 1.0):
+        same_origin(request)
+        return perf_payload(hours)
+
+    @app.get("/api/perf", tags=["performance"], dependencies=[Depends(require_token)])
+    def api_perf(hours: float = 1.0):
+        """Latest sample (container, Ollama, host agent), history (up to 24 h) and recent answer speeds."""
+        return perf_payload(hours)
+
     @app.get("/about", response_class=HTMLResponse, include_in_schema=False)
     def about(request: Request):
         import platform
@@ -356,7 +461,8 @@ def create_app() -> FastAPI:
         scope = body.get("scope") or "all"
         if not chat_id or not db.get_chat(chat_id):
             chat_id = db.new_chat(question, ",".join(map(str, scope)) if isinstance(scope, list) else str(scope))
-        return StreamingResponse(rag.answer_stream(db, settings(), chat_id, question, scope_list(scope)),
+        docs, tools = split_scope(scope)
+        return StreamingResponse(rag.answer_stream(db, settings(), chat_id, question, docs, tools),
                                  media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -540,7 +646,8 @@ def create_app() -> FastAPI:
         if not chat_id or not db.get_chat(chat_id):
             s = body.get("sources") or "all"
             chat_id = db.new_chat(question, ",".join(map(str, s)) if isinstance(s, list) else str(s))
-        return rag.answer(db, settings(), chat_id, question, scope_list(body.get("sources")))
+        docs, tools = split_scope(body.get("sources"))
+        return rag.answer(db, settings(), chat_id, question, docs, tools)
 
     @app.get("/api/search", tags=["chat"], dependencies=[Depends(require_token)])
     def api_search(q: str, sources: str = "all"):

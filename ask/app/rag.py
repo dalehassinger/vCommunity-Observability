@@ -6,7 +6,10 @@
    related are added (same_name first: it stops the model mixing the VM and the
    ESXi meaning of the same metric label).
 3. The numbered sources go to the Ollama chat model with the question and the
-   last few turns of the chat; the answer streams back token by token."""
+   last few turns of the chat; the answer streams back token by token.
+4. MCP tools (when a "Tools" entry is picked in the Sources menu): the model may call
+   the tools of MCP servers on the host (app/mcp.py, through the Ask host agent); each
+   result becomes one more numbered source, and the model answers when it stops calling."""
 
 from __future__ import annotations
 
@@ -17,7 +20,7 @@ import time
 from typing import Any, Iterator
 from urllib.parse import quote
 
-from . import data, overview
+from . import data, mcp, overview
 from .db import DB
 from .indexer import embed_prefixes
 
@@ -222,25 +225,62 @@ def build_data_messages(cfg: dict[str, Any], res: dict[str, Any], question: str,
     return msgs
 
 
+TOOL_NOTE = """You can call the tools of these MCP servers: {servers}. Call a tool whenever the question needs live data or an
+action that a tool provides, and call several (one after another) when needed. Each tool result starts with its source
+number, for example [4]: cite it like the other sources. Never invent tool results or arguments the user did not give;
+if a tool fails or is cancelled, say so. Call a tool that changes something (sends mail, creates or deletes records,
+saves files) only when the user asked for exactly that."""
+
+
+def tool_messages(cfg: dict[str, Any], items: list[dict[str, Any]], question: str, history: list[dict[str, Any]],
+                  servers: list[str]) -> list[dict[str, Any]]:
+    note = TOOL_NOTE.format(servers=", ".join(servers))
+    if items:
+        msgs = build_messages(cfg, items, question, history)
+    else:
+        msgs = [{"role": "system", "content": cfg["system_prompt"]}]
+        turns = max(0, int(cfg["history_turns"]))
+        for m in (history[-turns * 2:] if turns else []):
+            if m["role"] in ("user", "assistant") and m["content"]:
+                msgs.append({"role": m["role"], "content": m["content"]})
+        msgs.append({"role": "user", "content": f"Question: {question}"})
+    msgs[0] = {"role": "system", "content": msgs[0]["content"] + "\n\n" + note}
+    return msgs
+
+
 def sse(event: str, data: Any) -> str:
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
 def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
-                  sources: list[str] | None) -> Iterator[str]:
-    """Server-sent events: meta (chat id + source cards), thinking, token, done, error."""
+                  sources: list[str] | None, tools: list[str] | None = None,
+                  interactive: bool = True) -> Iterator[str]:
+    """Server-sent events: meta (chat id + source cards), thinking, token, tool (a tool call
+    card, sent again when it changes), done, error. `tools`: MCP server names whose tools the
+    model may call; `sources` may then be empty (tools only). `interactive`: False for the
+    REST API, where a tool set to "ask" is refused because nobody can press Run."""
     t0 = time.time()
     history = db.messages(chat_id)
     db.add_message(chat_id, "user", question)
     content, thinking, cards, stats = "", "", [], {}
     model = cfg["chat_model"]
     try:
-        if db.stats()["chunks"] == 0:
+        mcp_tools: list[dict[str, Any]] = []
+        mcp_index: dict[str, Any] = {}
+        if tools:
+            info = mcp.servers(cfg.get("agent_url") or "", fresh=True)
+            policy = mcp.load_policy(cfg.get("mcp_tools"))
+            mcp_tools, mcp_index = mcp.ollama_tools(info["servers"], tools, policy)
+            if not mcp_tools:
+                why = info["error"] or next((s["error"] for s in info["servers"] if s["name"] in tools and s.get("error")), "")
+                raise OllamaError("The MCP tools are not available" + (f": {why}" if why else
+                                  " (no tools, or every tool is turned off on the MCP tools page)."))
+        if db.stats()["chunks"] == 0 and not (tools and not sources):
             raise OllamaError("Nothing is indexed yet. Open Knowledge sources and press Sync now.")
         res = None
         ov = None
-        srcs = data.tables_for(db, sources) if cfg.get("data_questions", True) else []
-        if cfg.get("overview_questions", True) and overview.is_overview_question(question) and not (
+        srcs = data.tables_for(db, sources) if cfg.get("data_questions", True) and not tools else []
+        if not tools and cfg.get("overview_questions", True) and overview.is_overview_question(question) and not (
                 srcs and data.is_data_question(question, srcs) and not overview.TEXTY.search(question)):
             # "How many posts...", "summarize this blog": a catalog of every post, not the top chunks.
             ov = overview.build(db, cfg, sources)
@@ -265,7 +305,14 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
             if res.get("error"):
                 stats["data_error"] = res["error"]
                 res = None
-        if ov:
+        if tools:
+            # Tools picked: the usual search over the picked sources (if any), plus the tools.
+            items = retrieve(db, cfg, question, sources) if sources else []
+            cards = source_cards(items)
+            yield sse("meta", {"chat_id": chat_id, "sources": cards, "model": model, "tools": len(mcp_tools),
+                               "retrieval_ms": int((time.time() - t0) * 1000)})
+            msgs = tool_messages(cfg, items, question, history, tools)
+        elif ov:
             pass
         elif res:
             cards = [data.card(res)]
@@ -279,20 +326,41 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
                                "retrieval_ms": int((time.time() - t0) * 1000)})
             msgs = build_messages(cfg, items, question, history)
         options = {"temperature": cfg["temperature"], "num_ctx": cfg["num_ctx"]}
-        for obj in Ollama(cfg["ollama_url"]).chat_stream(model, msgs, options=options, think=cfg["think"],
-                                                          keep_alive=cfg["keep_alive"]):
-            msg = obj.get("message") or {}
-            if msg.get("thinking"):
-                thinking += msg["thinking"]
-                yield sse("thinking", msg["thinking"])
-            if msg.get("content"):
-                content += msg["content"]
-                yield sse("token", msg["content"])
-            if obj.get("done"):
-                ev, ed = obj.get("eval_count") or 0, obj.get("eval_duration") or 0
-                stats = {**stats, "tokens": ev, "tok_per_s": round(ev / (ed / 1e9), 1) if ed else None,
-                         "prompt_tokens": obj.get("prompt_eval_count"),
-                         "seconds": round(time.time() - t0, 1)}
+        olla = Ollama(cfg["ollama_url"])
+        rounds = max(1, int(cfg.get("mcp_max_rounds") or 6)) if mcp_tools else 0
+        ev_sum = ed_sum = 0
+        for rnd in range(rounds + 1):
+            # With tools: the model may call tools for `rounds` turns; the last turn has no tools,
+            # so it has to answer.
+            calls: list[dict[str, Any]] = []
+            said = ""
+            for obj in olla.chat_stream(model, msgs, options=options, think=cfg["think"], keep_alive=cfg["keep_alive"],
+                                        tools=mcp_tools if rnd < rounds else None):
+                msg = obj.get("message") or {}
+                if msg.get("thinking"):
+                    thinking += msg["thinking"]
+                    yield sse("thinking", msg["thinking"])
+                if msg.get("content"):
+                    content += msg["content"]
+                    said += msg["content"]
+                    yield sse("token", msg["content"])
+                if msg.get("tool_calls"):
+                    calls += msg["tool_calls"]
+                if obj.get("done"):
+                    ev, ed = obj.get("eval_count") or 0, obj.get("eval_duration") or 0
+                    ev_sum, ed_sum = ev_sum + ev, ed_sum + ed
+                    stats = {**stats, "tokens": ev_sum, "tok_per_s": round(ev_sum / (ed_sum / 1e9), 1) if ed_sum else None,
+                             "prompt_tokens": obj.get("prompt_eval_count"),
+                             "seconds": round(time.time() - t0, 1)}
+            if not calls:
+                break
+            msgs.append({"role": "assistant", "content": said, "tool_calls": calls})
+            for c in calls:
+                card = {"kind": "tool", "n": len(cards) + 1, "status": "running"}
+                cards.append(card)
+                yield from run_tool(cfg, chat_id, c, card, mcp_index, interactive)
+                msgs.append({"role": "tool", "tool_name": card["tool"], "content": card.pop("_for_model")})
+            stats["tool_calls"] = sum(1 for k in cards if k.get("kind") == "tool")
         if res and res.get("report") and REPORTS is not None:
             # The HTML report: built from the results (and the summary just written), saved,
             # and linked from the card.
@@ -316,10 +384,77 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
                            sources=cards, model=model, stats=stats)
 
 
-def answer(db: DB, cfg: dict[str, Any], chat_id: str, question: str, sources: list[str] | None) -> dict[str, Any]:
+def run_tool(cfg: dict[str, Any], chat_id: str, call: dict[str, Any], card: dict[str, Any],
+             index: dict[str, Any], interactive: bool) -> Iterator[str]:
+    """Run one tool call of the model, filling `card` (shown in the chat) and
+    card["_for_model"] (the tool message). Yields tool events, and keep-alive comments
+    while a Run / Cancel question waits for the reader."""
+    fn = call.get("function") or {}
+    name, args = str(fn.get("name") or "?"), fn.get("arguments") or {}
+    if isinstance(args, str):
+        try:
+            args = json.loads(args) or {}
+        except ValueError:
+            args = {}
+    if not isinstance(args, dict):
+        args = {}
+    card.update(tool=name, arguments=args)
+    n = card["n"]
+    if name not in index:
+        card.update(status="error", error=f"There is no tool named {name}.")
+        card["_for_model"] = f"[{n}] Error: there is no tool named {name}. Use only the tools you were given."
+        yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
+        return
+    server, tool = index[name]
+    card.update(tool=tool["name"], server=server, read_only=mcp.read_only(tool))
+    pol = mcp.policy_of(mcp.load_policy(cfg.get("mcp_tools")), server, tool)
+    if pol == "ask":
+        if not interactive:
+            card.update(status="refused", error="This tool asks first, which works only in the chat page.")
+        else:
+            key = mcp.APPROVALS.new(chat_id)
+            card.update(status="waiting", approve=key)
+            yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
+            try:
+                answer, waited = None, 0
+                while answer is None and waited < 900:
+                    answer = mcp.APPROVALS.wait(key, 15)
+                    waited += 15
+                    if answer is None:
+                        yield ": waiting for Run or Cancel\n\n"
+            finally:
+                mcp.APPROVALS.drop(key)
+                card.pop("approve", None)
+            if not answer:
+                card.update(status="cancelled", error="Cancelled in the chat." if answer is False else "Nobody answered in 15 minutes.")
+    if card["status"] in ("refused", "cancelled"):
+        card["_for_model"] = f"[{n}] The tool {tool['name']} was not run: {card['error']}"
+        yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
+        return
+    card["status"] = "running"
+    yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
+    res = mcp.call(cfg.get("agent_url") or "", server, tool["name"], args)
+    card["ms"] = res["ms"]
+    if res["ok"]:
+        limit = max(1000, int(cfg.get("mcp_result_chars") or 16000))
+        text = res["text"]
+        cut = len(text) > limit
+        card.update(status="ok", result=mcp.pretty(text)[:20000], chars=len(text), cut=cut)
+        card["_for_model"] = (f"[{n}] Result of {tool['name']} (MCP server {server})"
+                              + (f", first {limit} of {len(text)} characters" if cut else "") + f":\n{text[:limit]}")
+    else:
+        card.update(status="error", error=res["error"][:2000])
+        card["_for_model"] = f"[{n}] The tool {tool['name']} failed: {res['error'][:2000]}"
+    yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
+
+
+def answer(db: DB, cfg: dict[str, Any], chat_id: str, question: str, sources: list[str] | None,
+           tools: list[str] | None = None) -> dict[str, Any]:
     """Non-streaming version for the REST API."""
     text, cards, err, stats = "", [], None, {}
-    for chunk in answer_stream(db, cfg, chat_id, question, sources):
+    for chunk in answer_stream(db, cfg, chat_id, question, sources, tools, interactive=False):
+        if chunk.startswith(":"):
+            continue
         event, _, data = chunk.partition("\ndata: ")
         payload = json.loads(data)
         if event.endswith("token"):
@@ -328,6 +463,8 @@ def answer(db: DB, cfg: dict[str, Any], chat_id: str, question: str, sources: li
             cards = payload["sources"]
         elif event.endswith("report") and cards:
             cards[0]["report"] = payload
+        elif event.endswith("tool"):
+            cards = [c for c in cards if c.get("n") != payload.get("n")] + [payload]
         elif event.endswith("done"):
             stats = payload["stats"]
         elif event.endswith("error"):

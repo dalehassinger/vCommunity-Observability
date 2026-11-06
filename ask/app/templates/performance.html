@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Performance · vCommunity Ask{% endblock %}
+{% block body %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb">Administration</div>
+    <h1>Performance</h1>
+    <p class="subtle">The Ask container, Ollama and the host that runs it, sampled every 10 seconds and kept for 24 hours
+      in <code>ask.db</code>. Host numbers come from the optional Ask host agent (<code>ask/agent</code>).</p>
+  </div>
+  <div class="perf-tools">
+    <div class="seg" id="perf-range" role="group" aria-label="Time range">
+      <button type="button" data-h="1" class="on">1 h</button><button type="button" data-h="6">6 h</button><button type="button" data-h="24">24 h</button>
+    </div>
+    <span class="subtle" id="perf-updated">Loading…</span>
+  </div>
+</div>
+
+<div class="perf-kpis" id="perf-kpis"></div>
+<div class="perf-note" id="perf-agent-note" hidden></div>
+
+<div class="perf-grid">
+  <div class="card"><div class="card-header">Host CPU, GPU and Ollama</div><div class="card-block"><div class="perf-chart" data-chart="host-load"></div></div></div>
+  <div class="card"><div class="card-header">Host memory</div><div class="card-block"><div class="perf-chart" data-chart="host-mem"></div></div></div>
+  <div class="card"><div class="card-header">Answer speed</div><div class="card-block"><div class="perf-chart" data-chart="answers"></div></div></div>
+  <div class="card"><div class="card-header">Prompt size per answer</div><div class="card-block"><div class="perf-chart" data-chart="prompt"></div></div></div>
+  <div class="card"><div class="card-header">Ask container: CPU and memory</div><div class="card-block"><div class="perf-chart" data-chart="c-load"></div></div></div>
+  <div class="card"><div class="card-header">Ask container: network and disk</div><div class="card-block"><div class="perf-chart" data-chart="c-io"></div></div></div>
+  <div class="card" id="perf-power-card" hidden><div class="card-header">Host power and temperature</div><div class="card-block"><div class="perf-chart" data-chart="power"></div></div></div>
+</div>
+
+<div class="perf-grid">
+  <div class="card"><div class="card-header">Ollama</div><div class="card-block" id="perf-ollama"></div></div>
+  <div class="card"><div class="card-header">Host</div><div class="card-block" id="perf-host"></div></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/shared/vendor/echarts/echarts.min.js?v={{ asset_v }}"></script>
+<script src="/static/perf.js?v={{ asset_v }}"></script>
+{% endblock %}

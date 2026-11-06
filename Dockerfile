@@ -53,10 +53,31 @@ RUN case "$(uname -m)" in aarch64|arm64) PWSH_ARCH=arm64 ;; *) PWSH_ARCH=x64 ;; 
 # to turn those CPU fast paths off. 1 is the normal .NET default.
 ARG DOTNET_EnableHWIntrinsic=1
 ENV POWERSHELL_TELEMETRY_OPTOUT=1 DOTNET_EnableHWIntrinsic=${DOTNET_EnableHWIntrinsic}
+# PowerCLI from the PowerShell Gallery. PSResourceGet (built into PowerShell 7.4+) is used
+# when present, Install-Module otherwise. The gallery sometimes fails a download of one of
+# PowerCLI's ~20 sub-modules ("Source Location ... is not valid"), so it tries 4 times and
+# stops the build with the real error if every try fails.
 RUN pwsh -NoProfile -Command " \
-      Set-PSRepository PSGallery -InstallationPolicy Trusted; \
+      \$ErrorActionPreference = 'Stop'; \
       \$v = '${POWERCLI_VERSION}'; \
-      if (\$v) { Install-Module VMware.PowerCLI -RequiredVersion \$v -Scope AllUsers -Force } \
-      else     { Install-Module VMware.PowerCLI -Scope AllUsers -Force }" \
+      for (\$i = 1; \$i -le 4; \$i++) { \
+        try { \
+          if (Get-Command Install-PSResource -ErrorAction SilentlyContinue) { \
+            \$p = @{ Name = 'VMware.PowerCLI'; Scope = 'AllUsers'; TrustRepository = \$true; Quiet = \$true }; \
+            if (\$v) { \$p.Version = \$v }; \
+            Install-PSResource @p \
+          } else { \
+            Set-PSRepository PSGallery -InstallationPolicy Trusted; \
+            if (\$v) { Install-Module VMware.PowerCLI -RequiredVersion \$v -Scope AllUsers -Force } \
+            else     { Install-Module VMware.PowerCLI -Scope AllUsers -Force } \
+          }; \
+          break \
+        } catch { \
+          if (\$i -eq 4) { throw }; \
+          Write-Warning ('PowerCLI download failed (try ' + \$i + ' of 4): ' + \$_ + ' Retrying in ' + (\$i * 20) + ' s.'); \
+          Start-Sleep -Seconds (\$i * 20) \
+        } \
+      }; \
+      Import-Module VMware.VimAutomation.Core" \
  && pwsh -NoProfile -Command "Set-PowerCLIConfiguration -Scope AllUsers -ParticipateInCEIP \$false -Confirm:\$false | Out-Null"
 USER vco

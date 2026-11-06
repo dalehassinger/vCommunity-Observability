@@ -53,6 +53,11 @@ class H(BaseHTTPRequestHandler):
             return self._json({"version": "0.0.0-fake"})
         if self.path == "/api/tags":
             return self._json({"models": MODELS})
+        if self.path == "/api/ps":   # what is loaded, for the Performance page
+            return self._json({"models": [{"name": "qwen3.8:27b-mlx", "model": "qwen3.8:27b-mlx", "size": 21474836480,
+                                           "size_vram": 21474836480, "context_length": 16384,
+                                           "expires_at": "2099-01-01T00:10:00Z",
+                                           "details": {"parameter_size": "27B", "quantization_level": "Q4_K_M"}}]})
         self._json({"error": "not found"}, 404)
 
     def do_POST(self):
@@ -109,6 +114,45 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/x-ndjson")
             self.end_headers()
             self.wfile.write(body_out)
+            return
+        if self.path == "/api/chat" and body.get("tools") and body["messages"][-1]["role"] != "tool":
+            # MCP tools: call the tool(s) whose name matches a word of the question ("both" calls two).
+            q = body["messages"][-1]["content"].rsplit("Question:", 1)[-1].lower()
+            tools = [t["function"] for t in body["tools"]]
+            hit = [t for t in tools if any(len(w) > 3 and w in q for w in re.findall(r"[a-z]+", t["name"].lower()))]
+            hit = (hit or tools[:1])[: 2 if "both" in q else 1]
+            calls = []
+            for t in hit:
+                props = (t.get("parameters") or {}).get("properties") or {}
+                req = (t.get("parameters") or {}).get("required") or []
+                args = {k: ("dale@example.com" if k.lower() == "to" else "test") for k in req}
+                if "Cluster" in props and "cl02" in q:
+                    args["Cluster"] = "cl02"
+                calls.append({"function": {"name": t["name"], "arguments": args}})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            self.wfile.write((json.dumps({"message": {"role": "assistant", "content": "", "tool_calls": calls}, "done": False}) + "\n").encode())
+            self.wfile.write((json.dumps({"message": {"role": "assistant", "content": ""}, "done": True, "eval_count": 12,
+                                          "eval_duration": 300_000_000, "prompt_eval_count": 900}) + "\n").encode())
+            return
+        if self.path == "/api/chat" and body["messages"][-1]["role"] == "tool":
+            results = [m["content"] for m in body["messages"] if m["role"] == "tool"]
+            lines = ["**Stand-in answer** from the tool results:", ""]
+            for r in results:
+                m = re.match(r"\[(\d+)\]\s*(.*)", r)
+                n, rest = (m.group(1), m.group(2)) if m else ("?", r)
+                lines.append(f"- {rest.splitlines()[0][:120]} [{n}]")
+            text = "\n".join(lines)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            for tok in re.findall(r"\S+\s*|\n", text):
+                self.wfile.write((json.dumps({"message": {"role": "assistant", "content": tok}, "done": False}) + "\n").encode())
+                self.wfile.flush()
+                time.sleep(0.01)
+            self.wfile.write((json.dumps({"message": {"role": "assistant", "content": ""}, "done": True,
+                                          "eval_count": 40, "eval_duration": 1_000_000_000, "prompt_eval_count": 1500}) + "\n").encode())
             return
         if self.path == "/api/chat":
             user = body["messages"][-1]["content"]

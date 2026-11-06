@@ -58,6 +58,9 @@
       <div class="field"><label for="s-overview_questions">Whole-source questions{% if 'overview_questions' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><label class="switch"><input type="checkbox" id="s-overview_questions" data-key="overview_questions" {{ 'checked' if settings.overview_questions else '' }}><span></span>On</label>
           <div class="hint">"How many posts…", "summarize this blog", "what does it write about most": answered from a catalog of every post in the selected sources (titles, dates, headings, exact counts) instead of only the best few chunks.</div></div></div>
+      <div class="field"><label for="s-agent_url">Host agent URL{% if 'agent_url' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><input type="text" id="s-agent_url" data-key="agent_url" value="{{ settings.agent_url }}" placeholder="http://host.docker.internal:9101">
+          <div class="hint">The optional Ask host agent on the Mac (<code>ask/agent</code>) for the Performance page. Its token goes in <code>.env</code> as <code>ASK_AGENT_TOKEN</code>. Empty turns it off.</div></div></div>
       <div class="field"><label for="s-observability_url">Observability URL{% if 'observability_url' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><input type="text" id="s-observability_url" data-key="observability_url" value="{{ settings.observability_url }}" placeholder="http://localhost:8080">
           <div class="hint">Adds a sidebar link back to the vCommunity-Observability dashboards.</div></div></div>

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}MCP tools · vCommunity Ask{% endblock %}
+{% block body %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb">Knowledge</div>
+    <h1>MCP tools</h1>
+    <p class="subtle">Tools of the MCP servers that run on your Mac, through the Ask host agent. Pick
+      <b>Tools: &lt;server&gt;</b> in the chat's Sources menu and the model can call them. Edit the server's script and
+      press <b>Reload tools</b> (or just ask again: a changed script restarts the server by itself).</p>
+  </div>
+  <div class="page-actions">
+    <button class="btn btn-outline" type="button" id="mcp-refresh">Refresh</button>
+  </div>
+</div>
+
+{% include "_token.html" %}
+
+<div class="perf-note" id="mcp-note" hidden></div>
+<div id="mcp-servers"><p class="subtle">Asking the host agent…</p></div>
+
+<div class="card">
+  <div class="card-header">Answers with tools</div>
+  <div class="card-block">
+    <div class="field"><label for="m-rounds">Tool turns per answer</label>
+      <div><input type="number" id="m-rounds" min="1" max="20" step="1">
+        <div class="hint">How many times the model may call tools (one or more per turn) before it must answer. Default 6.</div></div></div>
+    <div class="field"><label for="m-chars">Result size the model reads</label>
+      <div><input type="number" id="m-chars" min="1000" max="200000" step="1000">
+        <div class="hint">Characters of one tool result given to the model (the rest is cut; the chat still shows up to 20,000).
+          About 4 characters per token, so keep it well under the Model context. Default 16,000.</div></div></div>
+  </div>
+</div>
+
+<div class="form-actions card-actions">
+  <button class="btn btn-primary" type="button" id="mcp-save">Save</button>
+  <span class="form-msg" id="mcp-msg"></span>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/admin.js?v={{ asset_v }}"></script>
+<script src="/static/tools.js?v={{ asset_v }}"></script>
+{% endblock %}

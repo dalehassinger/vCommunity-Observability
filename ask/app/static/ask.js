@@ -370,7 +370,56 @@
     return card;
   }
 
+  // One MCP tool call: what ran, with which arguments, and what came back. A tool set to
+  // "Ask first" shows Run / Cancel here until the reader answers.
+  var TOOL_STATUS = { ok: ['done', 'badge-success'], error: ['failed', 'badge-danger'], running: ['running…', 'badge-info'],
+    waiting: ['needs your OK', 'badge-warn'], cancelled: ['cancelled', ''], refused: ['not run', ''] };
+  function toolCard(s, prefix) {
+    var card = el('div', 'src-card tool-card ' + (s.status || ''));
+    card.id = prefix + '-' + s.n;
+    var head = el('div', 'src-head');
+    head.appendChild(el('span', 'src-n', String(s.n)));
+    head.appendChild(el('code', 'tool-name', s.tool || '?'));
+    card.appendChild(head);
+    var meta = el('div', 'src-meta');
+    var st = TOOL_STATUS[s.status] || [s.status || '', ''];
+    meta.appendChild(el('span', 'badge ' + st[1], st[0]));
+    if (s.server) meta.appendChild(el('span', 'badge', s.server));
+    if (s.read_only === false) { var w = el('span', 'badge badge-warn', 'changes things'); w.title = 'The MCP server says this tool is not read-only'; meta.appendChild(w); }
+    if (s.ms != null) meta.appendChild(el('span', 'subtle', (s.ms >= 1000 ? (s.ms / 1000).toFixed(1) + ' s' : s.ms + ' ms')));
+    card.appendChild(meta);
+    var args = s.arguments || {};
+    if (Object.keys(args).length) card.appendChild(el('pre', 'tool-args', JSON.stringify(args, null, 2)));
+    else card.appendChild(el('div', 'subtle tool-noargs', 'No arguments'));
+    if (s.status === 'waiting' && s.approve) {
+      var box = el('div', 'tool-confirm');
+      box.appendChild(el('span', null, 'Run this tool with these arguments?'));
+      var run = el('button', 'btn btn-primary btn-sm', 'Run'), no = el('button', 'btn btn-outline btn-sm', 'Cancel');
+      run.type = no.type = 'button';
+      function send(yes) {
+        run.disabled = no.disabled = true;
+        fetch('/ui/mcp/confirm', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: s.approve, run: yes }) })
+          .then(function (r) { if (!r.ok) return r.json().then(function (d) { throw new Error(d.detail || r.statusText); }); })
+          .catch(function (e) { box.appendChild(el('span', 'tool-err', e.message)); });
+      }
+      run.onclick = function () { send(true); };
+      no.onclick = function () { send(false); };
+      box.appendChild(run); box.appendChild(no);
+      card.appendChild(box);
+    }
+    if (s.error) card.appendChild(el('div', 'tool-err', s.error));
+    if (s.result != null) {
+      var det = el('details', 'tool-result');
+      det.appendChild(el('summary', null, 'Result' + (s.chars ? ' (' + s.chars.toLocaleString() + ' characters' + (s.cut ? ', the model read the first part' : '') + ')' : '')));
+      det.appendChild(el('pre', null, s.result));
+      card.appendChild(det);
+    }
+    return card;
+  }
+
   function sourceCard(s, prefix) {
+      if (s.kind === 'tool') return toolCard(s, prefix);
       if (s.kind === 'data') return dataCard(s, prefix);
       if (s.kind === 'catalog') return catalogCard(s, prefix);
       var card = el('div', 'src-card ' + (s.kind === 'linked' ? 'linked' : 'hit'));
@@ -423,7 +472,8 @@
     container.innerHTML = '';
     if (strip) strip.innerHTML = '';
     if (!sources || !sources.length) return;
-    var hits = sources.filter(function (s) { return s.kind !== 'linked'; });
+    var tools = sources.filter(function (s) { return s.kind === 'tool'; });
+    var hits = sources.filter(function (s) { return s.kind !== 'linked' && s.kind !== 'tool'; });
     var linked = sources.filter(function (s) { return s.kind === 'linked'; });
     if (strip) {
       strip.appendChild(el('span', 'strip-label', 'Sources'));
@@ -434,6 +484,15 @@
         c.title = s.title + (s.heading ? ' > ' + s.heading : '') + '\n' + s.doc_id;
         c.appendChild(el('b', null, String(s.n)));
         c.appendChild(el('span', null, s.title + (s.heading ? ' · ' + s.heading : '')));
+        strip.appendChild(c);
+      });
+      tools.forEach(function (s) {
+        var c = el('a', 'src-chip tool ' + (s.status || ''));
+        c.href = '#' + prefix + '-' + s.n;
+        c.dataset.card = prefix + '-' + s.n;
+        c.title = 'Tool call: ' + (s.tool || '') + (s.server ? ' (' + s.server + ')' : '') + ' · ' + (TOOL_STATUS[s.status] || [s.status])[0];
+        c.appendChild(el('b', null, String(s.n)));
+        c.appendChild(el('span', null, s.tool || '?'));
         strip.appendChild(c);
       });
       if (linked.length) {
@@ -449,7 +508,8 @@
     var isCat = hits.length && hits[0].kind === 'catalog';
     det.appendChild(el('summary', null, isData ? 'Query and result' : isCat ? 'Catalog and sources (' + hits.length + ')' :
       'Source details (' + hits.length + (linked.length ? ' + ' + linked.length + ' linked' : '') + ')'));
-    if (isData || isCat) det.open = true;
+    // Only a data result starts open (it is the answer). Catalog and sources start folded so the reply stays in view.
+    if (isData) det.open = true;
     [[hits, ''], [linked, 'Linked files']].forEach(function (g) {
       if (!g[0].length) return;
       if (g[1]) det.appendChild(el('div', 'src-group', g[1]));
@@ -457,7 +517,17 @@
       g[0].forEach(function (s) { grid.appendChild(sourceCard(s, prefix)); });
       det.appendChild(grid);
     });
-    container.appendChild(det);
+    if (hits.length || linked.length) container.appendChild(det);
+    if (tools.length) {
+      // Tool calls: folded like the sources, but open while a tool waits for Run or Cancel.
+      var td = el('details', 'sources tool-calls');
+      td.appendChild(el('summary', null, 'Tool calls (' + tools.length + ')'));
+      td.open = tools.some(function (s) { return s.status === 'waiting' && s.approve; });
+      var tg = el('div', 'src-grid tool-grid');
+      tools.forEach(function (s) { tg.appendChild(toolCard(s, prefix)); });
+      td.appendChild(tg);
+      container.appendChild(td);
+    }
   }
 
   function statsLine(container, m) {
@@ -597,11 +667,29 @@
             }
             sourceCards(a.sources, payload.sources, a.prefix, a.strip);
             a.text.innerHTML = '<span class="typing"><i></i><i></i><i></i></span> <span class="subtle">' +
-              (payload.sources.length && payload.sources[0].kind === 'data' ? 'Query returned ' + payload.sources[0].row_count + ' rows, asking ' :
+              (payload.tools ? (payload.sources.length ? 'Found ' + payload.sources.length + ' sources and ' : '') + payload.tools + ' tools, asking ' :
+               payload.sources.length && payload.sources[0].kind === 'data' ? 'Query returned ' + payload.sources[0].row_count + ' rows, asking ' :
                payload.sources.length && payload.sources[0].kind === 'catalog' ? 'Catalog of ' + payload.sources.filter(function (s) { return s.kind === 'catalog'; })
                  .reduce(function (t, s) { return t + s.posts; }, 0) + ' posts, asking ' :
                payload.sources.length ? 'Found ' + payload.sources.length + ' sources, asking ' : 'No matching sources, asking ') +
               DOMPurify.sanitize(payload.model) + '…</span>';
+          } else if (ev === 'tool') {
+            meta.sources = (meta.sources || []).filter(function (s) { return s.n !== payload.n; }).concat([payload])
+              .sort(function (x, y) { return x.n - y.n; });
+            sourceCards(a.sources, meta.sources, a.prefix, a.strip);
+            if (!content) {
+              a.text.innerHTML = '';
+              var tl = el('span', 'subtle');
+              if (payload.status === 'waiting') {
+                tl.textContent = 'Waiting for you: Run or Cancel ' + payload.tool + ' (under Tool calls).';
+                var go = a.sources.querySelector('.tool-confirm');
+                if (go) setTimeout(function () { go.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 50);
+              } else {
+                a.text.innerHTML = '<span class="typing"><i></i><i></i><i></i></span> ';
+                tl.textContent = payload.status === 'running' ? 'Running ' + payload.tool + '…' : 'Asking ' + (meta.model || 'the model') + '…';
+              }
+              a.text.appendChild(tl);
+            }
           } else if (ev === 'report') {
             if (meta && meta.sources && meta.sources[0]) {
               meta.sources[0].report = payload;

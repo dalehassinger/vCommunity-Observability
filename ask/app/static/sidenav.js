@@ -3,6 +3,30 @@
    (Shift+click ticks a range). Delete asks once, then removes the ticked chats. */
 (function () {
   'use strict';
+  // Fold and unfold the sidebar sections. The folded keys live on <html data-nav-folded>
+  // (set before paint by base.html) and in localStorage 'ask.nav.folded'.
+  var root = document.documentElement;
+  var folds = Array.prototype.slice.call(document.querySelectorAll('.nav-fold'));
+  function folded() { return (root.getAttribute('data-nav-folded') || '').split(/\s+/).filter(Boolean); }
+  function paint() {
+    var f = folded();
+    folds.forEach(function (b) { b.setAttribute('aria-expanded', f.indexOf(b.dataset.fold) < 0 ? 'true' : 'false'); });
+  }
+  folds.forEach(function (b) {
+    b.addEventListener('click', function () {
+      var f = folded(), k = b.dataset.fold, i = f.indexOf(k);
+      if (i < 0) f.push(k); else f.splice(i, 1);
+      var v = f.join(' ');
+      if (v) root.setAttribute('data-nav-folded', v); else root.removeAttribute('data-nav-folded');
+      try { if (v) localStorage.setItem('ask.nav.folded', v); else localStorage.removeItem('ask.nav.folded'); } catch (e) {}
+      paint();
+    });
+  });
+  paint();
+})();
+
+(function () {
+  'use strict';
   var list = document.getElementById('chat-list');
   var selectBtn = document.getElementById('chat-select');
   var bar = document.getElementById('chat-bar');
