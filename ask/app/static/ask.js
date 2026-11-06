@@ -5,7 +5,42 @@
   var thread = document.getElementById('thread');
   var form = document.getElementById('composer');
   var input = document.getElementById('question');
-  var scope = document.getElementById('scope');
+  // Sources picker: check boxes in a small menu. Nothing ticked = "all" (every source except
+  // spreadsheets). A new chat starts with the last selection (kept in this browser only).
+  var scopePick = document.getElementById('scope-pick');
+  var scopeLabel = document.getElementById('scope-label');
+  var scopeBoxes = scopePick ? Array.prototype.slice.call(scopePick.querySelectorAll('input[type=checkbox]')) : [];
+  function scopeTicked() { return scopeBoxes.filter(function (b) { return b.checked; }); }
+  function scopeValue() {
+    var v = scopeTicked().map(function (b) { return b.value; });
+    return v.length ? v : 'all';
+  }
+  function scopeRefresh(save) {
+    if (!scopeLabel) return;
+    var on = scopeTicked(), names = on.map(function (b) { return b.parentNode.textContent.trim(); });
+    scopeLabel.textContent = !on.length ? 'All sources (not spreadsheets)' : on.length === 1 ? names[0] : on.length + ' sources';
+    scopeLabel.title = on.length ? names.join(', ') : 'Every source except spreadsheets';
+    if (save) { try { localStorage.setItem('ask.scope', JSON.stringify(on.map(function (b) { return b.value; }))); } catch (e) { /* private window */ } }
+  }
+  if (scopePick) {
+    if (!(window.ASK && window.ASK.chatId) && !scopeTicked().length) {
+      try {
+        var last = JSON.parse(localStorage.getItem('ask.scope') || '[]');
+        scopeBoxes.forEach(function (b) { b.checked = last.indexOf(b.value) >= 0; });
+      } catch (e) { /* nothing saved */ }
+    }
+    scopeRefresh(false);
+    scopePick.addEventListener('change', function () { scopeRefresh(true); });
+    scopePick.addEventListener('click', function (e) {
+      var t = e.target.closest('[data-scope-all],[data-scope-only]');
+      if (!t) return;
+      var only = t.getAttribute('data-scope-only');
+      scopeBoxes.forEach(function (b) { b.checked = !!only && b.getAttribute('data-plugin') === only; });
+      scopeRefresh(true);
+    });
+    document.addEventListener('click', function (e) { if (scopePick.open && !scopePick.contains(e.target)) scopePick.open = false; });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && scopePick.open) { scopePick.open = false; scopeLabel.focus(); } });
+  }
   var sendBtn = document.getElementById('send');
   var stopBtn = document.getElementById('stop');
   var chatId = window.ASK.chatId || '';
@@ -461,7 +496,7 @@
     try {
       var res = await fetch('/ui/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-        body: JSON.stringify({ chat_id: chatId, question: question, scope: scope.value })
+        body: JSON.stringify({ chat_id: chatId, question: question, scope: scopeValue() })
       });
       if (!res.ok) throw new Error((await res.text()) || res.statusText);
       var reader = res.body.getReader(), dec = new TextDecoder(), buf = '';

@@ -97,6 +97,19 @@ a.cite:hover { background: var(--primary); color: #fff; text-decoration: none; }
 .composer-bar { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
 .composer-hint { flex: 1; font-size: 12px; color: var(--subtle); }
 .scope { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--subtle); font-weight: 600; }
+.scope-pick { position: relative; }
+.scope-btn { list-style: none; cursor: pointer; font-size: 13px; font-weight: 400; color: var(--text); padding: 4px 26px 4px 8px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; position: relative; }
+.scope-btn::-webkit-details-marker { display: none; }
+.scope-btn::after { content: ""; position: absolute; right: 9px; top: 50%; width: 6px; height: 6px; border: solid var(--subtle); border-width: 0 1.5px 1.5px 0; transform: translateY(-70%) rotate(45deg); }
+.scope-pick[open] .scope-btn { border-color: var(--primary); }
+.scope-menu { position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 30; min-width: 280px; max-width: 360px; max-height: 360px; overflow-y: auto; padding: 8px 0; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 6px 24px rgba(27,42,50,.18); font-weight: 400; color: var(--text); }
+.scope-all { display: block; padding: 4px 14px 8px; }
+.scope-group { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 14px 4px; border-top: 1px solid var(--border); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--subtle); }
+.scope-group .link-btn { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.scope-item { display: flex; align-items: center; gap: 8px; padding: 5px 14px; font-size: 13px; cursor: pointer; }
+.scope-item:hover { background: var(--hover, rgba(0,114,163,.06)); }
+.scope-item input { margin: 0; accent-color: var(--primary); }
+.scope-foot { margin: 6px 14px 0; padding-top: 8px; border-top: 1px solid var(--border); font-size: 11px; color: var(--subtle); }
 .scope select, .field select { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); color: var(--text); max-width: 260px; }
 
 /* Sources page */
@@ -177,6 +190,9 @@ a.cite:hover { background: var(--primary); color: #fff; text-decoration: none; }
   .composer-bar { flex-wrap: wrap; }
   .scope { flex: 1; min-width: 0; }
   .scope select { flex: 1; min-width: 0; width: 100%; }
+  .scope-pick { flex: 1; min-width: 0; }
+  .scope-btn { max-width: none; }
+  .scope-menu { min-width: 0; width: min(320px, calc(100vw - 32px)); }
   .chat-head { flex-wrap: wrap; align-items: center; }
   .chat-title h1 { font-size: 20px; white-space: normal; }
 }

@@ -37,15 +37,36 @@
     <div class="composer-box">
       <textarea id="question" rows="1" placeholder="Ask a question about your knowledge sources…" aria-label="Question" required></textarea>
       <div class="composer-bar">
-        <label class="scope">
+        {# Sources: tick one or more; none ticked = every source except spreadsheets. #}
+        {% set sel = chat.scope.split(',') if chat and chat.scope and chat.scope != 'all' else [] %}
+        {% set enabled = sources | selectattr('enabled') | list %}
+        {% set groups = [('web-site', 'Blogs and web sites'), ('markdown-repo', 'Markdown repositories'), ('spreadsheet', 'Spreadsheets')] %}
+        <div class="scope">
           <span>Sources</span>
-          <select id="scope" aria-label="Which sources to search">
-            <option value="all">All sources</option>
-            {% for s in sources if s.enabled %}
-            <option value="{{ s.name }}" {{ 'selected' if chat and chat.scope == s.name else '' }}>{{ s.title }}</option>
-            {% endfor %}
-          </select>
-        </label>
+          <details class="scope-pick" id="scope-pick">
+            <summary class="scope-btn" id="scope-label" aria-label="Which sources to search">All sources (not spreadsheets)</summary>
+            <div class="scope-menu" role="group" aria-label="Sources to search">
+              <button type="button" class="link-btn scope-all" data-scope-all>All sources (not spreadsheets)</button>
+              {% for plugin, label in groups %}
+              {% set items = enabled | selectattr('plugin', 'equalto', plugin) | list %}
+              {% if items %}
+              <div class="scope-group"><span>{{ label }}</span>{% if items | length > 1 %}<button type="button" class="link-btn" data-scope-only="{{ plugin }}">only these</button>{% endif %}</div>
+              {% for s in items %}
+              <label class="scope-item"><input type="checkbox" value="{{ s.name }}" data-plugin="{{ s.plugin }}" {{ 'checked' if s.name in sel else '' }}><span>{{ s.title }}</span></label>
+              {% endfor %}
+              {% endif %}
+              {% endfor %}
+              {% set others = enabled | rejectattr('plugin', 'in', ['web-site', 'markdown-repo', 'spreadsheet']) | list %}
+              {% if others %}
+              <div class="scope-group"><span>Other sources</span></div>
+              {% for s in others %}
+              <label class="scope-item"><input type="checkbox" value="{{ s.name }}" data-plugin="{{ s.plugin }}" {{ 'checked' if s.name in sel else '' }}><span>{{ s.title }}</span></label>
+              {% endfor %}
+              {% endif %}
+              <p class="scope-foot">Tick one or more. Nothing ticked searches every source except spreadsheets.</p>
+            </div>
+          </details>
+        </div>
         <span class="composer-hint">Enter to send · Shift+Enter for a new line</span>
         <button class="btn btn-primary" id="send" type="submit">Send</button>
         <button class="btn btn-outline" id="stop" type="button" hidden>Stop</button>

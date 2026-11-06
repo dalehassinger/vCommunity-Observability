@@ -196,11 +196,17 @@ def create_app() -> FastAPI:
             "auth": bool(cfg.api_tokens), "settings": s, **ctx})
 
     def scope_list(scope: Any) -> list[str] | None:
-        if not scope or scope == "all":
-            return None
-        names = [scope] if isinstance(scope, str) else list(scope)
-        known = {s["name"] for s in db.list_sources()}
-        return [n for n in names if n in known] or None
+        """Source names a question may use. "All sources" leaves spreadsheet sources out: they
+        are used (search and data questions) only when picked by name."""
+        srcs = db.list_sources()
+        if isinstance(scope, str):          # "isvara" or "isvara,vcrocs" (saved chats, /api/search)
+            scope = [n.strip() for n in scope.split(",") if n.strip()]
+        if not scope or "all" in scope:
+            # "-" matches no source, so with only spreadsheet sources "All" searches nothing.
+            return [s["name"] for s in srcs if s["plugin"] != "spreadsheet"] or ["-"]
+        names = [str(n) for n in scope]
+        known = {s["name"] for s in srcs}
+        return [n for n in names if n in known] or scope_list("all")
 
     # -- pages ----------------------------------------------------------------
     @app.get("/", include_in_schema=False)
@@ -349,7 +355,7 @@ def create_app() -> FastAPI:
         chat_id = body.get("chat_id") or ""
         scope = body.get("scope") or "all"
         if not chat_id or not db.get_chat(chat_id):
-            chat_id = db.new_chat(question, scope)
+            chat_id = db.new_chat(question, ",".join(map(str, scope)) if isinstance(scope, list) else str(scope))
         return StreamingResponse(rag.answer_stream(db, settings(), chat_id, question, scope_list(scope)),
                                  media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -523,12 +529,14 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "Empty question")
         chat_id = body.get("chat_id") or ""
         if not chat_id or not db.get_chat(chat_id):
-            chat_id = db.new_chat(question, str(body.get("sources") or "all"))
+            s = body.get("sources") or "all"
+            chat_id = db.new_chat(question, ",".join(map(str, s)) if isinstance(s, list) else str(s))
         return rag.answer(db, settings(), chat_id, question, scope_list(body.get("sources")))
 
     @app.get("/api/search", tags=["chat"], dependencies=[Depends(require_token)])
     def api_search(q: str, sources: str = "all"):
-        """Retrieval only, no model answer: shows which chunks a question would get."""
+        """Retrieval only, no model answer: shows which chunks a question would get.
+        `sources`: "all" (every source except spreadsheets), a name, or names separated by commas."""
         try:
             items = rag.retrieve(db, settings(), q, scope_list(sources))
         except OllamaError as e:
