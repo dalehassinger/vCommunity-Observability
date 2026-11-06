@@ -97,17 +97,45 @@ def chunk_markdown(text: str) -> list[dict[str, Any]]:
     return out
 
 
+CHUNK_OVERLAP = 200   # characters repeated across a hard cut, so no sentence is lost at the seam
+
+
+def _pieces(text: str, limit: int) -> list[tuple[str, str]]:
+    """Cut text into (piece, joiner) pieces of at most `limit` characters, at the gentlest
+    break that works: blank lines, then line breaks, then sentence ends, and only then a
+    hard cut (with a small overlap). No text is dropped."""
+    if len(text) <= limit:
+        return [(text, "\n\n")]
+    for sep, joiner in ((r"\n\s*\n", "\n\n"), (r"\n", "\n"), (r"(?<=[.!?])\s+", " ")):
+        parts = [p for p in re.split(sep, text) if p.strip()]
+        if len(parts) > 1:
+            out: list[tuple[str, str]] = []
+            for p in parts:
+                out += [(q, joiner if j == "\n\n" else j) for q, j in _pieces(p, limit)]
+            return out
+    step = limit - CHUNK_OVERLAP
+    return [(text[i:i + limit], "") for i in range(0, len(text) - CHUNK_OVERLAP, step)]
+
+
 def _split_long(body: str) -> list[str]:
+    """Sections longer than MAX_CHUNK_CHARS become several chunks of at most that size.
+    Pieces are packed back together up to the limit, so most chunks stay close to it."""
     if len(body) <= MAX_CHUNK_CHARS:
         return [body]
     parts, cur = [], ""
-    for para in re.split(r"\n\s*\n", body):
-        if cur and len(cur) + len(para) > MAX_CHUNK_CHARS:
+    for piece, joiner in _pieces(body, MAX_CHUNK_CHARS):
+        if cur and len(cur) + len(piece) > MAX_CHUNK_CHARS:
             parts.append(cur.strip())
             cur = ""
-        cur += para + "\n\n"
+        cur += piece + joiner
     if cur.strip():
         parts.append(cur.strip())
+    # A '## heading' line left on its own (the text after it was cut): join it to the next
+    # chunk when that fits, otherwise drop it. Every chunk keeps its heading anyway.
+    if len(parts) > 1 and "\n" not in parts[0] and parts[0].startswith("#") and len(parts[0]) < 200:
+        first = parts.pop(0)
+        if len(first) + 1 + len(parts[0]) <= MAX_CHUNK_CHARS:
+            parts[0] = first + "\n" + parts[0]
     return parts
 
 

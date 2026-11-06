@@ -17,7 +17,7 @@ import time
 from typing import Any, Iterator
 from urllib.parse import quote
 
-from . import data
+from . import data, overview
 from .db import DB
 from .indexer import embed_prefixes
 
@@ -131,8 +131,11 @@ def _snippet(text: str, limit: int = 280) -> str:
 
 
 def build_messages(cfg: dict[str, Any], items: list[dict[str, Any]], question: str,
-                   history: list[dict[str, Any]]) -> list[dict[str, str]]:
-    blocks = []
+                   history: list[dict[str, Any]], lead: list[str] | None = None,
+                   note: str = "") -> list[dict[str, str]]:
+    """lead: blocks that come before the chunks (the catalogs of a whole-source question);
+    note: an instruction added after the sources."""
+    blocks = list(lead or [])
     for it in items:
         head = f"[{it['n']}] id: {it['doc_id']} | {it['title']}"
         if it["heading"]:
@@ -151,8 +154,36 @@ def build_messages(cfg: dict[str, Any], items: list[dict[str, Any]], question: s
         for m in history[-turns * 2:]:
             if m["role"] in ("user", "assistant") and m["content"]:
                 msgs.append({"role": m["role"], "content": m["content"]})
-    msgs.append({"role": "user", "content": f"Sources:\n\n{context}\n\n=====\n\nQuestion: {question}"})
+    msgs.append({"role": "user", "content": f"Sources:\n\n{context}\n\n" + (f"{note}\n\n" if note else "")
+                 + f"=====\n\nQuestion: {question}"})
     return msgs
+
+
+def overview_sources(db: DB, cfg: dict[str, Any], question: str, sources: list[str] | None,
+                     ov: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]]]:
+    """Cards, catalog blocks and extra chunks for a whole-source question. The catalogs come
+    first; the best matching chunks fill what is left of the context (at most 6)."""
+    cats = ov["catalogs"]
+    cards = [overview.card(c, i + 1) for i, c in enumerate(cats)]
+    lead = [overview.block(c, i + 1) for i, c in enumerate(cats)]
+    extra: list[dict[str, Any]] = []
+    room = ov["left"] - 1000
+    if room > 3000:
+        try:
+            items = retrieve(db, cfg, question, [c["source"] for c in cats])
+        except OllamaError:
+            items = []
+        for it in items:
+            size = len(it["text"]) + 200
+            if it["kind"] != "hit" or size > room:
+                continue
+            room -= size
+            extra.append(it)
+            if len(extra) >= 6:
+                break
+        for k, it in enumerate(extra, len(cats) + 1):
+            it["n"] = k
+    return cards + source_cards(extra), lead, extra
 
 
 def build_data_messages(cfg: dict[str, Any], res: dict[str, Any], question: str,
@@ -207,8 +238,20 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
         if db.stats()["chunks"] == 0:
             raise OllamaError("Nothing is indexed yet. Open Knowledge sources and press Sync now.")
         res = None
+        ov = None
         srcs = data.tables_for(db, sources) if cfg.get("data_questions", True) else []
-        if srcs and data.is_data_question(question, srcs):
+        if cfg.get("overview_questions", True) and overview.is_overview_question(question) and not (
+                srcs and data.is_data_question(question, srcs) and not overview.TEXTY.search(question)):
+            # "How many posts...", "summarize this blog": a catalog of every post, not the top chunks.
+            ov = overview.build(db, cfg, sources)
+        if ov:
+            cards, lead, extra = overview_sources(db, cfg, question, sources, ov)
+            stats["overview"] = {"posts": sum(len(c["posts"]) for c in ov["catalogs"]), "level": ov["level"],
+                                 "shown": sum(c["shown"] for c in ov["catalogs"]), "excerpts": len(extra)}
+            yield sse("meta", {"chat_id": chat_id, "sources": cards, "model": model,
+                               "retrieval_ms": int((time.time() - t0) * 1000)})
+            msgs = build_messages(cfg, extra, question, history, lead=lead, note=overview.instructions(ov))
+        elif srcs and data.is_data_question(question, srcs):
             rkind = data.report_kind(question)
             src = data.pick_source(srcs, question)
             if rkind == "dashboard":
@@ -222,7 +265,9 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
             if res.get("error"):
                 stats["data_error"] = res["error"]
                 res = None
-        if res:
+        if ov:
+            pass
+        elif res:
             cards = [data.card(res)]
             yield sse("meta", {"chat_id": chat_id, "sources": cards, "model": model,
                                "retrieval_ms": int((time.time() - t0) * 1000)})

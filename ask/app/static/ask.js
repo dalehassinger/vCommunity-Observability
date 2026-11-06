@@ -308,8 +308,71 @@
     return card;
   }
 
+  // A whole-source question's source: the catalog of every post in one source, with the
+  // counts Ask made (posts, dates, posts per year, frequent title words) and the full list.
+  function catalogCard(s, prefix) {
+    var card = el('div', 'src-card catalog-card');
+    card.id = prefix + '-' + s.n;
+    var head = el('div', 'src-head');
+    head.appendChild(el('span', 'src-n', String(s.n)));
+    var t = el('a', 'src-title', s.title);
+    t.href = '/sources/' + encodeURIComponent(s.source);
+    head.appendChild(t);
+    card.appendChild(head);
+    var kpis = el('div', 'cat-kpis');
+    [['Posts', String(s.posts)], ['First', s.first || '–'], ['Latest', s.last || '–']].concat(
+      s.other ? [['Other pages', String(s.other)]] : []).forEach(function (k) {
+      var d = el('div', 'cat-kpi');
+      d.appendChild(el('span', 'cat-kpi-label', k[0]));
+      d.appendChild(el('b', null, k[1]));
+      kpis.appendChild(d);
+    });
+    card.appendChild(kpis);
+    if (s.years && s.years.length) {
+      var max = Math.max.apply(null, s.years.map(function (y) { return y[1]; })) || 1;
+      var yrs = el('div', 'cat-years');
+      s.years.forEach(function (y) {
+        var row = el('div', 'cat-year');
+        row.appendChild(el('span', null, y[0]));
+        var bar = el('span', 'cat-bar'); var fill = el('i'); fill.style.width = Math.round(y[1] / max * 100) + '%';
+        bar.appendChild(fill); row.appendChild(bar);
+        row.appendChild(el('b', null, String(y[1])));
+        yrs.appendChild(row);
+      });
+      card.appendChild(yrs);
+    }
+    if (s.words && s.words.length) {
+      var w = el('div', 'cat-words');
+      w.appendChild(el('span', 'subtle', 'Frequent in titles: '));
+      s.words.forEach(function (x) { w.appendChild(el('span', 'badge', x[0] + ' · ' + x[1])); });
+      card.appendChild(w);
+    }
+    var det = el('details', 'cat-list');
+    det.appendChild(el('summary', null, 'All ' + s.items.length + ' posts' +
+      (s.shown < s.items.length ? ' (the model saw the newest ' + s.shown + ')' : '')));
+    var ol = el('ol');
+    s.items.forEach(function (it) {
+      var li = el('li');
+      li.appendChild(el('span', 'cat-date', it.date || 'undated'));
+      var a = el('a', null, it.title);
+      a.href = '/doc/' + it.row;
+      li.appendChild(a);
+      if (it.url) { var ext = el('a', 'cat-ext', '↗'); ext.href = it.url; ext.target = '_blank'; ext.rel = 'noopener'; ext.title = it.url; li.appendChild(ext); }
+      ol.appendChild(li);
+    });
+    det.appendChild(ol);
+    card.appendChild(det);
+    var links = el('div', 'src-links');
+    var open = el('a', null, 'Source documents'); open.href = '/sources/' + encodeURIComponent(s.source);
+    links.appendChild(open);
+    if (s.url) { var v = el('a', null, linkLabel(s.url)); v.href = s.url; v.target = '_blank'; v.rel = 'noopener'; links.appendChild(v); }
+    card.appendChild(links);
+    return card;
+  }
+
   function sourceCard(s, prefix) {
       if (s.kind === 'data') return dataCard(s, prefix);
+      if (s.kind === 'catalog') return catalogCard(s, prefix);
       var card = el('div', 'src-card ' + (s.kind === 'linked' ? 'linked' : 'hit'));
       card.id = prefix + '-' + s.n;
       var head = el('div', 'src-head');
@@ -383,8 +446,10 @@
     }
     var det = el('details', 'sources');
     var isData = hits.length && hits[0].kind === 'data';
-    det.appendChild(el('summary', null, isData ? 'Query and result' : 'Source details (' + hits.length + (linked.length ? ' + ' + linked.length + ' linked' : '') + ')'));
-    if (isData) det.open = true;
+    var isCat = hits.length && hits[0].kind === 'catalog';
+    det.appendChild(el('summary', null, isData ? 'Query and result' : isCat ? 'Catalog and sources (' + hits.length + ')' :
+      'Source details (' + hits.length + (linked.length ? ' + ' + linked.length + ' linked' : '') + ')'));
+    if (isData || isCat) det.open = true;
     [[hits, ''], [linked, 'Linked files']].forEach(function (g) {
       if (!g[0].length) return;
       if (g[1]) det.appendChild(el('div', 'src-group', g[1]));
@@ -533,6 +598,8 @@
             sourceCards(a.sources, payload.sources, a.prefix, a.strip);
             a.text.innerHTML = '<span class="typing"><i></i><i></i><i></i></span> <span class="subtle">' +
               (payload.sources.length && payload.sources[0].kind === 'data' ? 'Query returned ' + payload.sources[0].row_count + ' rows, asking ' :
+               payload.sources.length && payload.sources[0].kind === 'catalog' ? 'Catalog of ' + payload.sources.filter(function (s) { return s.kind === 'catalog'; })
+                 .reduce(function (t, s) { return t + s.posts; }, 0) + ' posts, asking ' :
                payload.sources.length ? 'Found ' + payload.sources.length + ' sources, asking ' : 'No matching sources, asking ') +
               DOMPurify.sanitize(payload.model) + '…</span>';
           } else if (ev === 'report') {

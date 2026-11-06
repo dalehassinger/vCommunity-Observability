@@ -400,7 +400,7 @@ The model is **not trained or fine-tuned**. It uses retrieval-augmented generati
 ```
 
 1. **Sync.** A source plug-in clones or pulls the repository and prints its markdown files as JSON. Only files whose content changed since the last sync are re-embedded.
-2. **Index.** Each file is split at `## ` headings (long sections on blank lines). Each chunk is embedded together with the file title and id, so a chunk makes sense on its own. Everything lives in one SQLite file, `data/ask.db`: documents, chunks, the FTS5 keyword index, the sqlite-vec vector index, chats and settings.
+2. **Index.** Each file is split at `## ` headings; sections over 3,500 characters are split again (blank lines, line breaks, sentences, then a hard cut with overlap), so no chunk is larger than that. Each chunk is embedded together with the file title and id, so a chunk makes sense on its own. Everything lives in one SQLite file, `data/ask.db`: documents, chunks, the FTS5 keyword index, the sqlite-vec vector index, chats and settings.
 3. **Retrieve.** A question is embedded and searched two ways, by meaning (sqlite-vec, cosine) and by keyword (FTS5, BM25). The two rankings are merged with reciprocal rank fusion, with at most two chunks per file.
 4. **Follow links.** Files that the matches link to in their metadata are added: `same_name` first (it stops the model mixing the VM and ESXi meaning of the same metric label), then `internal_derive`, `same_meaning` and `related`. They show as **Linked files** under the answer.
 5. **Answer.** The numbered sources, the last few turns of the chat and the question go to the Ollama chat model with the system prompt (answer only from the sources, cite them as `[n]`, say when the sources don't cover it, flag `status: draft` content, follow diagnosis steps in order). The answer streams back word by word.
@@ -477,13 +477,14 @@ One card per source with a status ring (green OK, blue syncing, red error, amber
 | Embedding model | `nomic-embed-text` | Only `embedding` models are listed. **Changing it clears the index and re-embeds every source** (vectors from two models can't be compared) |
 | Show model thinking | off | Sends `think: true` to Ollama |
 | Keep model loaded | `10m` | Ollama `keep_alive` |
-| Chunks to retrieve | 8 | Direct matches; linked files are added on top |
-| Context budget (chars) | 24000 | Cap for all sources together (about 4 characters per token) |
-| Model context (tokens) | 16384 | Ollama `num_ctx`; must hold the sources, history and answer |
+| Chunks to retrieve | 8 | How many matching sections are picked; linked files are added on top. See [Chunks, context budget and model context](#chunks-context-budget-and-model-context) |
+| Context budget (chars) | 24000 | How much source text (in characters) is sent with a question, for all sources together |
+| Model context (tokens) | 16384 | Ollama `num_ctx`: the model's working memory for one answer; must hold the sources, system prompt, history, thinking and answer |
 | Temperature | 0.2 | Low keeps answers close to the sources |
 | Chat history (turns) | 3 | 0 = every question stands alone |
 | Follow links | on | Link expansion (step 4 above) |
 | Data questions | on | Counting and totals questions about spreadsheet sources are answered with a read-only SQL query (see [Spreadsheets and data questions](#spreadsheets-and-data-questions)) |
+| Whole-source questions | on | "How many posts…", "summarize this blog", "what does it write about most" are answered from a catalog of every post in the selected sources (see [Whole-source questions](#whole-source-questions)) |
 | Observability URL | `http://localhost:8080` | Sidebar link back to the dashboards |
 | System prompt | built in | Editable; **Reset to the default** restores it |
 
@@ -590,6 +591,31 @@ Ollama options sent with every question: `temperature`, `num_ctx`, `think` and `
 
 ### Tuning the answers
 
+#### Chunks, context budget and model context
+
+These three settings decide how much of your knowledge base the model reads for each answer. They work as a chain, and each one caps the next.
+
+**Chunks to retrieve (`top_k`).** When a source is indexed, every document is split into **chunks**: one per `## ` section, and a section longer than 3,500 characters is split into several chunks of at most 3,500 characters (at blank lines first, then line breaks, then sentence ends, and only as a last resort mid-text with a 200-character overlap). No text is dropped: every piece is indexed and keeps the post's title and section heading. A chunk is the unit that is searched and handed to the model. For each question Ask finds the best matching chunks (by meaning and by keyword, at most 2 from the same document) and keeps the best `top_k`. Files those chunks link to (**Follow links**) are added on top. More chunks means more material and more different posts, but also weaker matches further down the list. As a guide, a blog chunk is about 1,000 to 2,000 characters and an Isvara chunk about 450.
+
+**Context budget (`context_chars`).** The most source text, in characters, sent with one question, for all chunks together (each chunk also carries a short header with its title, id and date). Chunks are added best first; one that would go over the budget is skipped and a smaller one may still fit. If the budget is full, raising **Chunks to retrieve** changes nothing, so raise both together. At the default of 24,000 characters, about 12 to 15 blog chunks fit.
+
+**Model context (`num_ctx`, tokens).** The model's working memory for one answer, sent to Ollama as `num_ctx`. It has to hold everything at once: the system prompt, the chat history, the sources, the question, the model's thinking (when on) and the answer it writes. A token is about 3 to 4 characters of English, fewer for code, numbers and product names. If the total is larger, Ollama silently shortens the prompt, which can drop sources or the instructions, and answers get worse or stop early. A bigger context uses more memory on the Ollama machine and makes the first word appear later, since the model reads the whole prompt first.
+
+Rule of thumb: **Model context (tokens) ≥ Context budget (characters) ÷ 3 + 8,000.** The 8,000 leaves room for the system prompt, a few turns of history and the answer; add more with **Show model thinking** on.
+
+| Setting | Default | More data (recommended) | Most data |
+| --- | --- | --- | --- |
+| Chunks to retrieve | 8 | 16 | 24 |
+| Context budget (chars) | 24000 | 48000 | 80000 |
+| Model context (tokens) | 16384 | 32768 | 65536 |
+
+- **Default** suits short look-up questions ("What is CPU Ready?") and smaller models.
+- **More data** gives each answer about twice the material: better summaries and comparisons across several posts, and room for [whole-source questions](#whole-source-questions) to list about 900 post titles (all of a typical set of blogs). A good everyday setting for a 27B or larger model.
+- **Most data** is for questions across many sources at once. Check that the chat model supports that context (Qwen 3.x does; Ollama shows a model's maximum with `ollama show <model>`), and expect slower answers and more memory use.
+- More chunks don't help when the right post isn't found at all. Then rephrase with the words the post uses, pick the source in the **Sources** menu, or check the source's document count and **Date from** on Knowledge sources.
+- **Whole-source questions** size their catalog from **Model context** (about 2.5 characters per token, never less than **Context budget**), so a larger model context lets more post titles and headings through.
+- If answers become slow or are cut off, step back one column.
+
 #### Temperature
 
 Temperature controls how adventurous the model is when it picks each next word. These ranges are general guidance for LLMs, not measured on this app:
@@ -620,6 +646,20 @@ Qwen 3.x and some other models can reason step by step before they answer. The *
 - **On.** The model reasons first, then answers. Ask streams the reasoning separately (the `thinking` event), shows it above the answer and saves it with the message. It helps multi-step questions such as comparing two metrics or a troubleshooting walk-through. It costs a slower start and many more tokens, and the reasoning uses up `num_ctx`, which can crowd out sources or cut the answer short. Consider raising `num_ctx` if you use it often.
 - Thinking does not find new sources. It reasons over the same retrieved sources.
 - Ask always sends the flag, even when it is off, because Ollama lets thinking models think by default when `think` is missing. Models without thinking ignore it.
+
+### Whole-source questions
+
+A normal answer only sees the best few matching chunks (**Chunks to retrieve**, 8 by default), so it can't count the posts of a blog or summarize a whole site: for "How many blogs are in the source?" the model would see about 7 posts out of 200. Questions about a whole source therefore get a different context: a **catalog of every post**.
+
+- **Which questions.** *How many posts / blogs / articles*, *list all posts*, *summary of this site / blog*, *most common topics*, *what does he write about the most*, *latest / first post*, *posts per year or month*, *how often does she post*. Spreadsheet sources are left out (they have [data questions](#spreadsheets-and-data-questions)); when a spreadsheet is selected too, a question about hosts, VMs or sheets still goes to the spreadsheet.
+- **What the model gets.** For each selected source, as one numbered source:
+  - numbers Ask counted over every indexed document, so they are exact: posts (category, tag and listing pages are counted apart), first and latest date, posts per year and per month, and the most frequent words and word pairs in the titles (with how many titles contain them);
+  - the source's **Date from / Date to** setting, so the model can say that older posts are not indexed;
+  - every post, newest first: date, title and its section headings.
+- **Size.** The catalog may use most of the context window (about `Model context (tokens)` x 2.5 characters, never less than **Context budget**). If the headings don't fit, only dates and titles are sent; if even those don't fit (several large blogs at once), the newest posts are kept and the rest are named as left out. 200 posts with headings fit in the default 16384-token context; raise **Model context (tokens)** to 32768 for several blogs at once.
+- **Excerpts.** When room is left, up to 6 of the best matching chunks follow the catalog, so the model can also quote post text.
+- **In the chat.** The sources show an **All posts** card per source: posts, first and latest date, a bar per year, the frequent title words, and the full list of posts (**All 203 posts**, each opening the indexed post, with a link to the original). The answer's stats show `overview`.
+- Turn **Whole-source questions** off on the Settings page to send these questions through the normal search.
 
 ### Spreadsheets and data questions
 
@@ -1058,6 +1098,8 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 | Ask: Settings shows "Cannot reach Ollama at http://host.docker.internal:11434" | Ollama listens only on 127.0.0.1. Run `launchctl setenv OLLAMA_HOST 0.0.0.0`, quit and reopen Ollama, check `lsof -nP -iTCP:11434 -sTCP:LISTEN` shows `*:11434`. With nerdctl/containerd use `http://host.lima.internal:11434` |
 | Ask: source card is red with "embedding with 'nomic-embed-text' failed: model not found" | `ollama pull nomic-embed-text` on the Mac, then **Sync now** |
 | Ask: answer says "Nothing is indexed yet" | Open **Knowledge sources** and press **Sync now**; watch the card for errors (git clone needs internet, or use a local folder) |
+| Ask: "how many posts" or a blog summary only knows a few posts | The question didn't read as a whole-source question (use words such as *how many posts*, *summary of this blog*, *most common topics*), **Whole-source questions** is off, or the blog was not selected. Check the **All posts** card under the answer. If the post count itself is low, look at the source's **Date from** (older posts are not indexed) and **Max pages** settings and its document count on Knowledge sources |
+| Ask: one source's answers are poor or cut off after updating to 2026-11-06 | Chunks made before 2026-11-06 could be very large when a crawled page had no blank lines (one was 277,000 characters), and one such chunk could fill the whole model context. New syncs cap chunks at 3,500 characters; press **Re-index all** on Knowledge sources once so existing documents are chunked again |
 | Ask: answers are slow or cut off | Use a smaller chat model, lower **Chunks to retrieve** / **Context budget**, or raise **Model context (tokens)** if the model supports it. The first answer after a while is slower while Ollama loads the model (**Keep model loaded**) |
 | Ask: web-site source is red with "could not reach https://..." | The container can't reach the site (DNS, proxy or firewall). Test with `docker compose exec vco-ask python -c "import requests;print(requests.get('https://SITE/').status_code)"`. Behind a proxy, set `HTTPS_PROXY` for the `vco-ask` service. The previous index is kept |
 | Ask: web-site source indexed 0 pages or misses posts | Check the log (`docker compose logs vco-ask`): `out_of_range` = outside the date range, `too_short` = pages with under 200 characters of article text (list pages), `blocked` = robots.txt. Widen the date range, set **Pages with no date** to `keep`, adjust the URL globs, or raise **Max pages per sync** |
@@ -1113,6 +1155,7 @@ docs/screenshots/       screenshots used in this README
 ask/                    vCommunity Ask (second container)
   app/main.py           routes: chat, sources, settings, document view, REST API
   app/rag.py            hybrid retrieval, link expansion, prompt, streamed answers
+  app/overview.py       whole-source questions: catalog of every post with exact counts
   app/data.py           data questions: table choice, model-written SQL, checks, read-only run, charts, dashboard plans
   app/reports.py        HTML reports and dashboards: build the self-contained page, list, delete
   app/indexer.py        source plug-ins, chunking, embedding, scheduled syncs
@@ -1150,6 +1193,9 @@ requirements.in/.txt    direct dependencies / hashed lock file
 
 | Date | Change |
 | --- | --- |
+| 2026-11-06 | Ask: chunks are capped at 3,500 characters. Long sections are split at blank lines, then line breaks, then sentence ends, and only then mid-text with a 200-character overlap, so no text is lost and a single page without blank lines can no longer fill the model context. Run **Re-index all** once to re-chunk existing sources |
+| 2026-11-06 | README: new [Chunks, context budget and model context](#chunks-context-budget-and-model-context) section (what each setting does, how they cap each other, a rule of thumb and recommended values); clearer notes for the three settings in the Settings table |
+| 2026-11-06 | Ask: **whole-source questions**. "How many posts", "summarize this blog", "most common topics" and similar questions get a catalog of every post in the selected sources (exact counts per year and month, frequent title words, every title, date and heading) instead of only the best 8 chunks; new **All posts** card in the chat and **Whole-source questions** setting |
 | 2026-11-06 | Ask: delete several chats at once. **Select** next to **Recent chats** shows check boxes (All, Shift+click ranges) and a **Delete (n)** button; new `POST /ui/chats/delete` takes a list of chat ids |
 | 2026-11-06 | Ask: the chat's **Sources** menu is now a multi-select (check boxes grouped by blogs and web sites, markdown repositories and spreadsheets, with **only these** per group); the chat stores every picked source, a new chat starts with the last selection, and `/api/search` takes `sources=a,b` |
 | 2026-11-06 | Ask: spreadsheet sources are used only when picked in the sources menu (or named in the API). **All sources** (now labelled *All sources (not spreadsheets)*) searches every other source |

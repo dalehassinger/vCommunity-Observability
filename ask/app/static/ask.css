@@ -268,3 +268,21 @@ body.chart-open { overflow: hidden; }
 .upload-drop { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
 .upload-list { margin: 8px 0 0; padding-left: 18px; }
 .upload-list li { margin: 2px 0; }
+
+/* Whole-source questions: the catalog card (every post of a source, with Ask's counts) */
+.src-card.catalog-card { grid-column: 1 / -1; border-left: 4px solid var(--primary); }
+.cat-kpis { display: flex; flex-wrap: wrap; gap: 22px; margin: 8px 0 10px; }
+.cat-kpi { display: flex; flex-direction: column; gap: 2px; }
+.cat-kpi-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--subtle); font-weight: 600; }
+.cat-kpi b { font-size: 18px; font-weight: 400; }
+.cat-years { display: grid; gap: 4px; max-width: 420px; margin-bottom: 10px; }
+.cat-year { display: grid; grid-template-columns: 52px 1fr 40px; align-items: center; gap: 8px; font-size: 12px; }
+.cat-year b { text-align: right; font-weight: 600; }
+.cat-bar { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+.cat-bar i { display: block; height: 100%; background: var(--primary); border-radius: 4px; }
+.cat-words { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; margin-bottom: 10px; }
+.cat-list summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.cat-list ol { margin: 8px 0 0; padding-left: 22px; max-height: 360px; overflow-y: auto; font-size: 13px; }
+.cat-list li { padding: 2px 0; }
+.cat-date { display: inline-block; min-width: 86px; color: var(--subtle); font-variant-numeric: tabular-nums; }
+.cat-ext { margin-left: 6px; font-size: 11px; }
