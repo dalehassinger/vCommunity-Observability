@@ -471,11 +471,19 @@
     var nav = document.querySelector('.sidenav');
     var empty = nav.querySelector('.nav-empty');
     if (empty) empty.remove();
-    var section = Array.prototype.find.call(nav.querySelectorAll('.nav-section'), function (s) { return s.textContent === 'Recent chats'; });
+    var list = document.getElementById('chat-list');
     var a = el('a', 'nav-link sub chat-link active', title);
     a.href = '/chat/' + id; a.title = title;
     nav.querySelectorAll('.nav-link.active').forEach(function (x) { x.classList.remove('active'); });
-    section.insertAdjacentElement('afterend', a);
+    if (!list) return;
+    // Same markup as base.html, so the sidebar's Select mode can tick it too.
+    var row = el('div', 'chat-row'), box = el('input', 'chat-check');
+    box.type = 'checkbox'; box.value = id; box.tabIndex = -1;
+    box.setAttribute('aria-label', 'Select chat: ' + title);
+    row.appendChild(box); row.appendChild(a);
+    list.insertBefore(row, list.firstChild);
+    var sel = document.getElementById('chat-select');
+    if (sel && document.getElementById('chat-bar').hidden) sel.hidden = false;
   }
 
   async function ask(question) {

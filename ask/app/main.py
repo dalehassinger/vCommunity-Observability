@@ -360,6 +360,15 @@ def create_app() -> FastAPI:
                                  media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
+    @app.post("/ui/chats/delete", include_in_schema=False)
+    def ui_delete_chats(request: Request, body: dict = Body(...)):
+        """Delete several chats at once (the sidebar's Select mode)."""
+        same_origin(request)
+        ids = [i for i in (body.get("ids") or []) if isinstance(i, str)][:500]
+        for cid in ids:
+            db.delete_chat(cid)
+        return {"ok": True, "deleted": len(ids)}
+
     @app.post("/ui/chats/{chat_id}/delete", include_in_schema=False)
     def ui_delete_chat(request: Request, chat_id: str):
         same_origin(request)
