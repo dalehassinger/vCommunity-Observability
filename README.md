@@ -723,6 +723,42 @@ Tips for good data answers:
 - Use a chat model that is good at SQL; Qwen 3.x models are. Smaller models write wrong queries more often, and you see it in the query card.
 - Turn **Data questions** off on the Settings page to send every question through the normal search.
 
+### PDF documents (with OCR)
+
+A **PDF documents** source (plug-in `pdf`) indexes PDF files such as product guides, design documents, runbooks and white papers. Scanned PDFs work too: pages with no text layer are read with OCR.
+
+**Add one:** **Knowledge sources** → **Add source** → **PDF documents**. Then drag PDFs onto the source's card (or **choose files**, several at once). Each upload is saved under `data/uploads/<source>/` and the source re-indexes. **Remove** deletes an uploaded file. To read a folder instead, set **Files from** = `folder` and copy the PDFs into `./ask-knowledge` (mounted read-only at `/knowledge`).
+
+**How the text is read:**
+
+1. [pypdf](https://github.com/py-pdf/pypdf) (BSD-3-Clause, pure Python) reads each page's text layer.
+2. A page with almost no text (under 25 characters: a scanned or photographed page) is rendered to a grayscale image with `pdftoppm` (poppler-utils) and read with [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) (Apache-2.0). Both are installed in the Ask image and run offline.
+3. Each PDF becomes one document, titled from the PDF's Title property (or the file name), with one `## Page N` section per page (`## Page N (OCR)` for OCR pages). The page sections become the chunks, so answers name the page.
+4. The source card under an answer has **Open PDF, page N**, which opens the file in the browser at that page (`/files/<source>/<file>.pdf#page=N`). Ask serves only the PDFs of `pdf` sources.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `location` (Files from) | `upload` | `upload` = PDFs uploaded on the Knowledge sources page; `folder` = a folder in the container |
+| `path` (Folder) | `/knowledge` | Only for `folder` |
+| `pattern` (File names) | `**/*.pdf` | Only for `folder`. Globs relative to the folder, one per line |
+| `ocr` | `auto` | `auto` = OCR only pages with no text layer; `always` = OCR every page (for PDFs whose text layer is garbled; slow); `off` = never |
+| `ocr_languages` | `eng` | Tesseract languages joined with `+`, for example `eng+deu`. The image has English; for others build with `--build-arg OCR_LANGS="tesseract-ocr-deu"` (see below) |
+| `ocr_dpi` | `200` | Render resolution for OCR. 300 reads small print better but is slower |
+| `max_pages_per_file` | `2000` | Pages after this are ignored |
+| `uploads` | `keep` | `keep` = every uploaded PDF is indexed (same file name overwrites); `replace` = a new upload removes the earlier files |
+
+**Speed.** Text pages take milliseconds. OCR takes a few seconds per page on Apple Silicon, so a 300-page scanned manual can take 15 to 30 minutes the first time. Results are cached per file (by content hash) in `data/sources/<source>/cache/`, so re-syncs only read new or changed PDFs, and a sync with no file changes answers "no changes" at once. A sync may run 60 minutes: the plug-in stops a few minutes before that, indexes what it has (the version shows "N to finish next sync") and continues where it stopped on the next sync (press **Sync now** to continue right away).
+
+**More OCR languages.** Debian packages `tesseract-ocr-<lang>` add languages (`deu`, `fra`, `spa`, `nld`, `jpn` ...):
+
+```bash
+docker compose build --build-arg OCR_LANGS="tesseract-ocr-deu tesseract-ocr-fra" vco-ask && docker compose up -d vco-ask
+```
+
+Then set **OCR languages** to `eng+deu+fra`. For a dark site, build the image online with the languages you need, then save it with `New-OfflineBundle.ps1`.
+
+**Not supported:** password-protected PDFs (skipped, with a line in the log), handwriting (Tesseract reads printed text), tables as tables (their cells come out as text lines), and images or diagrams inside PDFs (only their text is read).
+
 ### HTML reports and dashboards
 
 Ask a data question with the word *report* or *dashboard* and, besides the normal answer, Ask writes a modern, self-contained HTML page you can open, print, download and email.
@@ -867,7 +903,7 @@ Below that: **Tool turns per answer** (default 6: how many times the model may c
 | `ASK_OBSERVABILITY_URL` | Sidebar link to the dashboards |
 | `ASK_CONFIG`, `ASK_DATA_DIR`, `ASK_SHARED_DIR` | Config file, data folder, folder holding the shared `app.css` (set in the image) |
 | `ASK_GITHUB_TOKEN` (any name) | Read-only token for a private repository; put the variable's **name** in the source's "Token env var" |
-| `ASK_UPLOAD_MAX_MB` | Largest spreadsheet upload in MB (default 50) |
+| `ASK_UPLOAD_MAX_MB` | Largest upload (spreadsheet or PDF) in MB (default 50). Raise it for large scanned PDFs |
 | `ASK_AGENT_TOKEN` | Token of the Ask host agent (printed by `Install-AskAgent.ps1`), for the Performance page |
 | `ASK_AGENT_URL` | Where Ask reaches the host agent (default `http://host.docker.internal:9101`) |
 | `VCO_ASK_URL` | First container: sidebar link to Ask |
@@ -882,6 +918,7 @@ A source plug-in is a folder with `source.yaml` and a script in **Python or Powe
 | `ASK_SOURCE_WORKDIR` | A private folder under `data/sources/<name>` (for clones or caches) |
 | `ASK_SOURCE_STATE` | JSON the script returned last time (for example the commit), `{}` on a full re-index |
 | `ASK_SOURCE_FULL` | `1` on **Re-index all** |
+| `ASK_SOURCE_TIME_LIMIT` | Seconds the script may run (`timeout_seconds` in `source.yaml`). A script still running at the limit is stopped and the sync fails with nothing changed, so a slow plug-in should stop early and print what it has (`web-site` does) |
 | `ASK_SOURCE_UPLOAD_DIR` | The folder the Knowledge sources page saves this source's uploads into (`data/uploads/<name>`); used by `spreadsheet` |
 
 The script prints **one JSON object** to stdout (logs go to stderr; a non-zero exit marks the sync failed):
@@ -902,11 +939,12 @@ The script prints **one JSON object** to stdout (logs go to stderr; a non-zero e
 
 **`markdown-repo`.** Clones (`git clone --depth 1`) or pulls a repository, or reads a folder mounted at `/knowledge` (`./ask-knowledge`). Options: `repo_url`, `branch`, `path`, `include`/`exclude` globs (`**` crosses folders), `metadata` (`auto`, `isvara`, `none`), `web_url` (defaults to the GitHub blob URL) and `token_env`. With isvara metadata, the trailing `## Metadata` YAML block becomes `status`, `links`, `images` and filter fields and is **not** embedded, as the isvara README asks.
 
-**`web-site` (blog crawler).** Indexes the posts of a web site you don't have the markdown for. It finds pages from the site's `sitemap.xml` (and `Sitemap:` lines in `robots.txt`) plus its RSS/Atom feed; if neither exists it follows links from the start URL. It only fetches the start URL's host, always respects `robots.txt` (including `Crawl-delay`), waits `delay_seconds` between requests and stops after `max_pages` downloads per sync. [trafilatura](https://github.com/adbar/trafilatura) (Apache-2.0) pulls the article out of each page (menus, sidebars and footers dropped) as markdown, so it goes through the same chunking, embedding and search as repository files.
+**`web-site` (blog crawler).** Indexes the posts of a web site you don't have the markdown for. It finds pages from the site's `sitemap.xml` (and `Sitemap:` lines in `robots.txt`) plus its RSS/Atom feed; if neither exists it follows links from the start URL. It only fetches the start URL's host (and by default only pages under the start URL's folder, see `scope`), always respects `robots.txt` (including `Crawl-delay`), waits `delay_seconds` between requests and stops after `max_pages` downloads per sync. [trafilatura](https://github.com/adbar/trafilatura) (Apache-2.0) pulls the article out of each page (menus, sidebars and footers dropped) as markdown, so it goes through the same chunking, embedding and search as repository files.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `site_url` | | Start page, e.g. `https://www.vcrocs.info/` |
+| `scope` | `folder` | `folder`: only pages under the Site URL's folder, so `https://techdocs.broadcom.com/us/en/vmware-cis/vcf/power-cli/latest/powercli.html` indexes `…/power-cli/latest/…` and not the rest of the Broadcom docs. `site`: the whole host. For a blog's home page both are the same |
 | `discovery` | `auto` | `auto` (sitemap + feed, else crawl), `sitemap`, `feed` or `crawl`. Feeds often list only the newest posts |
 | `feed_url` | | Optional; otherwise `/index.xml`, `/feed`, `/rss.xml`, `/atom.xml`, `/feed.xml` are tried |
 | `url_include` / `url_exclude` | – / `/tags/**`, `/categories/**`, `/page/**`, `/author/**`, `/search/**` | Globs on the URL path. Excluded pages are still followed for links when crawling, just not indexed |
@@ -917,9 +955,11 @@ The script prints **one JSON object** to stdout (logs go to stderr; a non-zero e
 | `delay_seconds` | `1` | Pause between requests (a larger robots.txt `Crawl-delay` wins, up to 30 s) |
 | `user_agent` | `vCommunity-Ask/0.1 (local knowledge indexer)` | Sent with every request |
 
-The publish date comes from the feed first, then the page itself (`article:published_time`, JSON-LD `datePublished`, `<time>`, dates in the URL). It is stored as `published`, added to the text as a `Published:` line (so "posts from 2024" matches), shown as a badge on source cards and given to the model. Source cards link to the live post (**View on <host>**). Re-syncs are cheap: if the sitemap and feed list the same URLs and dates as last time the plug-in reports "no changes" without downloading anything; otherwise pages are cached in `data/sources/<name>/pages/` and re-requested with `If-None-Match` / `If-Modified-Since`, so only changed posts are downloaded and re-embedded. If the site can't be reached at all, the sync fails and the existing index is kept.
+The publish date comes from the feed first, then the page itself (`article:published_time`, JSON-LD `datePublished`, `<time>`, dates in the URL). It is stored as `published`, added to the text as a `Published:` line (so "posts from 2024" matches), shown as a badge on source cards and given to the model. Source cards link to the live post (**View on <host>**). **Time limit:** a sync may run 60 minutes (`timeout_seconds: 3600`). Slow sites (a `Crawl-delay: 10` in robots.txt means at most 360 pages an hour) stop downloading a few minutes before the limit: the pages fetched so far are indexed, the version shows "(N more next sync)", and the next sync continues from the cache. Re-syncs are cheap: if the sitemap and feed list the same URLs and dates as last time the plug-in reports "no changes" without downloading anything; otherwise pages are cached in `data/sources/<name>/pages/` and re-requested with `If-None-Match` / `If-Modified-Since`, so only changed posts are downloaded and re-embedded. If the site can't be reached at all, the sync fails and the existing index is kept.
 
 For a blog whose markdown is in a Git repository (Hugo, Jekyll and similar), `markdown-repo` gives cleaner text with no crawling; `web-site` is for sites you don't have the source for.
+
+**`pdf`.** Reads PDF files from uploads or a folder: pypdf for the text layer, Tesseract OCR (via `pdftoppm`) for scanned pages, one document per PDF with one `## Page N` section per page, cached per file. See [PDF documents (with OCR)](#pdf-documents-with-ocr) for the options.
 
 **`spreadsheet`.** Reads `.xlsx` and `.csv` files (RVTools, DBH Insights) from a folder such as `/exports` or from uploads. One document per row plus cluster and sheet summaries for search, and every sheet loaded into `data/sources/<name>/tables.db` for data questions; it also returns the table list (columns, types, sample rows) in its `state`. See [Spreadsheets and data questions](#spreadsheets-and-data-questions) for the options.
 
@@ -946,7 +986,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8081/api/ask -Headers $h -C
 
 ### Ask image
 
-- `ask/Dockerfile`, built from the repository root (it copies `core/static/app.css`, the About page files, the vendored front-end libraries and the README with its screenshots, so a theme or library fix lands in both containers). Python 3.13 slim + git, native arm64 on Apple Silicon, no PowerShell.
+- `ask/Dockerfile`, built from the repository root (it copies `core/static/app.css`, the About page files, the vendored front-end libraries and the README with its screenshots, so a theme or library fix lands in both containers). Python 3.13 slim + git, plus `tesseract-ocr` (English) and `poppler-utils` for OCR of scanned PDFs (build argument `OCR_LANGS` adds Tesseract languages), native arm64 on Apple Silicon, no PowerShell.
 - Runs as non-root user `ask` (uid 10002) on port 8081, health check on `/api/health`.
 - Volumes: `./ask-data` → `/app/data` (index, chats, clones), `./ask-knowledge` → `/knowledge` (read-only, local folders), `./ask-sources` → `/sources` (extra or patched plug-ins), `./exports` → `/exports` (read-only, the dashboards' exports for `spreadsheet` sources).
 - Front-end libraries are vendored once, in `core/static/vendor/`, with their licences: Swagger UI, marked 18.1.3 (MIT), DOMPurify 3.4.17 (Apache-2.0/MPL-2.0) and Apache ECharts 6.1.0 (Apache-2.0, `echarts.min.js` with its LICENSE and NOTICE). The dashboards serve them at `/static/vendor/`, Ask at `/shared/vendor/`. Every answer, document and About page is sanitised by DOMPurify before display.
@@ -1213,11 +1253,14 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 | Ask: Performance page shows Host GPU "n/a" or no power and temperature | GPU numbers come from `ioreg` and need macOS on Apple Silicon (or a Mac GPU that reports statistics); power and temperature need `brew install macmon` |
 | Ask: answers are slow or cut off | Use a smaller chat model, lower **Chunks to retrieve** / **Context budget**, or raise **Model context (tokens)** if the model supports it. The first answer after a while is slower while Ollama loads the model (**Keep model loaded**) |
 | Ask: web-site source is red with "could not reach https://..." | The container can't reach the site (DNS, proxy or firewall). Test with `docker compose exec vco-ask python -c "import requests;print(requests.get('https://SITE/').status_code)"`. Behind a proxy, set `HTTPS_PROXY` for the `vco-ask` service. The previous index is kept |
+| Ask: web-site source failed with "timed out after 3600 seconds" | The sync ran past its 60-minute limit and was stopped (older versions). Usually a docs site with a robots.txt `Crawl-delay` (techdocs.broadcom.com asks for 10 s per page) and a crawl that left the start page's folder. Update Ask: `scope` now defaults to `folder`, and the plug-in stops in time and indexes what it has, then continues on the next sync. Also lower **Max pages per sync** if needed |
 | Ask: web-site source indexed 0 pages or misses posts | Check the log (`docker compose logs vco-ask`): `out_of_range` = outside the date range, `too_short` = pages with under 200 characters of article text (list pages), `blocked` = robots.txt. Widen the date range, set **Pages with no date** to `keep`, adjust the URL globs, or raise **Max pages per sync** |
 | Ask: "The last sync was interrupted (app restarted)" | The container stopped during a sync. Press **Sync now** |
 | Ask: spreadsheet source is red with "folder /exports not found" | The `./exports:/exports:ro` line is missing under `vco-ask` in `docker-compose.yml` (older copy). Add it, then `docker compose up -d vco-ask` |
 | Ask: spreadsheet source indexes 0 files | No file matches **File names** in the folder. The default is `dbh-insights-*.xlsx`; for RVTools set it to `*.xlsx` or `RVTools*.xlsx`. Check the folder with `docker compose exec vco-ask ls /exports` |
-| Ask: upload refused | Only `.xlsx` and `.csv` (an `.xlsx` must be a real Excel file, not a renamed one), up to `ASK_UPLOAD_MAX_MB` (default 50), and the API token must be entered when `ASK_API_TOKEN` is set |
+| Ask: PDF source indexes 0 pages or a PDF is missing | Check the log (`docker compose logs vco-ask`): "password protected" (remove the password and upload again), "cannot read" (a damaged file: re-save it as PDF), "no text found" with OCR `off` (a scanned PDF: set **OCR** to `auto`). OCR quality: raise **OCR resolution** to 300 |
+| Ask: "tesseract failed" or "Failed loading language" in the log | The language in **OCR languages** isn't installed. Use `eng`, or rebuild with `--build-arg OCR_LANGS="tesseract-ocr-<lang>"` (see [PDF documents](#pdf-documents-with-ocr)) |
+| Ask: upload refused | Spreadsheet sources take `.xlsx` and `.csv` (an `.xlsx` must be a real Excel file, not a renamed one), PDF sources take `.pdf` (a real PDF), up to `ASK_UPLOAD_MAX_MB` (default 50), and the API token must be entered when `ASK_API_TOKEN` is set |
 | Ask: "The sources do not contain the individual rows" after a spreadsheet import | The question went through search, which only finds a few matching rows plus the sheet overview. Ask it as a data question ("show all hosts from the vHost sheet", "how many ...") with the spreadsheet source selected; the answer then has a **Query and result** card. Sheets with more rows than **Max searchable rows per sheet** (default 5000, for example a large vInfo) are not searchable at all, only queryable |
 | Ask or the dashboards still behave like the old version after a rebuild | Fixed from 2026-11-05: script and stylesheet URLs carry `?v=<fingerprint>`, so browsers load the new files. Once, after updating to this version, reload the page with **Shift+Reload** (Cmd+Shift+R) to drop the old cached copy |
 | Ask: no **Open HTML report** link under the answer | The question didn't say *report* or *dashboard*, or it went through search instead of a data question (pick the spreadsheet source). If the answer's stats show `report_error`, the report could not be written: check that `data/reports` is writable (`./ask-data` volume) and look at `docker compose logs vco-ask` |
@@ -1278,6 +1321,7 @@ ask/                    vCommunity Ask (second container)
   sources/markdown-repo/  built-in source plug-in (Git repo or folder of markdown)
   sources/web-site/     built-in source plug-in (blog/site crawler: sitemap, feed, links, date range)
   sources/spreadsheet/  built-in source plug-in (xlsx/csv from /exports or uploads, sheets into tables.db)
+  sources/pdf/          built-in source plug-in (PDFs from uploads or a folder; pypdf text, Tesseract OCR for scanned pages)
   app/perf.py           Performance page: container, Ollama and host-agent samples (24 h in ask.db)
   app/mcp.py            MCP tools: client of the host agent's MCP bridge, tool policy, Run / Cancel approvals
   agent/ask-host-agent.py  Ask host agent for the Mac (standard library only; performance numbers and the MCP bridge), plus Install-AskAgent.ps1 and install.sh
@@ -1308,6 +1352,8 @@ requirements.in/.txt    direct dependencies / hashed lock file
 
 | Date | Change |
 | --- | --- |
+| 2026-11-07 | Ask: new **PDF documents** source plug-in (`pdf`): upload PDFs on the Knowledge sources page (several at once) or read a folder; text via pypdf (added to the lock file), scanned pages via Tesseract OCR (`tesseract-ocr`, `tesseract-ocr-eng`, `poppler-utils` added to the Ask image; `OCR_LANGS` build argument for more languages); one `## Page N` section per page, per-file cache, continues after the 60-minute limit; source cards open the PDF at the cited page (`/files/<source>/<file>.pdf#page=N`); **PDF documents** group in the chat's Sources menu |
+| 2026-11-07 | Ask `web-site` source: new **Pages to index** option (`scope`, default `folder`: only pages under the Site URL's folder, so a techdocs.broadcom.com start page no longer crawls all of Broadcom's docs). The plug-in stops downloading before the 60-minute limit and indexes what it has ("N more next sync"); the core passes `ASK_SOURCE_TIME_LIMIT` and a timed-out plug-in now gives a clear error |
 | 2026-11-07 | Home (`/`) now opens the **DBH Insights** dashboard. The tile page moved to **All dashboards** (`/overview`, new sidebar link; breadcrumbs point there). New `home` setting in `config.yaml` / `VCO_HOME` picks another dashboard; a missing or switched-off one falls back to `/overview` |
 | 2026-11-07 | Ask search with picked sources: the keyword search filters by source before its limit, and the vector search falls back to an exact ranking of only the picked sources' chunks when a bigger source crowds them out of the nearest matches, so a small source always gets its best matches (`ask/app/db.py`) |
 | 2026-11-07 | Ask indexing: the vector table is checked and created under the write lock in the same step as each document's write, so two sources syncing at once no longer fail with `table chunks_vec already exists`. Changing the embedding model while syncs run now stops them at their next write (no old-model vectors in the new index) and runs them again in full with the new model (`ask/app/db.py`, `indexer.py`) |

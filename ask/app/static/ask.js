@@ -75,6 +75,13 @@
     return b;
   }
 
+  // A PDF source's file (/files/<source>/<file>.pdf): open it at the cited page.
+  function pdfLink(s) {
+    if (!s.url || !/^\/files\/.+\.pdf$/i.test(s.url)) return null;
+    var m = /^Page (\d+)/.exec(s.heading || '');
+    return { href: s.url + (m ? '#page=' + m[1] : ''), label: 'Open PDF' + (m ? ', page ' + m[1] : '') + ' ↗' };
+  }
+
   function linkLabel(url) {
     var host = '';
     try { host = new URL(url, location.href).hostname.replace(/^www\./, ''); } catch (e) { /* relative or bad URL */ }
@@ -365,7 +372,7 @@
     var links = el('div', 'src-links');
     var open = el('a', null, 'Source documents'); open.href = '/sources/' + encodeURIComponent(s.source);
     links.appendChild(open);
-    if (s.url) { var v = el('a', null, linkLabel(s.url)); v.href = s.url; v.target = '_blank'; v.rel = 'noopener'; links.appendChild(v); }
+    if (s.url) { var pl = pdfLink(s), v = el('a', null, pl ? pl.label : linkLabel(s.url)); v.href = pl ? pl.href : s.url; v.target = '_blank'; v.rel = 'noopener'; links.appendChild(v); }
     card.appendChild(links);
     return card;
   }
@@ -459,7 +466,7 @@
       var open = el('a', null, 'Open'); open.href = '/doc/' + s.doc_row;
       links.appendChild(open);
       if (s.url) {
-        var gh = el('a', null, linkLabel(s.url)); gh.href = s.url; gh.target = '_blank'; gh.rel = 'noopener';
+        var pl = pdfLink(s), gh = el('a', null, pl ? pl.label : linkLabel(s.url)); gh.href = pl ? pl.href : s.url; gh.target = '_blank'; gh.rel = 'noopener';
         links.appendChild(gh);
       }
       card.appendChild(links);

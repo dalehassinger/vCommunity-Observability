@@ -91,6 +91,18 @@ class Fetcher:
         self.net_errors = 0
         self._last = 0.0
         self.robots: urllib.robotparser.RobotFileParser | None = None
+        # Stop downloading before the core's time limit kills the script, so the pages
+        # fetched so far are still indexed and the next sync carries on from the cache.
+        limit = float(os.environ.get("ASK_SOURCE_TIME_LIMIT") or 0)
+        self.deadline = time.time() + max(limit * 0.85, limit - 300) if limit > 0 else 0.0
+        self.out_of_time = False
+
+    def time_left(self) -> bool:
+        if self.deadline and time.time() + self.delay > self.deadline:
+            if not self.out_of_time:
+                log("time limit almost reached: no more downloads this sync; the rest come from the cache or the next sync")
+            self.out_of_time = True
+        return not self.out_of_time
 
     def _wait(self) -> None:
         gap = self.delay - (time.time() - self._last)
@@ -100,6 +112,8 @@ class Fetcher:
 
     def get(self, url: str, headers: dict | None = None, count: bool = True) -> requests.Response | None:
         """GET with size cap; None on network errors. `count` = counts toward max_pages."""
+        if not self.time_left():
+            return None
         if count:
             if self.fetched >= self.max_pages:
                 return None
@@ -229,9 +243,21 @@ def normalize(url: str) -> str:
     return p._replace(scheme=p.scheme.lower(), netloc=p.netloc.lower(), path=path, query=query, params="").geturl()
 
 
-def same_site(url: str, host: str) -> bool:
-    h = urlparse(url).netloc.lower()
-    return urlparse(url).scheme in ("http", "https") and h.removeprefix("www.") == host.removeprefix("www.")
+def same_site(url: str, host: str, prefix: str = "/") -> bool:
+    """Same host and, for scope = folder, under the start URL's folder (`prefix`)."""
+    p = urlparse(url)
+    h = p.netloc.lower()
+    return (p.scheme in ("http", "https") and h.removeprefix("www.") == host.removeprefix("www.")
+            and (p.path or "/").startswith(prefix))
+
+
+def folder_of(url: str) -> str:
+    """/us/en/a/b/latest/powercli.html -> /us/en/a/b/latest/ ; /docs/guide -> /docs/guide/"""
+    path = urlparse(url).path or "/"
+    if not path.endswith("/"):
+        last = path.rsplit("/", 1)[-1]
+        path = path.rsplit("/", 1)[0] + "/" if "." in last else path + "/"
+    return path
 
 
 def doc_id_for(url: str) -> str:
@@ -302,6 +328,13 @@ def main() -> int:
         raise SystemExit("Site URL must start with http:// or https://")
     site = normalize(site)
     host = urlparse(site).netloc
+    # scope = folder (default): only pages under the Site URL's folder, so a docs start page
+    # such as https://techdocs.broadcom.com/.../power-cli/latest/powercli.html does not
+    # wander into the rest of the host. scope = site: the whole host.
+    scope = (opts.get("scope") or "folder").strip()
+    prefix = folder_of(site) if scope == "folder" else "/"
+    if prefix != "/":
+        log(f"scope: only pages under {prefix}")
     discovery = (opts.get("discovery") or "auto").strip()
     inc = [glob_to_regex(p) for p in as_list(opts.get("url_include"))]
     exc = [glob_to_regex(p) for p in as_list(opts.get("url_exclude"))]
@@ -352,7 +385,7 @@ def main() -> int:
         candidates.setdefault(normalize(u), {})["lastmod"] = lm
     for u, d in feed_n.items():
         candidates.setdefault(u, {})["feed_date"] = d
-    candidates = {u: c for u, c in candidates.items() if same_site(u, host) and wanted_path(u) and not SKIP_EXT.search(urlparse(u).path)}
+    candidates = {u: c for u, c in candidates.items() if same_site(u, host, prefix) and wanted_path(u) and not SKIP_EXT.search(urlparse(u).path)}
 
     # Cheap "nothing changed" answer: same URL list + lastmods + options (+ same day for rolling windows).
     fingerprint = hashlib.sha256(json.dumps([sorted(candidates.items()), opts_hash,
@@ -377,7 +410,8 @@ def main() -> int:
         except (OSError, ValueError):
             return {}
 
-    stats = {"fetched": 0, "cached": 0, "not_modified": 0, "out_of_range": 0, "too_short": 0, "blocked": 0, "errors": 0}
+    stats = {"fetched": 0, "cached": 0, "not_modified": 0, "out_of_range": 0, "too_short": 0, "blocked": 0, "errors": 0,
+             "next_sync": 0}
 
     def process(url: str, hint: dict) -> tuple[dict | None, list[str]]:
         """Returns (document or None, links found on the page)."""
@@ -408,6 +442,9 @@ def main() -> int:
                 if cached:
                     stats["cached"] += 1
                     entry = cached
+                elif f.out_of_time or f.fetched >= f.max_pages:
+                    stats["next_sync"] += 1
+                    return None, []
                 else:
                     stats["errors"] += 1
                     return None, []
@@ -420,7 +457,7 @@ def main() -> int:
             else:
                 stats["fetched"] += 1
                 final = normalize(r.url)
-                if not same_site(final, host):
+                if not same_site(final, host, prefix):
                     return None, []
                 html = r.text
                 text, meta = extract(html, final)
@@ -451,7 +488,7 @@ def main() -> int:
                 docs.setdefault(doc["id"], doc)
             for link in links:
                 n = normalize(link)
-                if n not in seen and same_site(n, host) and not SKIP_EXT.search(urlparse(n).path):
+                if n not in seen and same_site(n, host, prefix) and not SKIP_EXT.search(urlparse(n).path):
                     seen.add(n)
                     queue.append(n)
     else:
@@ -475,7 +512,11 @@ def main() -> int:
     dates = sorted(d["meta"]["published"] for d in docs.values() if d["meta"].get("published"))
     version = f"{len(docs)} pages" + (f", newest {dates[-1]}" if dates else "")
     log(f"{version}; " + ", ".join(f"{k} {v}" for k, v in stats.items() if v))
-    new_state = {"fingerprint": fingerprint if not crawl else "", "version": version, "options": opts_hash}
+    # A sync cut short (time limit or max pages) must not look "unchanged" next time.
+    partial = f.out_of_time or stats["next_sync"] > 0
+    if partial:
+        version += f" ({stats['next_sync']} more next sync)"
+    new_state = {"fingerprint": fingerprint if not crawl and not partial else "", "version": version, "options": opts_hash}
     print(json.dumps({"version": version, "root": str(work), "unchanged": False,
                       "state": new_state, "documents": list(docs.values())}))
     return 0

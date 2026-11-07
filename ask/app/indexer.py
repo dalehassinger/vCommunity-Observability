@@ -173,7 +173,7 @@ class Indexer:
         return self.data_dir / "sources" / name
 
     def upload_dir(self, name: str) -> Path:
-        """Files uploaded on the Knowledge sources page (the spreadsheet plug-in reads them)."""
+        """Files uploaded on the Knowledge sources page (the spreadsheet and pdf plug-ins read them)."""
         return self.data_dir / "uploads" / name
 
     def is_running(self, name: str) -> bool:
@@ -239,8 +239,17 @@ class Indexer:
                "ASK_SOURCE_STATE": json.dumps({} if full else prev["state"])}
         if full:
             env["ASK_SOURCE_FULL"] = "1"
-        p = subprocess.run(plugin.command(), env=env, capture_output=True, text=True, timeout=plugin.timeout,
-                           cwd=plugin.folder)
+        # The plug-in may stop early on its own (web-site does) and return what it has.
+        env["ASK_SOURCE_TIME_LIMIT"] = str(plugin.timeout)
+        try:
+            p = subprocess.run(plugin.command(), env=env, capture_output=True, text=True, timeout=plugin.timeout,
+                               cwd=plugin.folder)
+        except subprocess.TimeoutExpired as e:
+            err = e.stderr.decode("utf-8", "replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+            tail = "\n".join(err.strip().splitlines()[-3:])
+            raise RuntimeError(f"plug-in {plugin.name} ran longer than its limit of {plugin.timeout // 60} min "
+                               f"(timeout_seconds in source.yaml) and was stopped; nothing was changed"
+                               + (f". Last log lines: {tail}" if tail else "")) from None
         for line in p.stderr.splitlines()[-30:]:
             log.info("[%s] %s", name, line)
         if p.returncode != 0:

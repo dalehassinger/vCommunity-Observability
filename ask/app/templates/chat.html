@@ -40,7 +40,7 @@
         {# Sources: tick one or more; none ticked = every source except spreadsheets. #}
         {% set sel = chat.scope.split(',') if chat and chat.scope and chat.scope != 'all' else [] %}
         {% set enabled = sources | selectattr('enabled') | list %}
-        {% set groups = [('web-site', 'Blogs and web sites'), ('markdown-repo', 'Markdown repositories'), ('spreadsheet', 'Spreadsheets')] %}
+        {% set groups = [('web-site', 'Blogs and web sites'), ('markdown-repo', 'Markdown repositories'), ('pdf', 'PDF documents'), ('spreadsheet', 'Spreadsheets')] %}
         <div class="scope">
           <span>Sources</span>
           <details class="scope-pick" id="scope-pick">
@@ -56,7 +56,7 @@
               {% endfor %}
               {% endif %}
               {% endfor %}
-              {% set others = enabled | rejectattr('plugin', 'in', ['web-site', 'markdown-repo', 'spreadsheet']) | list %}
+              {% set others = enabled | rejectattr('plugin', 'in', ['web-site', 'markdown-repo', 'pdf', 'spreadsheet']) | list %}
               {% if others %}
               <div class="scope-group"><span>Other sources</span></div>
               {% for s in others %}

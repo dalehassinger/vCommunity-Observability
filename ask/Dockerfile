@@ -13,8 +13,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 
 # git: the markdown-repo source plug-in clones and pulls repositories.
+# tesseract-ocr (+ English data) and poppler-utils (pdftoppm): the pdf source plug-in
+# reads scanned PDF pages with OCR. More OCR languages: add tesseract-ocr-<lang>, e.g.
+#   docker compose build --build-arg OCR_LANGS="tesseract-ocr-deu tesseract-ocr-fra" vco-ask
+ARG OCR_LANGS=""
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates \
+      tesseract-ocr tesseract-ocr-eng poppler-utils ${OCR_LANGS} \
  && rm -rf /var/lib/apt/lists/*
 
 COPY ask/requirements.txt .

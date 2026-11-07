@@ -25,6 +25,12 @@ options:
   - key: site_url
     label: Site URL
     hint: "Start page, e.g. https://www.vcrocs.info/ . Only pages on this host are fetched."
+  - key: scope
+    label: Pages to index
+    type: select
+    choices: [folder, site]
+    default: folder
+    hint: "folder = only pages under the Site URL's folder (for a docs page such as .../power-cli/latest/powercli.html: everything under .../power-cli/latest/). site = the whole host. For a blog's home page both are the same."
   - key: discovery
     label: Find pages from
     type: select
@@ -67,7 +73,7 @@ options:
     label: Max pages per sync
     type: number
     min: 1
-    default: 500
+    default: 2500
   - key: delay_seconds
     label: Delay between requests (s)
     type: number

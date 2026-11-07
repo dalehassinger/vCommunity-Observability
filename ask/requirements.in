@@ -9,3 +9,4 @@ requests
 sqlite-vec      # vector search inside SQLite (loadable extension, Apache-2.0/MIT)
 trafilatura     # web-site source plug-in: pulls the article text and publish date out of HTML pages (Apache-2.0)
 openpyxl        # spreadsheet source plug-in: reads .xlsx files in read-only mode (MIT)
+pypdf           # pdf source plug-in: text of PDF pages, pure Python (BSD-3-Clause)

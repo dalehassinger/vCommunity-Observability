@@ -1,0 +1,58 @@
+# Knowledge source plug-in: PDF files (product guides, design documents, runbooks).
+#
+# Same contract as the other plug-ins (see sources/markdown-repo/source.yaml), plus
+# ASK_SOURCE_UPLOAD_DIR (the folder the Knowledge sources page saves uploads into).
+# Text comes from the PDF with pypdf; scanned pages (no text layer) are read with
+# Tesseract OCR (pdftoppm renders the page, tesseract reads it). Both are in the image
+# and run offline. One document per PDF, one "## Page N" section per page.
+name: pdf
+title: PDF documents
+description: Indexes PDF files (guides, design documents, runbooks) uploaded on this page or from a folder. Scanned pages are read with OCR (Tesseract). Answers cite the page.
+version: 0.1.0
+runtime: python
+entry: fetch_pdf.py
+timeout_seconds: 3600
+options:
+  - key: location
+    label: Files from
+    type: select
+    choices: [upload, folder]
+    default: upload
+    hint: "upload = PDFs you upload on this page. folder = a folder inside the container, such as /knowledge (compose mounts ./ask-knowledge there read-only)."
+  - key: path
+    label: Folder
+    default: /knowledge
+    hint: "Only for 'folder'."
+  - key: pattern
+    label: File names (globs)
+    type: list
+    default: ["**/*.pdf"]
+    hint: "Only for 'folder'. One pattern per line, relative to the folder, e.g. **/*.pdf or vcf/*.pdf."
+  - key: ocr
+    label: OCR (scanned pages)
+    type: select
+    choices: [auto, always, "off"]
+    default: auto
+    hint: "auto = OCR only pages with no text layer (scanned). always = OCR every page (slow; for PDFs whose text layer is garbage). off = never."
+  - key: ocr_languages
+    label: OCR languages
+    default: eng
+    hint: "Tesseract language codes joined with +, e.g. eng or eng+deu. The image has eng; other languages need their tesseract-ocr-<lang> package (see the README)."
+  - key: ocr_dpi
+    label: OCR resolution (dpi)
+    type: number
+    min: 100
+    step: 50
+    default: 200
+    hint: "Higher reads small print better but is slower. 200-300 is typical."
+  - key: max_pages_per_file
+    label: Max pages per file
+    type: number
+    min: 1
+    default: 2000
+  - key: uploads
+    label: When a file is uploaded again
+    type: select
+    choices: [keep, replace]
+    default: keep
+    hint: "Only for 'upload'. keep = every uploaded PDF is indexed (a file with the same name is overwritten). replace = a new upload removes the earlier files."

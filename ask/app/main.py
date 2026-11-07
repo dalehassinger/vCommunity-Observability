@@ -59,7 +59,10 @@ def find_readme() -> Path | None:
     return None
 log = logging.getLogger("ask")
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
-UPLOAD_TYPES = {".xlsx", ".csv"}
+# File types each upload-capable source plug-in accepts on the Knowledge sources page.
+UPLOAD_TYPES_BY_PLUGIN = {"spreadsheet": {".xlsx", ".csv"}, "pdf": {".pdf"}}
+UPLOAD_TYPES = set().union(*UPLOAD_TYPES_BY_PLUGIN.values())
+UPLOAD_DEFAULT_MODE = {"spreadsheet": "replace", "pdf": "keep"}
 UPLOAD_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._()+-]{0,150}$")
 
 
@@ -251,8 +254,11 @@ def create_app() -> FastAPI:
         for s in srcs:
             view = _source_view(s)
             s["status"], s["last_error"] = view["status"], view["last_error"]
-            if s["plugin"] == "spreadsheet":
+            if s["plugin"] in UPLOAD_TYPES_BY_PLUGIN:
                 s["uploads"] = uploaded_files(s["name"])
+                s["upload_types"] = ",".join(sorted(UPLOAD_TYPES_BY_PLUGIN[s["plugin"]]))
+                s["upload_mode"] = s["options"].get("uploads") or UPLOAD_DEFAULT_MODE[s["plugin"]]
+            if s["plugin"] == "spreadsheet":
                 st = db.get_state(s["name"])["state"]
                 s["tables"] = [{"table": t["table"], "sheet": t["sheet"], "rows": t["rows"]} for t in st.get("tables") or []]
         pl = plugins()
@@ -445,7 +451,16 @@ def create_app() -> FastAPI:
             raise HTTPException(404)
         root_p = Path(root).resolve()
         f = (root_p / path).resolve()
-        if root_p not in f.parents or f.suffix.lower() not in IMAGE_TYPES or not f.is_file():
+        if root_p not in f.parents or not f.is_file():
+            raise HTTPException(404)
+        if f.suffix.lower() == ".pdf":
+            # The PDFs of a pdf source, so a cited page opens in the browser (#page=N).
+            src = db.get_source(source)
+            if not src or src["plugin"] != "pdf":
+                raise HTTPException(404)
+            return FileResponse(f, media_type="application/pdf", content_disposition_type="inline",
+                                headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "max-age=300"})
+        if f.suffix.lower() not in IMAGE_TYPES:
             raise HTTPException(404)
         return FileResponse(f, headers={"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
                                         "Cache-Control": "max-age=3600"})
@@ -575,14 +590,15 @@ def create_app() -> FastAPI:
 
     @app.put("/ui/sources/{name}/files/{filename}", include_in_schema=False, dependencies=[Depends(require_admin)])
     async def ui_upload(name: str, filename: str, request: Request):
-        """Upload one .xlsx or .csv file to a spreadsheet source (the raw file is the
-        request body), then sync the source."""
+        """Upload one file to a spreadsheet (.xlsx, .csv) or pdf (.pdf) source (the raw
+        file is the request body), then sync the source."""
         src = db.get_source(name)
-        if not src or src["plugin"] != "spreadsheet":
-            raise HTTPException(404, "Uploads are for spreadsheet sources")
+        if not src or src["plugin"] not in UPLOAD_TYPES_BY_PLUGIN:
+            raise HTTPException(404, "Uploads are for spreadsheet and PDF sources")
+        types = UPLOAD_TYPES_BY_PLUGIN[src["plugin"]]
         filename = os.path.basename(filename).strip()
-        if Path(filename).suffix.lower() not in UPLOAD_TYPES or not UPLOAD_NAME_RE.match(filename):
-            raise HTTPException(400, "Upload an .xlsx or .csv file (letters, digits, spaces and . _ - ( ) in the name)")
+        if Path(filename).suffix.lower() not in types or not UPLOAD_NAME_RE.match(filename):
+            raise HTTPException(400, f"Upload a {' or '.join(sorted(types))} file (letters, digits, spaces and . _ - ( ) in the name)")
         if int(request.headers.get("content-length") or 0) > upload_max:
             raise HTTPException(413, f"The file is larger than {upload_max // 1048576} MB (ASK_UPLOAD_MAX_MB)")
         folder = indexer.upload_dir(name)
@@ -602,12 +618,14 @@ def create_app() -> FastAPI:
                 head = f.read(4)
             if filename.lower().endswith(".xlsx") and head != b"PK\x03\x04":
                 raise HTTPException(400, "That is not an .xlsx workbook (an .xls or .xlsm file? Save it as .xlsx)")
+            if filename.lower().endswith(".pdf") and head != b"%PDF":
+                raise HTTPException(400, "That is not a PDF file")
         except BaseException:
             part.unlink(missing_ok=True)
             raise
-        if (src["options"].get("uploads") or "replace") == "replace":
+        if (src["options"].get("uploads") or UPLOAD_DEFAULT_MODE[src["plugin"]]) == "replace":
             for old in folder.iterdir():
-                if old.is_file() and old.suffix.lower() in UPLOAD_TYPES:
+                if old.is_file() and old.suffix.lower() in types:
                     old.unlink()
         os.replace(part, folder / filename)
         indexer.start(name)

@@ -39,6 +39,8 @@
         <dt>Plug-in</dt><dd>{{ s.plugin }}</dd>
         {% if s.options.repo_url %}<dt>Repository</dt><dd><a href="{{ s.options.repo_url }}" target="_blank" rel="noopener">{{ s.options.repo_url | replace('https://', '') }}</a> · {{ s.options.branch or 'main' }}</dd>
         {% elif s.plugin == 'spreadsheet' and s.options.location == 'upload' %}<dt>Files</dt><dd>uploaded on this page</dd>
+        {% elif s.plugin == 'pdf' and (s.options.location or 'upload') == 'upload' %}<dt>Files</dt><dd>PDFs uploaded on this page · OCR {{ s.options.ocr or 'auto' }}</dd>
+        {% elif s.plugin == 'pdf' %}<dt>Folder</dt><dd><code>{{ s.options.path or '/knowledge' }}</code> · {{ (s.options.pattern or ['**/*.pdf']) | join(', ') }} · OCR {{ s.options.ocr or 'auto' }}</dd>
         {% elif s.plugin == 'spreadsheet' %}<dt>Folder</dt><dd><code>{{ s.options.path or '/exports' }}</code> · {{ (s.options.pattern or ['*.xlsx']) | join(', ') }} · {{ s.options.pick or 'newest' }}</dd>
         {% elif s.options.path %}<dt>Folder</dt><dd><code>{{ s.options.path }}</code></dd>
         {% elif s.options.site_url %}<dt>Site</dt><dd><a href="{{ s.options.site_url }}" target="_blank" rel="noopener">{{ s.options.site_url | replace('https://', '') }}</a> · {{ s.options.discovery or 'auto' }}</dd>{% endif %}
@@ -52,10 +54,10 @@
         <dt>Status</dt><dd data-f="progress">{{ s.progress or s.status }}</dd>
       </dl>
       {% if s.last_error %}<div class="alert alert-danger err-box" data-f="last_error">{{ s.last_error }}</div>{% endif %}
-      {% if s.plugin == 'spreadsheet' and s.options.location == 'upload' %}
+      {% if (s.plugin == 'spreadsheet' and s.options.location == 'upload') or (s.plugin == 'pdf' and (s.options.location or 'upload') == 'upload') %}
       <div class="upload-box" data-upload="{{ s.name }}">
-        <div class="upload-drop">Drop an <b>.xlsx</b> or <b>.csv</b> file here, or <label class="link-btn">choose a file<input type="file" accept=".xlsx,.csv" hidden data-file="{{ s.name }}"></label>
-          <span class="subtle">{{ 'A new upload replaces the earlier file.' if (s.options.uploads or 'replace') == 'replace' else 'Uploads are kept side by side.' }}</span></div>
+        <div class="upload-drop">Drop {{ 'PDF files' if s.plugin == 'pdf' else 'an <b>.xlsx</b> or <b>.csv</b> file' | safe }} here, or <label class="link-btn">choose {{ 'files' if s.plugin == 'pdf' else 'a file' }}<input type="file" accept="{{ s.upload_types }}" hidden data-file="{{ s.name }}" {{ 'multiple' if s.plugin == 'pdf' else '' }}></label>
+          <span class="subtle">{{ 'A new upload replaces the earlier file.' if s.upload_mode == 'replace' else 'Uploads are kept side by side.' }}</span></div>
         {% if s.uploads %}<ul class="upload-list">{% for f in s.uploads %}<li><code>{{ f.name }}</code> <span class="subtle">{{ f.size_mb }} MB · {{ f.uploaded }}</span> <button class="link-btn" type="button" data-unload="{{ s.name }}" data-fname="{{ f.name }}">Remove</button></li>{% endfor %}</ul>
         {% else %}<div class="subtle">No file uploaded yet.</div>{% endif %}
       </div>
@@ -136,27 +138,32 @@
       act(b.dataset.toggle, '/ui/sources/' + b.dataset.toggle + '/enabled', { enabled: !b.classList.contains('on') }, 'Saved');
     };
   });
-  // Spreadsheet uploads: the raw file is PUT to /ui/sources/<name>/files/<file name>.
-  async function upload(name, file) {
-    msg(name, 'Uploading ' + file.name + '…');
+  // Uploads (spreadsheet and PDF sources): each raw file is PUT to /ui/sources/<name>/files/<file name>.
+  async function upload(name, files) {
+    files = Array.prototype.slice.call(files);
     try {
-      var res = await fetch('/ui/sources/' + encodeURIComponent(name) + '/files/' + encodeURIComponent(file.name), {
-        method: 'PUT', headers: { 'X-API-Key': AskAdmin.token(), 'Content-Type': 'application/octet-stream' }, body: file
-      });
-      var data = {}; try { data = await res.json(); } catch (e) {}
-      if (!res.ok) throw new Error(data.detail || res.statusText);
+      for (var n = 0; n < files.length; n++) {
+        var file = files[n];
+        msg(name, 'Uploading ' + file.name + (files.length > 1 ? ' (' + (n + 1) + ' of ' + files.length + ')' : '') + '…');
+        var res = await fetch('/ui/sources/' + encodeURIComponent(name) + '/files/' + encodeURIComponent(file.name), {
+          method: 'PUT', headers: { 'X-API-Key': AskAdmin.token(), 'Content-Type': 'application/octet-stream' }, body: file
+        });
+        var data = {}; try { data = await res.json(); } catch (e) {}
+        if (!res.ok) throw new Error(file.name + ': ' + (data.detail || res.statusText));
+      }
       msg(name, 'Uploaded, indexing started'); setTimeout(function () { location.reload(); }, 700);
     } catch (e) { msg(name, e.message, true); }
   }
   document.querySelectorAll('[data-file]').forEach(function (i) {
-    i.onchange = function () { if (i.files[0]) upload(i.dataset.file, i.files[0]); };
+    i.onchange = function () { if (i.files.length) upload(i.dataset.file, i.multiple ? i.files : [i.files[0]]); };
   });
   document.querySelectorAll('[data-upload]').forEach(function (box) {
     box.addEventListener('dragover', function (e) { e.preventDefault(); box.classList.add('drag'); });
     box.addEventListener('dragleave', function () { box.classList.remove('drag'); });
     box.addEventListener('drop', function (e) {
       e.preventDefault(); box.classList.remove('drag');
-      if (e.dataTransfer.files[0]) upload(box.dataset.upload, e.dataTransfer.files[0]);
+      var inp = box.querySelector('[data-file]');
+      if (e.dataTransfer.files.length) upload(box.dataset.upload, inp && inp.multiple ? e.dataTransfer.files : [e.dataTransfer.files[0]]);
     });
   });
   document.querySelectorAll('[data-unload]').forEach(function (b) {
