@@ -259,11 +259,15 @@ Open http://localhost:8080. A **Sample data** badge shows in the header while mo
 
 ## Using the web UI
 
-The left sidebar lists every enabled module's dashboards (in the order set on the Modules page), then **Modules & API**, **Settings** and **API docs (Swagger)**. The moon icon in the header switches light and dark theme; the choice is remembered in the browser.
+The left sidebar has **Home** and **All dashboards**, then every enabled module's dashboards (in the order set on the Modules page), then **Modules & API**, **Settings** and **API docs (Swagger)**. The moon icon in the header switches light and dark theme; the choice is remembered in the browser.
 
 ### Home
 
-A tile for every dashboard of every enabled module, in menu order.
+**Home** (and the logo) opens the **DBH Insights** dashboard (`/dash/dbh-insights/insights`): opening `/` redirects there. To open another dashboard instead, set `home:` in `config/config.yaml` (or `VCO_HOME` in `.env`) to its path, for example `home: /dash/vcenter-inventory/inventory`, and restart. If that dashboard's module is missing or switched off on the Modules page, `/` opens **All dashboards** instead.
+
+### All dashboards
+
+**All dashboards** (`/overview`) shows a tile for every dashboard of every enabled module, in menu order. The **Dashboards** link in each dashboard's breadcrumb goes here.
 
 ### Modules & API
 
@@ -348,7 +352,7 @@ An overall status banner, a summary row (services, not operational, under mainte
 
   ![DBH Sheets grouped](docs/screenshots/dbh-sheets-groupby.png)
 
-- **Export XLSX:** one workbook with every sheet, Verdana 9pt, black header row, frozen first row and column, AutoFilter, real Excel dates, in the inventory tool's sheet order. Also at `/api/dbh-insights/export/xlsx` (token required) and as a scheduled export.
+- **Export XLSX:** one workbook with every sheet, Verdana 9pt, black header row, frozen first row and column, AutoFilter, real Excel dates, in the inventory tool's sheet order. With several vCenters each worksheet holds the rows of all of them (one worksheet per sheet, never one per vCenter). Also at `/api/dbh-insights/export/xlsx` (token required) and as a scheduled export.
 - Large inventories are read with the PropertyCollector and continuation tokens, so nothing is silently truncated. A property an older vCenter doesn't know is dropped and logged, and its column stays empty.
 - The website's API Explorer is not ported. Multi-vCenter collection is supported here (Settings / `VCO_VCENTERS`); the website's combined multi-VC UI chrome is not replicated sheet-for-sheet.
 
@@ -828,6 +832,8 @@ Ask (container) --HTTP + token--> Ask host agent (Mac) --stdio JSON-RPC--> pwsh 
 2. `ASK_AGENT_TOKEN` in `.env` (as for the Performance page), then `docker compose up -d --build vco-ask`.
 3. Open **MCP tools** (sidebar, under Knowledge): the server should say **running** and list its tools.
 
+**Change the server's path, or add servers.** Ask uses `~/.config/ask-host-agent/mcp.json` on the Mac, a copy of the `.mcp.json` you gave the installer. To point at a moved or renamed script, edit the last entry of `args` there (for example `code ~/.config/ask-host-agent/mcp.json`) and save; add more servers under `mcpServers` the same way. The agent reads the file again when it changes and starts the server from the new path on the next question or **Refresh** on the MCP tools page, with no restart. Because it is a copy, editing the original `.mcp.json` changes nothing until you run the installer again with `-McpConfig` (or `--mcp-config`). To use another file altogether, start the agent with `--mcp-config <file>` (or set `ASK_AGENT_MCP_CONFIG`). The MCP tools page shows the command in use but can't edit it.
+
 **The MCP tools page** shows each server (running or not, its command, errors and its stderr), **Reload tools**, and every tool with what it does, whether it is **read-only** or **changes things** (from the server's `readOnlyHint`), and a policy:
 
 | Policy | What happens in a chat |
@@ -955,6 +961,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8081/api/ask -Headers $h -C
 | `data_dir` | Where SQLite files go (default `data`; `/app/data` in Docker). `VCO_DATA_DIR` overrides it |
 | `modules_dirs` | Folders scanned for modules. Later folders win, so a module in `/modules` overrides the built-in copy |
 | `mock` | `true` = built-in sample data, no vCenter needed. `VCO_MOCK=1` overrides it |
+| `home` | The page `/` (Home) opens. Default `/dash/dbh-insights/insights` (DBH Insights). Any `/dash/<module>/<slug>`; a missing or switched-off dashboard falls back to `/overview` (All dashboards). `VCO_HOME` overrides it |
 | `connections.<name>` | `host`, `user`, `password_env` (name of the env var holding the password), `verify_ssl`, plus anything else a module needs (for example `auth_source` for VCF Operations). Included: `vcenter`, `vcfops`. For several vCenters, set `connections.vcenter.instances` to a list of `{id, label, host, user, password_env, verify_ssl}` (or add them on Settings) |
 | `api.tokens` | List of `{name, token_env}`. Callers send a token as `Authorization: Bearer <token>` or `X-API-Key: <token>`. With no tokens, the API is open |
 | `modules.<name>.enabled` | Default on/off (the switch on the Modules page wins) |
@@ -970,6 +977,7 @@ Precedence for module on/off: `enabled_by_default` in `module.yaml` → `modules
 | `VCO_VCFOPS_PASSWORD` | VCF Operations password |
 | `VCO_API_TOKEN_MPBUILDER` | API token for MP Builder and scripts. Use a long random string |
 | `VCO_MOCK` | `1` = sample data |
+| `VCO_HOME` | Page `/` opens, for example `/dash/vcenter-inventory/inventory` (overrides `home` in `config.yaml`; default DBH Insights) |
 | `PWSH_VERSION` | PowerShell build in the `core-pwsh` image (default 7.6.9 LTS) |
 | `DOTNET_HWINTRINSIC` | `0` turns off .NET CPU fast paths for VMs that hide CPU features (see [Troubleshooting](#troubleshooting)). Default 1 |
 
@@ -1105,7 +1113,8 @@ dashboards:
 | | |
 | --- | --- |
 | Input | Environment variables: `VCO_VCENTER_HOST`, `VCO_VCENTER_USER`, `VCO_VCENTER_PASSWORD`, `VCO_VCENTER_VERIFY_SSL` (first/selected vCenter; and `VCO_VCFOPS_*` etc. for each other connection listed), `VCO_VCENTERS` (JSON array of every selected vCenter instance when `connections` includes `vcenter`), `VCO_SETTINGS` (module settings as JSON), `VCO_MODULE`, `VCO_MOCK` (`1` = return sample data) |
-| Output | One JSON object keyed by table name, `{"things": [{"name": "a", "value": 1}]}`, written to the file in `VCO_OUTPUT_FILE` (recommended, so stray console output such as PowerCLI warnings can't corrupt it) or printed to stdout |
+| Output | One JSON object keyed by table name, `{"things": [{"name": "a", "value": 1}]}`, written to the file in `VCO_OUTPUT_FILE` (recommended, so stray console output such as PowerCLI warnings can't corrupt it) or printed to stdout. Every table the collector lists must be there (send `[]` to clear a table on purpose); row values must be text, numbers, true/false or null |
+| Writes | All or nothing: the whole output is checked first, then every table is written in one SQLite transaction with one `collected_at`. A failed run (non-zero exit, bad JSON, a missing table, a bad value, a database error) leaves every table as it was and shows the reason in the run history |
 | Logs | stderr. In PowerShell use `[Console]::Error.WriteLine()`, not `Write-Host` |
 | Failure | Non-zero exit code. The error shows on the Modules page and the module's dashboard |
 
@@ -1299,6 +1308,12 @@ requirements.in/.txt    direct dependencies / hashed lock file
 
 | Date | Change |
 | --- | --- |
+| 2026-11-07 | Home (`/`) now opens the **DBH Insights** dashboard. The tile page moved to **All dashboards** (`/overview`, new sidebar link; breadcrumbs point there). New `home` setting in `config.yaml` / `VCO_HOME` picks another dashboard; a missing or switched-off one falls back to `/overview` |
+| 2026-11-07 | Ask search with picked sources: the keyword search filters by source before its limit, and the vector search falls back to an exact ranking of only the picked sources' chunks when a bigger source crowds them out of the nearest matches, so a small source always gets its best matches (`ask/app/db.py`) |
+| 2026-11-07 | Ask indexing: the vector table is checked and created under the write lock in the same step as each document's write, so two sources syncing at once no longer fail with `table chunks_vec already exists`. Changing the embedding model while syncs run now stops them at their next write (no old-model vectors in the new index) and runs them again in full with the new model (`ask/app/db.py`, `indexer.py`) |
+| 2026-11-07 | DBH Insights XLSX export with several vCenters: one worksheet per sheet (each holds the rows of every vCenter) instead of a duplicate per vCenter for the sheets outside the standard order; worksheet names are now always unique (`modules/dbh-insights/export_dbh.py`) |
+| 2026-11-07 | Collectors: a run is all or nothing. The runner checks the whole output first (every listed table present, lists of row objects, plain values) and writes all tables in one transaction, so a failed run no longer leaves some tables updated and others not, and a missing table no longer clears its snapshot (`core/runner.py`, `Storage.write_tables`) |
+| 2026-11-06 | README: how to change an MCP server's path or add servers (`~/.config/ask-host-agent/mcp.json`, read again on change) |
 | 2026-11-06 | Ask: **MCP tools**. The host agent (0.2.0) runs the MCP servers of an `.mcp.json` file on the Mac (stdio, restarted when the script changes) and passes tool calls over HTTP (`GET /mcp`, `POST /mcp/<server>/call`, `/reload`, `--mcp-list`; installers take `-McpConfig` / `--mcp-config`). Ask: **Tools: &lt;server&gt;** in the Sources menu, an Ollama tool-calling loop (results become numbered sources), a **Tool calls** box with Run / Cancel for tools set to Ask first, the **MCP tools** page (status, Reload tools, per-tool Allowed / Ask first / Off, tool turns, result size), `GET /api/mcp`. Test helpers `scripts/fake_mcp.py` and tool calls in `fake_ollama.py` |
 | 2026-11-06 | Ask: the **Catalog and sources** box under a whole-source answer starts folded, like **Source details**, so the reply stays in view while it streams (click it, or a citation, to open it) |
 | 2026-11-06 | Ask sidebar: the menu button (top left) hides the whole sidebar for more page width and shows it again; **Recent chats**, **Knowledge** and **Administration** fold and unfold with a click on their heading; both choices are remembered in the browser |

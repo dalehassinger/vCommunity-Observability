@@ -11,7 +11,12 @@ Contract for a collector script:
   * The script writes ONE JSON object {"<table>": [ {row}, ... ], ...} to the
     file named in VCO_OUTPUT_FILE (preferred: immune to stray console output
     such as PowerCLI warnings), or prints it to stdout.
+  * Every table the collector lists must be in the object (an empty list clears a
+    snapshot table); each is a list of row objects (one object counts as one row).
+    Row values must be text, numbers, true/false or null.
   * Logs go to stderr. A non-zero exit code marks the run as failed.
+  * The run is all or nothing: the whole payload is checked first, then every table
+    is written in one transaction. A failed run leaves all tables as they were.
 """
 
 from __future__ import annotations
@@ -75,6 +80,44 @@ def _parse_output(text: str) -> object:
         raise
 
 
+_SCALARS = (str, int, float, bool, type(None))
+
+
+def validate_payload(mod: Module, c: Collector, payload: object) -> dict[str, list[dict]]:
+    """Check a collector's whole output before anything is written. Returns the rows per
+    table; raises ValueError naming every problem, so a bad run changes nothing."""
+    if not isinstance(payload, dict):
+        raise ValueError("collector must print a JSON object keyed by table name")
+    problems: list[str] = []
+    missing = [t for t in c.tables if t not in payload]
+    if missing:
+        problems.append("missing table(s) " + ", ".join(missing)
+                        + " (send an empty list to clear a table on purpose)")
+    out: dict[str, list[dict]] = {}
+    for table in c.tables:
+        if table not in payload:
+            continue
+        rows = payload[table]
+        if isinstance(rows, dict):  # single row (PowerShell turns a one-item array into an object)
+            rows = [rows]
+        if not isinstance(rows, list):
+            problems.append(f"{table}: expected a list of rows, got {type(rows).__name__}")
+            continue
+        cols = mod.tables[table]["columns"]
+        for i, row in enumerate(rows):
+            if not isinstance(row, dict):
+                problems.append(f"{table} row {i + 1}: expected an object, got {type(row).__name__}")
+                break
+            bad = [k for k in cols if not isinstance(row.get(k), _SCALARS)]
+            if bad:
+                problems.append(f"{table} row {i + 1}: column(s) {', '.join(bad)} must be text, a number, true/false or null")
+                break
+        out[table] = rows
+    if problems:
+        raise ValueError("collector output rejected, nothing was written: " + "; ".join(problems[:10]))
+    return out
+
+
 def run_collector(cfg: Config, storage: Storage, mod: Module, c: Collector) -> dict:
     started = utcnow()
     out_fd, out_name = tempfile.mkstemp(prefix=f"vco-{mod.name}-", suffix=".json")
@@ -104,14 +147,9 @@ def run_collector(cfg: Config, storage: Storage, mod: Module, c: Collector) -> d
                 + (proc.stdout.strip()[:400] or "(empty)")
                 + (" | stderr: " + proc.stderr.strip()[-400:] if proc.stderr.strip() else "")
             ) from None
-        if not isinstance(payload, dict):
-            raise ValueError("collector must print a JSON object keyed by table name")
-        total = 0
-        for table in c.tables:
-            rows = payload.get(table, [])
-            if isinstance(rows, dict):  # single row
-                rows = [rows]
-            total += storage.write_rows(mod, table, rows)
+        # All or nothing: check every table first, then write them in one transaction.
+        tables = validate_payload(mod, c, payload)
+        total = sum(storage.write_tables(mod, tables).values())
         storage.record_run(mod.name, c.name, started, "ok", total, proc.stderr.strip()[-500:])
         log.info("%s/%s: %d rows", mod.name, c.name, total)
         return {"status": "ok", "rows": total}

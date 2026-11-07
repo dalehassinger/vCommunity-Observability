@@ -45,7 +45,7 @@ for m in mods["items"]:
         assert r.status_code == 200, (ep, r.text)
         print(f"  {ep}: {r.json()['count']} items")
 inv = "/dash/vcenter-inventory/inventory"
-pages = ["/", "/modules", "/docs", "/about", "/dash/datastore-capacity/overview",
+pages = ["/", "/overview", "/modules", "/docs", "/about", "/dash/datastore-capacity/overview",
          inv, inv + "?type=vcenter&tab=hosts", inv + "?type=vcenter&tab=vms",
          inv + "?type=cluster&name=CL-01", inv + "?type=cluster&name=CL-02&tab=hosts", inv + "?type=cluster&name=CL-01&tab=vms",
          inv + "?type=host&name=esx9-01.vcrocs.local", inv + "?type=host&name=esx9-01.vcrocs.local&tab=vms",
@@ -74,19 +74,27 @@ r = client.put("/api/core/modules/github-status/enabled?enabled=false", headers=
 assert r.status_code == 200 and r.json()["enabled"] is False, r.text
 assert client.get("/api/github-status/components", headers=auth).status_code == 404
 assert client.get("/dash/github-status/status").status_code == 404
-assert "GitHub Status" not in client.get("/").text
+assert "GitHub Status" not in client.get("/overview").text
 assert core.storage.module_states()["github-status"] is False
 r = client.post("/modules/github-status/toggle", follow_redirects=False)
 assert r.status_code == 303 and core.modules["github-status"].enabled
 assert client.get("/api/github-status/components", headers=auth).status_code == 200
 print("  module on/off: ok")
+# Home: "/" opens DBH Insights; with dbh-insights off it falls back to All dashboards.
+r = client.get("/", follow_redirects=False)
+assert r.status_code == 302 and r.headers["location"] == "/dash/dbh-insights/insights", r.headers
+client.put("/api/core/modules/dbh-insights/enabled?enabled=false", headers=auth)
+assert client.get("/", follow_redirects=False).headers["location"] == "/overview"
+client.put("/api/core/modules/dbh-insights/enabled?enabled=true", headers=auth)
+assert client.get("/", follow_redirects=False).headers["location"] == "/dash/dbh-insights/insights"
+print("  home: ok")
 # Module order: move down/up and set via API; the sidebar follows it.
 names = list(core.modules)
 client.post(f"/modules/{names[0]}/move?dir=down", follow_redirects=False)
 assert list(core.modules)[:2] == [names[1], names[0]], list(core.modules)
 r = client.put("/api/core/modules/order", headers=auth, json=["github-status", "vcenter-inventory"])
 assert r.status_code == 200 and r.json()["order"][:2] == ["github-status", "vcenter-inventory"], r.text
-home = client.get("/").text
+home = client.get("/overview").text
 assert home.index("GitHub Status") < home.index("vSphere Inventory"), "sidebar order"
 if "Host Health" in home:
     assert home.index("vSphere Inventory") < home.index("Host Health"), "sidebar order"

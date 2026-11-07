@@ -193,7 +193,7 @@
 {% block body %}
 {# ------------------------------------------------------------------ tree #}
 <aside class="inv-tree">
-  <div class="inv-tree-head"><b>Inventory</b><a href="/">← Dashboards</a></div>
+  <div class="inv-tree-head"><b>Inventory</b><a href="/overview">← Dashboards</a></div>
   <div class="inv-views"><span class="on" title="Hosts and Clusters">{{ icon('cluster') }}</span><span title="VMs (from the tree)">{{ icon('vm') }}</span><span title="Storage">{{ icon('disk') }}</span><span title="Networking">{{ icon('net') }}</span></div>
   <ul>
     {% for root in vcenters %}

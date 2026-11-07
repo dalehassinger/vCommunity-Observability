@@ -503,11 +503,26 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
                 out["levels"] = [level(r.get(hl["column"])) for r in out["rows"]]
         return out
 
-    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-    def home(request: Request):
+    def home_target() -> str:
+        """Where "/" goes: the configured home dashboard (DBH Insights by default) when it
+        exists and its module is on, otherwise the Overview page."""
+        target = (core.cfg.home or "").strip()
+        parts = target.split("?")[0].strip("/").split("/")
+        if len(parts) == 3 and parts[0] == "dash":
+            mod = core.modules.get(parts[1])
+            if mod and mod.available and any(d["slug"] == parts[2] for d in mod.dashboards):
+                return target
+        return "/overview"
+
+    @app.get("/", include_in_schema=False)
+    def home():
+        return RedirectResponse(home_target(), status_code=302)
+
+    @app.get("/overview", response_class=HTMLResponse, include_in_schema=False)
+    def overview(request: Request):
         return templates.TemplateResponse(request, "home.html", {
             "nav": nav(), "modules": list(core.modules.values()),
-            "runs": core.storage.last_runs(), "mock": core.cfg.mock, "active": "/",
+            "runs": core.storage.last_runs(), "mock": core.cfg.mock, "active": "/overview",
         })
 
     @app.get("/dash/{module}/{slug}", response_class=HTMLResponse, include_in_schema=False)

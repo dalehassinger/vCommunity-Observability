@@ -84,27 +84,48 @@ class Storage:
                         db.execute(f'ALTER TABLE "{tname}" ADD COLUMN "{c}" {COLUMN_TYPES[t]}')
 
     # -- writes ------------------------------------------------------------
-    def write_rows(self, mod: Module, table: str, rows: list[dict[str, Any]]) -> int:
-        tdef = mod.tables[table]
-        cols = list(tdef["columns"].keys())
+    def write_tables(self, mod: Module, tables: dict[str, list[dict[str, Any]]]) -> dict[str, int]:
+        """Write one collector run: every table in ONE transaction, so a failure on any
+        table leaves all of them as they were (no mix of two collection runs). All rows
+        get the same collected_at. Snapshot tables are replaced; append tables get the
+        new rows and lose rows older than their retention_days."""
         stamp = utcnow()
-        values = [tuple(r.get(c) for c in cols) + (stamp,) for r in rows]
-        placeholders = ", ".join("?" for _ in range(len(cols) + 1))
-        quoted = ", ".join('"' + c + '"' for c in cols)
-        with _lock, sqlite3.connect(self.module_db_path(mod.name)) as db:
-            if tdef["mode"] == "snapshot":
-                db.execute(f'DELETE FROM "{table}"')
-            else:
-                days = int(tdef.get("retention_days", 90))
-                cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-                db.execute(f'DELETE FROM "{table}" WHERE collected_at < ?', (cutoff,))
-            db.executemany(
-                f'INSERT INTO "{table}" ({quoted}, collected_at) VALUES ({placeholders})',
-                values,
-            )
-        return len(values)
+        counts: dict[str, int] = {}
+        with _lock:
+            db = sqlite3.connect(self.module_db_path(mod.name), isolation_level=None)
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                for table, rows in tables.items():
+                    tdef = mod.tables[table]
+                    cols = list(tdef["columns"].keys())
+                    values = [tuple(r.get(c) for c in cols) + (stamp,) for r in rows]
+                    placeholders = ", ".join("?" for _ in range(len(cols) + 1))
+                    quoted = ", ".join('"' + c + '"' for c in cols)
+                    if tdef["mode"] == "snapshot":
+                        db.execute(f'DELETE FROM "{table}"')
+                    else:
+                        days = int(tdef.get("retention_days", 90))
+                        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        )
+                        db.execute(f'DELETE FROM "{table}" WHERE collected_at < ?', (cutoff,))
+                    db.executemany(
+                        f'INSERT INTO "{table}" ({quoted}, collected_at) VALUES ({placeholders})',
+                        values,
+                    )
+                    counts[table] = len(values)
+                db.execute("COMMIT")
+            except BaseException:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+            finally:
+                db.close()
+        return counts
+
+    def write_rows(self, mod: Module, table: str, rows: list[dict[str, Any]]) -> int:
+        """One table on its own (kept for callers outside the collector runner)."""
+        return self.write_tables(mod, {table: rows})[table]
 
     # -- run history -------------------------------------------------------
     def record_run(self, module: str, collector: str, started: str, status: str,

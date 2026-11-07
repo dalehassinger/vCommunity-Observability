@@ -44,11 +44,16 @@ TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2
 
 def load_tables(db_path: str, only: str | None = None) -> list[dict[str, Any]]:
     """Every sheet as {name, columns: [{label, kind}], rows: [[...]]}, values typed
-    the way the website holds them (bool, int/float, str, None)."""
+    the way the website holds them (bool, int/float, str, None).
+
+    With several vCenters, `sheets` has one status row per vCenter and sheet, but each
+    sheet's table already holds the rows of every vCenter (with its own vCenter column).
+    So every table is loaded once: one worksheet per sheet, all vCenters in it."""
     db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     db.row_factory = sqlite3.Row
     try:
-        sheets = db.execute("SELECT sheet, table_name FROM sheets ORDER BY position").fetchall()
+        sheets = db.execute("SELECT MIN(sheet) AS sheet, table_name, MIN(position) AS position FROM sheets "
+                            "GROUP BY table_name ORDER BY position, table_name").fetchall()
         meta = db.execute("SELECT * FROM sheet_columns ORDER BY table_name, position").fetchall()
     except sqlite3.OperationalError:
         raise SystemExit("No DBH Insights data yet: run the collector first (Modules page, Run now)")
@@ -202,11 +207,23 @@ STYLES_XML = (
 
 
 def workbook(tables: list[dict[str, Any]]) -> bytes:
-    by_name = {t["name"]: t for t in tables}
-    ordered = [by_name[n] for n in SHEET_ORDER if n in by_name] + [t for t in tables if t["name"] not in SHEET_ORDER]
+    by_name: dict[str, dict[str, Any]] = {}
+    for t in tables:
+        by_name.setdefault(t["name"], t)   # one worksheet per name
+    ordered = [by_name[n] for n in SHEET_ORDER if n in by_name] + \
+              [t for n, t in by_name.items() if n not in SHEET_ORDER]
 
-    def sheet_name(name: str) -> str:
-        return esc(name[:31])
+    # Excel needs unique worksheet names of at most 31 characters (case-insensitive).
+    unique: dict[int, str] = {}
+    used: set[str] = set()
+    for t in ordered:
+        base = t["name"][:31] or "Sheet"
+        name, k = base, 2
+        while name.lower() in used:
+            suffix = f" ({k})"
+            name, k = base[: 31 - len(suffix)] + suffix, k + 1
+        used.add(name.lower())
+        unique[id(t)] = name
 
     files = {
         "[Content_Types].xml":
@@ -228,11 +245,11 @@ def workbook(tables: list[dict[str, Any]]) -> bytes:
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
             "<bookViews><workbookView/></bookViews><sheets>"
-            + "".join(f'<sheet name="{sheet_name(t["name"])}" sheetId="{i + 1}" r:id="rId{i + 1}"/>' for i, t in enumerate(ordered))
+            + "".join(f'<sheet name="{esc(unique[id(t)])}" sheetId="{i + 1}" r:id="rId{i + 1}"/>' for i, t in enumerate(ordered))
             + "</sheets><definedNames>"
             + "".join(
                 f'<definedName name="_xlnm._FilterDatabase" localSheetId="{i}" hidden="1">'
-                f"'{sheet_name(t['name'])}'!$A$1:${column_letter(max(0, len(t['columns']) - 1))}${len(t['rows']) + 1}</definedName>"
+                f"'{esc(unique[id(t)])}'!$A$1:${column_letter(max(0, len(t['columns']) - 1))}${len(t['rows']) + 1}</definedName>"
                 for i, t in enumerate(ordered))
             + "</definedNames></workbook>",
         "xl/_rels/workbook.xml.rels":

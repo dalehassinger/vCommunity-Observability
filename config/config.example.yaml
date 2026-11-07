@@ -13,6 +13,7 @@ modules_dirs:
   - /modules              # extra or patched modules (Docker volume)
 
 mock: false               # true (or VCO_MOCK=1) = built-in sample data, no vCenter needed
+# home: /dash/dbh-insights/insights   # page "/" opens (default DBH Insights); /overview = all dashboards as tiles
 
 connections:
   # One vCenter (flat form). Or use instances: to list several; Settings can also add more.

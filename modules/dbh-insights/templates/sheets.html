@@ -41,7 +41,7 @@
 {% block body %}
 <div class="page-head">
   <div>
-    <div class="breadcrumb"><a href="/">Dashboards</a> / <a href="/dash/{{ mod.name }}/insights">DBH Insights</a> / Sheets</div>
+    <div class="breadcrumb"><a href="/overview">Dashboards</a> / <a href="/dash/{{ mod.name }}/insights">DBH Insights</a> / Sheets</div>
     <h1>{{ current.sheet if current else 'Sheets' }}</h1>
     <p class="subtle">{% if current %}{{ current.grp }} · {{ current.row_count }} rows · {% endif %}collected {{ last_collected ~ ' UTC' if last_collected else 'never' }}</p>
   </div>

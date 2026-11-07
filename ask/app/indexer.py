@@ -22,7 +22,7 @@ from typing import Any, Callable
 
 import yaml
 
-from .db import DB
+from .db import DB, IndexReset
 from .ollama import Ollama, OllamaError
 
 log = logging.getLogger("ask.indexer")
@@ -200,6 +200,12 @@ class Indexer:
             self._sync(name, full)
             self.db.set_state(name, status="ok", last_end=time.time(), last_ok=time.time())
             log.info("sync %s done in %.1fs", name, time.time() - t0)
+        except IndexReset:
+            # The embedding model changed while this sync ran: main.py asked for a full
+            # sync again (self._again), which starts as soon as this one lets go.
+            log.info("sync %s stopped: index reset for a new embedding model", name)
+            self._again.setdefault(name, True)
+            self.db.set_state(name, status="running", progress="restarting for the new embedding model")
         except Exception as e:
             log.exception("sync %s failed", name)
             self.db.set_state(name, status="error", progress="", last_end=time.time(), last_error=str(e)[:2000])
@@ -215,6 +221,7 @@ class Indexer:
         plugin = self.plugins().get(src["plugin"])
         if not plugin:
             raise RuntimeError(f"source plug-in '{src['plugin']}' not found")
+        generation = self.db.generation  # before reading the model: a reset after this stops the sync
         cfg = self.settings()
         ollama = Ollama(cfg["ollama_url"])
         model = cfg["embed_model"]
@@ -270,9 +277,9 @@ class Indexer:
                     vectors += ollama.embed(model, texts[b:b + EMBED_BATCH], keep_alive=cfg["keep_alive"])
                 except OllamaError as e:
                     raise RuntimeError(f"embedding with '{model}' failed: {e}") from e
-            # Cheap check, done per document: the index can be reset (new embedding model) mid-sync.
-            self.db.ensure_vec(len(vectors[0]))
-            self.db.save_document(name, doc, chunks, vectors)
+            # The vector table is checked (and created) inside save_document, under the write
+            # lock; a reset of the index since this sync started raises IndexReset there.
+            self.db.save_document(name, doc, chunks, vectors, generation=generation)
         self.db.set_state(name, progress=f"{len(changed)} updated, {len(gone)} removed",
                           version=str(out.get("version", "")), root=str(out.get("root", "")), state=state)
 

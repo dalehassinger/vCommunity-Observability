@@ -42,6 +42,9 @@ def _resolve_env(section: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+DEFAULT_HOME = "/dash/dbh-insights/insights"
+
+
 @dataclass
 class Config:
     data_dir: Path
@@ -50,6 +53,9 @@ class Config:
     connections: dict[str, dict[str, Any]]
     api_tokens: list[str]
     modules: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # The page "/" opens. A dashboard (/dash/<module>/<slug>) that is missing or switched
+    # off falls back to the Overview page (all dashboards as tiles).
+    home: str = DEFAULT_HOME
 
 
 def load_config(path: str | os.PathLike | None = None) -> Config:
@@ -80,4 +86,5 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         connections=connections,
         api_tokens=tokens,
         modules=raw.get("modules") or {},
+        home=str(os.environ.get("VCO_HOME") or raw.get("home") or DEFAULT_HOME).strip(),
     )

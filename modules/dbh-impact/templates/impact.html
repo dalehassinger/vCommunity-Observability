@@ -48,7 +48,7 @@
 {% block body %}
 <div class="page-head">
   <div>
-    <div class="breadcrumb"><a href="/">Dashboards</a> / {{ mod.name }}</div>
+    <div class="breadcrumb"><a href="/overview">Dashboards</a> / {{ mod.name }}</div>
     <h1>Impact</h1>
     <p class="subtle">{% if chosen %}{{ chosen.name }} · {{ chosen.status }} · {% endif %}{% if source %}{{ source.server }} · {% endif %}collected {{ last_collected ~ ' UTC' if last_collected else 'never' }}</p>
   </div>

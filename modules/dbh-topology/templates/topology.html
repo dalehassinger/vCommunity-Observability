@@ -44,7 +44,7 @@
 {% block body %}
 <div class="page-head">
   <div>
-    <div class="breadcrumb"><a href="/">Dashboards</a> / {{ mod.name }}</div>
+    <div class="breadcrumb"><a href="/overview">Dashboards</a> / {{ mod.name }}</div>
     <h1>Host &amp; Storage Topology</h1>
     <p class="subtle">{% if source_label %}{{ source_label }} · {% endif %}collected {{ last_collected ~ ' UTC' if last_collected else 'never' }}</p>
   </div>

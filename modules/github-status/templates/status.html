@@ -80,7 +80,7 @@
 {% block body %}
 <div class="page-head">
   <div>
-    <div class="breadcrumb"><a href="/">Dashboards</a> / {{ mod.name }}</div>
+    <div class="breadcrumb"><a href="/overview">Dashboards</a> / {{ mod.name }}</div>
     <h1>GitHub Status</h1>
     <p class="subtle">From <a href="{{ page.url if page else 'https://www.githubstatus.com' }}" target="_blank" rel="noopener">{{ (page.url if page else 'https://www.githubstatus.com')|replace('https://', '') }}</a>{% if page and page.updated_at %}, page updated {{ page.updated_at }} UTC{% endif %}</p>
   </div>

@@ -56,11 +56,19 @@ def pack(vec: Iterable[float]) -> bytes:
     return struct.pack(f"{len(v)}f", *v)
 
 
+class IndexReset(RuntimeError):
+    """The index was reset (new embedding model) while a sync was embedding: its vectors
+    belong to the old index, so the sync stops and runs again."""
+
+
 class DB:
     def __init__(self, path: Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._write_lock = threading.Lock()
+        # Goes up by one at every reset_index(). A sync notes it when it starts and may
+        # only write vectors while it is unchanged (see save_document).
+        self.generation = 0
         with self.conn() as c:
             c.executescript(SCHEMA)
             c.execute("PRAGMA journal_mode=WAL")
@@ -161,30 +169,46 @@ class DB:
         return d
 
     # -- vectors --------------------------------------------------------------
-    def vec_dim(self) -> int | None:
-        with self.conn() as c:
-            r = c.execute("SELECT sql FROM sqlite_master WHERE name='chunks_vec'").fetchone()
+    @staticmethod
+    def _vec_dim(c: sqlite3.Connection) -> int | None:
+        r = c.execute("SELECT sql FROM sqlite_master WHERE name='chunks_vec'").fetchone()
         if not r:
             return None
         import re
-        m = re.search(r"float\[(\d+)\]", r["sql"])
+        m = re.search(r"float\[(\d+)\]", r[0])
         return int(m.group(1)) if m else None
 
-    def ensure_vec(self, dim: int) -> None:
-        """Create the vector table for this embedding size. A different size means a
-        different embedding model: drop the vectors so everything is re-embedded."""
-        current = self.vec_dim()
+    def vec_dim(self) -> int | None:
+        with self.conn() as c:
+            return self._vec_dim(c)
+
+    def _check_generation(self, generation: int | None) -> None:
+        if generation is not None and generation != self.generation:
+            raise IndexReset("the index was reset (embedding model changed) during this sync")
+
+    def _ensure_vec(self, c: sqlite3.Connection, dim: int) -> None:
+        """Call with the write lock held: check and change the schema in one step, so two
+        syncs can't both decide to create the table."""
+        current = self._vec_dim(c)
         if current == dim:
             return
+        if current is not None:
+            c.execute("DROP TABLE chunks_vec")
+            c.execute("UPDATE documents SET hash='' ")  # force re-embedding on next sync
+        c.execute(f"CREATE VIRTUAL TABLE chunks_vec USING vec0(embedding float[{dim}] distance_metric=cosine)")
+
+    def ensure_vec(self, dim: int, generation: int | None = None) -> None:
+        """Create the vector table for this embedding size. A different size means a
+        different embedding model: drop the vectors so everything is re-embedded."""
         with self._write_lock, self.conn() as c:
-            if current is not None:
-                c.execute("DROP TABLE chunks_vec")
-                c.execute("UPDATE documents SET hash='' ")  # force re-embedding on next sync
-            c.execute(f"CREATE VIRTUAL TABLE chunks_vec USING vec0(embedding float[{dim}] distance_metric=cosine)")
+            self._check_generation(generation)
+            self._ensure_vec(c, dim)
 
     def reset_index(self) -> None:
-        """Drop every document, chunk and vector (used when the embedding model changes)."""
+        """Drop every document, chunk and vector (used when the embedding model changes).
+        Syncs that are still embedding with the old model stop at their next write."""
         with self._write_lock, self.conn() as c:
+            self.generation += 1
             c.execute("DELETE FROM chunks_fts")
             c.execute("DROP TABLE IF EXISTS chunks_vec")
             c.execute("DELETE FROM chunks")
@@ -209,8 +233,13 @@ class DB:
                     for r in c.execute("SELECT id, doc_id, hash FROM documents WHERE source=?", (source,))}
 
     def save_document(self, source: str, doc: dict[str, Any], chunks: list[dict[str, Any]],
-                      vectors: list[list[float]]) -> None:
+                      vectors: list[list[float]], generation: int | None = None) -> None:
+        """generation: the value of self.generation when the sync started; a reset since
+        then raises IndexReset instead of mixing old-model vectors into the new index."""
         with self._write_lock, self.conn() as c:
+            self._check_generation(generation)
+            if vectors:
+                self._ensure_vec(c, len(vectors[0]))
             old = c.execute("SELECT id FROM documents WHERE source=? AND doc_id=?", (source, doc["id"])).fetchone()
             if old:
                 ids = [r[0] for r in c.execute("SELECT id FROM chunks WHERE document=?", (old["id"],))]
@@ -271,28 +300,39 @@ class DB:
         if self.vec_dim() != len(vec):
             return []
         with self.conn() as c:
-            # Ask for more than k: results from other sources are filtered out afterwards.
+            # Fast path: the nearest k*4 overall, then keep the picked sources.
             want = k * 4 if sources else k
             rows = c.execute("SELECT rowid, distance FROM chunks_vec WHERE embedding MATCH ? AND k = ? ORDER BY distance",
                              (pack(vec), want)).fetchall()
             if sources:
                 allowed = _chunk_sources(c, [r[0] for r in rows])
                 rows = [r for r in rows if allowed.get(r[0]) in sources]
+                if len(rows) < k:
+                    # A bigger source crowded the picked ones out of the nearest k*4 (or they are
+                    # small): rank only the picked sources' chunks, exactly. Same cosine distance.
+                    marks = ",".join("?" * len(sources))
+                    rows = c.execute(f"""SELECT v.rowid, vec_distance_cosine(v.embedding, ?) AS distance
+                                         FROM chunks_vec v
+                                         WHERE v.rowid IN (SELECT id FROM chunks WHERE source IN ({marks}))
+                                         ORDER BY distance LIMIT ?""", (pack(vec), *sources, k)).fetchall()
         return [(r[0], r[1]) for r in rows[:k]]
 
     def keyword_search(self, match: str, k: int, sources: list[str] | None) -> list[tuple[int, float]]:
         if not match:
             return []
+        # The source filter is part of the query, so the limit counts only the picked sources.
+        where, args = "chunks_fts MATCH ?", [match]
+        if sources:
+            where += f" AND k.source IN ({','.join('?' * len(sources))})"
+            args += list(sources)
         with self.conn() as c:
             try:
-                rows = c.execute("""SELECT f.rowid, bm25(chunks_fts, 4.0, 2.0, 1.0) AS score, k.source
-                                    FROM chunks_fts f JOIN chunks k ON k.id=f.rowid
-                                    WHERE chunks_fts MATCH ? ORDER BY score LIMIT ?""", (match, k * 4)).fetchall()
+                rows = c.execute(f"""SELECT f.rowid, bm25(chunks_fts, 4.0, 2.0, 1.0) AS score
+                                     FROM chunks_fts f JOIN chunks k ON k.id=f.rowid
+                                     WHERE {where} ORDER BY score LIMIT ?""", (*args, k)).fetchall()
             except sqlite3.OperationalError:
                 return []
-        if sources:
-            rows = [r for r in rows if r["source"] in sources]
-        return [(r[0], r[1]) for r in rows[:k]]
+        return [(r[0], r[1]) for r in rows]
 
     def get_chunks(self, ids: list[int]) -> dict[int, dict[str, Any]]:
         if not ids:
