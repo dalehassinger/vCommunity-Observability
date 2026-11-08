@@ -9,7 +9,9 @@
    last few turns of the chat; the answer streams back token by token.
 4. MCP tools (when a "Tools" entry is picked in the Sources menu): the model may call
    the tools of MCP servers on the host (app/mcp.py, through the Ask host agent); each
-   result becomes one more numbered source, and the model answers when it stops calling."""
+   result becomes one more numbered source, and the model answers when it stops calling.
+5. Web search (when "Web search (Ollama)" is picked): the same tool loop with two built-in
+   tools, web_search and web_fetch (app/websearch.py, Ollama's cloud web search API)."""
 
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ import time
 from typing import Any, Iterator
 from urllib.parse import quote
 
-from . import data, mcp, overview
+from . import data, mcp, overview, websearch
 from .db import DB
 from .indexer import embed_prefixes
 
@@ -232,9 +234,17 @@ if a tool fails or is cancelled, say so. Call a tool that changes something (sen
 saves files) only when the user asked for exactly that."""
 
 
+WEB_NOTE = """You can search the web with the web_search tool and read one page with web_fetch. Use them when the
+sources above do not answer the question, or when it needs current information (versions, releases, news). Prefer the
+knowledge sources when they answer it. Search with short, specific queries; fetch a page only when the search result text
+is not enough. Each result starts with its source number, for example [5]: cite it, and name the web site."""
+
+
 def tool_messages(cfg: dict[str, Any], items: list[dict[str, Any]], question: str, history: list[dict[str, Any]],
                   servers: list[str]) -> list[dict[str, Any]]:
-    note = TOOL_NOTE.format(servers=", ".join(servers))
+    names = [s for s in servers if s != websearch.SCOPE]
+    notes = ([TOOL_NOTE.format(servers=", ".join(names))] if names else []) + ([WEB_NOTE] if websearch.SCOPE in servers else [])
+    note = "\n\n".join(notes)
     if items:
         msgs = build_messages(cfg, items, question, history)
     else:
@@ -267,14 +277,22 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
     try:
         mcp_tools: list[dict[str, Any]] = []
         mcp_index: dict[str, Any] = {}
-        if tools:
+        servers = [t for t in (tools or []) if t != websearch.SCOPE]
+        if servers:
             info = mcp.servers(cfg.get("agent_url") or "", fresh=True)
             policy = mcp.load_policy(cfg.get("mcp_tools"))
-            mcp_tools, mcp_index = mcp.ollama_tools(info["servers"], tools, policy)
+            mcp_tools, mcp_index = mcp.ollama_tools(info["servers"], servers, policy)
             if not mcp_tools:
-                why = info["error"] or next((s["error"] for s in info["servers"] if s["name"] in tools and s.get("error")), "")
+                why = info["error"] or next((s["error"] for s in info["servers"] if s["name"] in servers and s.get("error")), "")
                 raise OllamaError("The MCP tools are not available" + (f": {why}" if why else
                                   " (no tools, or every tool is turned off on the MCP tools page)."))
+        if tools and websearch.SCOPE in tools:
+            ws = websearch.status(cfg)
+            if not ws["available"]:
+                raise OllamaError("Web search is not available: " + ws["why"])
+            web_tools, web_index = websearch.ollama_tools()
+            mcp_tools = mcp_tools + web_tools
+            mcp_index = {**mcp_index, **web_index}
         if db.stats()["chunks"] == 0 and not (tools and not sources):
             raise OllamaError("Nothing is indexed yet. Open Knowledge sources and press Sync now.")
         res = None
@@ -406,6 +424,9 @@ def run_tool(cfg: dict[str, Any], chat_id: str, call: dict[str, Any], card: dict
         yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
         return
     server, tool = index[name]
+    if server == websearch.SERVER:
+        yield from run_web_tool(cfg, card, tool["name"], args)
+        return
     card.update(tool=tool["name"], server=server, read_only=mcp.read_only(tool))
     pol = mcp.policy_of(mcp.load_policy(cfg.get("mcp_tools")), server, tool)
     if pol == "ask":
@@ -445,6 +466,26 @@ def run_tool(cfg: dict[str, Any], chat_id: str, call: dict[str, Any], card: dict
     else:
         card.update(status="error", error=res["error"][:2000])
         card["_for_model"] = f"[{n}] The tool {tool['name']} failed: {res['error'][:2000]}"
+    yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
+
+
+def run_web_tool(cfg: dict[str, Any], card: dict[str, Any], tool: str, args: dict[str, Any]) -> Iterator[str]:
+    """web_search / web_fetch: read-only, so they run without a Run / Cancel question."""
+    n = card["n"]
+    card.update(tool=tool, server="Ollama web search", read_only=True, status="running")
+    yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
+    res = websearch.call(cfg, tool, args)
+    card["ms"] = res["ms"]
+    if res["ok"]:
+        limit = max(1000, int(cfg.get("mcp_result_chars") or 16000))
+        text = res["text"]
+        cut = len(text) > limit
+        card.update(status="ok", result=text[:20000], chars=len(text), cut=cut, links=res["links"][:10])
+        card["_for_model"] = (f"[{n}] Result of {tool} (web)" + (f", first {limit} of {len(text)} characters" if cut else "")
+                              + f":\n{text[:limit]}")
+    else:
+        card.update(status="error", error=res["error"][:2000])
+        card["_for_model"] = f"[{n}] The tool {tool} failed: {res['error'][:2000]}"
     yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
 
 

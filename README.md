@@ -455,6 +455,7 @@ ASK_OLLAMA_URL=http://127.0.0.1:11434 uvicorn app.main:create_app --factory --po
 - The footer shows the model, the time and tokens per second, and **Copy answer**. With **Show model thinking** on (Settings), thinking models show their reasoning above the answer.
 - Chats are saved: **Recent chats** in the sidebar reopens them, **Delete chat** removes the open one. To remove several, press **Select** next to **Recent chats**: each chat gets a check box (click a chat to tick it, Shift+click ticks a range, **All** ticks every listed chat), then **Delete (n)** removes them after one confirmation. **Cancel** or **Esc** leaves select mode. Follow-up questions see the last turns (Settings → Chat history).
 - **More room:** the menu button at the top left hides the whole sidebar so chats, reports and dashboards use the full width; click it again to bring the sidebar back. Click a sidebar heading (**Recent chats**, **Knowledge**, **Administration**) to fold just that section. Both choices are remembered in the browser.
+- **Web search (Ollama)** in the Sources menu (group **Web**) lets the model search the web when the knowledge sources don't answer. See [Web search (Ollama)](#web-search-ollama).
 - **Tools: &lt;server&gt;** in the Sources menu (group **Tools (MCP)**) lets the model call the tools of your MCP servers; tool calls show in a **Tool calls** box, and tools that change things ask **Run** or **Cancel** first. See [MCP tools](#mcp-tools-your-own-mcp-servers).
 - **Reports** in the sidebar lists the HTML reports and dashboards Ask has made (see [HTML reports and dashboards](#html-reports-and-dashboards)).
 - **About** in the sidebar shows Ask's version, chat and embedding models, sources, documents, chunks and chats, then the full project README (the same page as the dashboards' [About](#about)).
@@ -884,6 +885,39 @@ Below that: **Tool turns per answer** (default 6: how many times the model may c
 
 **Notes.** The chat model must support tools (Ollama marks it with the `tools` capability; `qwen3.8:27b-mlx` does, `gemma3:27b` does not). Tool results go to the model as text, so a tool that returns thousands of rows uses up the context: give such tools filter parameters. The REST API can use tools too (`"sources": ["mcp:powershell-mcp"]` on `POST /api/ask`), but there a tool set to **Ask first** is refused, because nobody can press Run. Tool calls are not saved in the chat history the model sees on follow-ups, only the answers are.
 
+### Web search (Ollama)
+
+Ask can let the chat model search the web with **Ollama's web search** ([docs](https://docs.ollama.com/capabilities/web-search)), for questions the knowledge sources don't cover, such as current versions, release notes or news. It works like the [MCP tools](#mcp-tools-your-own-mcp-servers): the model gets two read-only tools and decides when to call them.
+
+| Tool | What it does |
+| --- | --- |
+| `web_search` | `POST https://ollama.com/api/web_search` with a query; returns titles, URLs and page text (5 results by default, up to 10) |
+| `web_fetch` | `POST https://ollama.com/api/web_fetch` with one URL; returns the page's text and links |
+
+**Set it up** (once):
+
+1. Create an API key on ollama.com (**Settings → Keys**, a free account works within Ollama's limits) and put it in `.env`. It is read from the environment only, never saved in `ask.db` or shown in the UI:
+
+   ```
+   OLLAMA_API_KEY=<your key>
+   ASK_WEB_SEARCH=1
+   ```
+
+2. `docker compose up -d vco-ask` (the container reads `.env` when it starts).
+3. Settings → **Web search (Ollama)** shows whether the key is set. The switch there turns web search on or off without a restart (`ASK_WEB_SEARCH=1` only sets the default).
+
+**In the chat:** tick **Web search (Ollama)** (group **Web**) in the Sources menu, alone or with knowledge sources. The model searches only when the sources don't answer, cites each web result by its number, and the **Tool calls** box shows every search with its query, the pages found as links, and the text the model read. The REST API takes it as `"sources": ["web:ollama"]` (or together with source names) on `POST /api/ask`. Nothing ticked never includes web search.
+
+**Which is used first: knowledge sources or the web?** The knowledge sources always come first. With blogs (or any other sources) and **Web search** ticked together:
+
+1. Ask searches the ticked sources as usual and gives the model the best matches as numbered sources `[1]`, `[2]`, … before it starts answering.
+2. Web search is a tool the model *may* call after reading them. Its instructions say to prefer the knowledge sources and to search the web only when they do not answer the question or it needs current information (versions, releases, news).
+3. Web results get the next numbers (for example `[9]`, `[10]`), so one answer can cite both a blog post and a web page.
+
+So "What did Brock write about vSAN?" is usually answered from the blogs alone, while "What is the latest PowerCLI version?" usually shows a `web_search` card under **Tool calls**. To force a search, say so in the question ("search the web for …"); to keep the answer to your sources, untick **Web search**.
+
+**Notes.** It needs internet access from the container and a chat model with the `tools` capability (`qwen3.8:27b-mlx` has it). The question and the model's search queries are sent to ollama.com, so leave it off for private data and on dark sites (it is off unless `ASK_WEB_SEARCH=1` or the Settings switch is on, and the menu entry only appears when a key is set). **Web results per search** (default 5) and **Web search API URL** (default `https://ollama.com`) are on the Settings page; the result size the model reads is the MCP tools page's **Result size the model reads**. For tests without internet, `ask/scripts/fake_websearch.py` is a stand-in API on port 11556.
+
 ### Ask configuration
 
 `ask/config/ask.example.yaml` is built into the image as `/app/config/ask.yaml`. To use your own, copy it to `ask/config/ask.yaml` and uncomment the volume line in `docker-compose.yml`.
@@ -906,6 +940,8 @@ Below that: **Tool turns per answer** (default 6: how many times the model may c
 | `ASK_UPLOAD_MAX_MB` | Largest upload (spreadsheet or PDF) in MB (default 50). Raise it for large scanned PDFs |
 | `ASK_AGENT_TOKEN` | Token of the Ask host agent (printed by `Install-AskAgent.ps1`), for the Performance page |
 | `ASK_AGENT_URL` | Where Ask reaches the host agent (default `http://host.docker.internal:9101`) |
+| `OLLAMA_API_KEY` | ollama.com API key for [Web search (Ollama)](#web-search-ollama). Secret: keep it in `.env` only |
+| `ASK_WEB_SEARCH`, `ASK_WEB_SEARCH_URL` | `1` turns web search on by default (the Settings switch wins); API URL (default `https://ollama.com`) |
 | `VCO_ASK_URL` | First container: sidebar link to Ask |
 
 ### Source plug-ins
@@ -1203,7 +1239,7 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 
 ## Dark sites
 
-- No runtime internet access is needed: the UI has no JavaScript frameworks or CDN links, and Swagger UI, marked and DOMPurify are vendored into the images. (`github-status` is the one module that needs internet, by design; set `enabled: false` for it at a dark site.)
+- No runtime internet access is needed: the UI has no JavaScript frameworks or CDN links, and Swagger UI, marked and DOMPurify are vendored into the images. (`github-status` is the one module that needs internet, by design; set `enabled: false` for it at a dark site. Ask's [Web search (Ollama)](#web-search-ollama) also needs internet; leave it off there.)
 - **On a connected machine**, build both images and save them as gzipped tarballs with `.sha256` files:
   ```powershell
   ./scripts/New-OfflineBundle.ps1 -Version 0.1.0 -Target core-pwsh
@@ -1248,6 +1284,8 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 | Ask: MCP tools page says the agent has no MCP bridge, or shows no servers | Install the agent again from this repository (version 0.2.0 or later) with `-McpConfig` (see [MCP tools](#mcp-tools-your-own-mcp-servers)); it reads `~/.config/ask-host-agent/mcp.json`. Test on the Mac with `python3 ask/agent/ask-host-agent.py --mcp-list --mcp-config ~/.config/ask-host-agent/mcp.json` |
 | Ask: MCP server "not running" with `Operation not permitted` (stderr) | macOS privacy protection: a LaunchAgent may not read `~/Documents` or `~/Desktop`. Give the Python the installer names Full Disk Access (System Settings → Privacy & Security), then `launchctl kickstart -k gui/$(id -u)/com.vcommunity.ask-host-agent`, or keep the MCP folder outside Documents |
 | Ask: MCP server "not running" with `pwsh` not found or a module error | The agent's PATH has `/opt/homebrew/bin`, `/usr/local/bin` and `/usr/local/microsoft/powershell/7`; put the full path of `pwsh` in `command` otherwise. Modules (PowerCLI, ImportExcel, Posh-SSH, powershell-yaml) must be installed for your user; the server's own messages are under **Server messages (stderr)** |
+| Ask: no **Web search (Ollama)** in the Sources menu, or "Web search is not available" | Settings → **Web search (Ollama)** must be on and say the key is **set**: add `OLLAMA_API_KEY=` to `.env` and run `docker compose up -d vco-ask` |
+| Ask: web search card says "refused the API key", "limit was reached" or "Cannot reach Ollama web search" | Check or create the key on ollama.com (Settings → Keys); 429 = Ollama's usage limit, try later; "cannot reach" = the container has no internet (proxy: set `HTTPS_PROXY` for `vco-ask`) |
 | Ask: "The MCP tools are not available" or the model never calls a tool | The chat model needs the `tools` capability (Settings shows the models; `qwen3.8:27b-mlx` has it). Also check the tools aren't all **Off**, and name what you want in the question ("use the RVTools vHost data") |
 | Ask: Performance page says "Host numbers are off" | The agent isn't installed or running (`launchctl print gui/$(id -u)/com.vcommunity.ask-host-agent`, log in `~/Library/Logs/ask-host-agent.log`), `ASK_AGENT_TOKEN` in `.env` doesn't match `~/.config/ask-host-agent/token` (the note says the token was refused), or Ask wasn't restarted after editing `.env` (`docker compose up -d vco-ask`). Check by hand on the Mac: `curl -H "Authorization: Bearer $(cat ~/.config/ask-host-agent/token)" localhost:9101/metrics` |
 | Ask: Performance page shows Host GPU "n/a" or no power and temperature | GPU numbers come from `ioreg` and need macOS on Apple Silicon (or a Mac GPU that reports statistics); power and temperature need `brew install macmon` |
@@ -1324,10 +1362,12 @@ ask/                    vCommunity Ask (second container)
   sources/pdf/          built-in source plug-in (PDFs from uploads or a folder; pypdf text, Tesseract OCR for scanned pages)
   app/perf.py           Performance page: container, Ollama and host-agent samples (24 h in ask.db)
   app/mcp.py            MCP tools: client of the host agent's MCP bridge, tool policy, Run / Cancel approvals
+  app/websearch.py      Web search: Ollama's web_search / web_fetch API as two model tools
   agent/ask-host-agent.py  Ask host agent for the Mac (standard library only; performance numbers and the MCP bridge), plus Install-AskAgent.ps1 and install.sh
   config/               ask.example.yaml
   scripts/fake_ollama.py  stand-in for Ollama, for tests (also answers with tool calls)
   scripts/fake_mcp.py   stand-in stdio MCP server (three tools), for tests
+  scripts/fake_websearch.py  stand-in for Ollama's web search API (port 11556), for tests
   scripts/make_sample_rvtools.py  made-up RVTools-style workbook, for tests
   Dockerfile            vcommunity-ask image (build from the repo root)
   requirements.in/.txt  direct dependencies / hashed lock file
@@ -1352,6 +1392,8 @@ requirements.in/.txt    direct dependencies / hashed lock file
 
 | Date | Change |
 | --- | --- |
+| 2026-11-08 | README and About page: how Ask orders knowledge sources and web search when both are ticked (sources first, web search only when they don't answer) |
+| 2026-11-08 | Ask: **Web search (Ollama)**. New Sources menu entry (group **Web**, scope `web:ollama`) gives the model two read-only tools, `web_search` and `web_fetch` (Ollama's cloud API, `app/websearch.py`), through the MCP tool loop; results are numbered, cited sources with their pages as links in the Tool calls box. Key from `OLLAMA_API_KEY` in `.env` only; off unless `ASK_WEB_SEARCH=1` or the new Settings switch; **Web results per search** and **Web search API URL** settings; `scripts/fake_websearch.py` for tests |
 | 2026-11-07 | Ask: new **PDF documents** source plug-in (`pdf`): upload PDFs on the Knowledge sources page (several at once) or read a folder; text via pypdf (added to the lock file), scanned pages via Tesseract OCR (`tesseract-ocr`, `tesseract-ocr-eng`, `poppler-utils` added to the Ask image; `OCR_LANGS` build argument for more languages); one `## Page N` section per page, per-file cache, continues after the 60-minute limit; source cards open the PDF at the cited page (`/files/<source>/<file>.pdf#page=N`); **PDF documents** group in the chat's Sources menu |
 | 2026-11-07 | Ask `web-site` source: new **Pages to index** option (`scope`, default `folder`: only pages under the Site URL's folder, so a techdocs.broadcom.com start page no longer crawls all of Broadcom's docs). The plug-in stops downloading before the 60-minute limit and indexes what it has ("N more next sync"); the core passes `ASK_SOURCE_TIME_LIMIT` and a timed-out plug-in now gives a clear error |
 | 2026-11-07 | Home (`/`) now opens the **DBH Insights** dashboard. The tile page moved to **All dashboards** (`/overview`, new sidebar link; breadcrumbs point there). New `home` setting in `config.yaml` / `VCO_HOME` picks another dashboard; a missing or switched-off one falls back to `/overview` |

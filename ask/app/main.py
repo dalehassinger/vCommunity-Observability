@@ -30,7 +30,7 @@ from .config import SETTINGS, coerce, load_config
 from .db import DB
 from .indexer import NAME_RE, Indexer, discover_plugins
 from .ollama import Ollama, OllamaError
-from . import mcp, rag
+from . import mcp, rag, websearch
 from .reports import Reports
 from .perf import SAMPLE_SECONDS, Sampler
 
@@ -224,7 +224,10 @@ def create_app() -> FastAPI:
         are MCP tools; with only those picked, no knowledge source is searched (an empty list)."""
         items = [n.strip() for n in scope.split(",")] if isinstance(scope, str) else [str(n) for n in (scope or [])]
         tools = [n[4:] for n in items if n.startswith("mcp:") and n[4:]]
-        rest = [n for n in items if n and not n.startswith("mcp:")]
+        # "web:ollama" = Ollama web search (web_search / web_fetch tools), passed on with the MCP servers.
+        if websearch.SCOPE in items:
+            tools.append(websearch.SCOPE)
+        rest = [n for n in items if n and not n.startswith(("mcp:", "web:"))]
         if tools and not rest:
             return [], tools
         return scope_list(rest or "all"), tools
@@ -238,7 +241,7 @@ def create_app() -> FastAPI:
     def chat_new(request: Request):
         examples = [e for s in db.list_sources() if s["enabled"] for e in s["examples"]][:6]
         return page(request, "chat.html", "/chat", chat=None, messages=[], examples=examples, stats=db.stats(),
-                    mcp_servers=mcp.quick_servers(settings()["agent_url"]))
+                    mcp_servers=mcp.quick_servers(settings()["agent_url"]), web_search=websearch.status(settings()))
 
     @app.get("/chat/{chat_id}", response_class=HTMLResponse, include_in_schema=False)
     def chat_page(request: Request, chat_id: str):
@@ -246,7 +249,8 @@ def create_app() -> FastAPI:
         if not chat:
             return RedirectResponse("/chat")
         return page(request, "chat.html", f"/chat/{chat_id}", chat=chat, messages=db.messages(chat_id),
-                    examples=[], stats=db.stats(), mcp_servers=mcp.quick_servers(settings()["agent_url"]))
+                    examples=[], stats=db.stats(), mcp_servers=mcp.quick_servers(settings()["agent_url"]),
+                    web_search=websearch.status(settings()))
 
     @app.get("/sources", response_class=HTMLResponse, include_in_schema=False)
     def sources_page(request: Request):
@@ -432,7 +436,7 @@ def create_app() -> FastAPI:
     def settings_page(request: Request):
         overridden = set(db.get_settings())
         return page(request, "settings.html", "/settings", spec=SETTINGS, overridden=overridden,
-                    defaults=cfg.defaults, config_path=str(cfg.path))
+                    defaults=cfg.defaults, config_path=str(cfg.path), web_key_set=bool(websearch.api_key()))
 
     @app.get("/docs", include_in_schema=False)
     def swagger():

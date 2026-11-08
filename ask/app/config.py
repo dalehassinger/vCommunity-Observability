@@ -56,6 +56,10 @@ SETTINGS: dict[str, dict[str, Any]] = {
     "mcp_max_rounds":   {"default": 6, "type": "int"},
     "mcp_result_chars": {"default": 16000, "type": "int"},
     "observability_url": {"default": "", "env": "ASK_OBSERVABILITY_URL", "type": "str"},
+    # Ollama web search (cloud): off by default (dark sites). The API key is OLLAMA_API_KEY in .env.
+    "web_search":       {"default": False, "env": "ASK_WEB_SEARCH", "type": "bool"},
+    "web_search_url":   {"default": "https://ollama.com", "env": "ASK_WEB_SEARCH_URL", "type": "str"},
+    "web_search_results": {"default": 5, "type": "int"},
 }
 
 

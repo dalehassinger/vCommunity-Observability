@@ -416,6 +416,18 @@
       card.appendChild(box);
     }
     if (s.error) card.appendChild(el('div', 'tool-err', s.error));
+    if (s.links && s.links.length) {
+      // Web search / fetch: the pages found, as links.
+      var ul = el('ul', 'tool-links');
+      s.links.forEach(function (l) {
+        var li = el('li'), a = el('a', null, l.title || l.url);
+        a.href = l.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = l.url;
+        li.appendChild(a);
+        try { li.appendChild(el('span', 'subtle', ' · ' + new URL(l.url).hostname.replace(/^www\./, ''))); } catch (e) { /* bad URL */ }
+        ul.appendChild(li);
+      });
+      card.appendChild(ul);
+    }
     if (s.result != null) {
       var det = el('details', 'tool-result');
       det.appendChild(el('summary', null, 'Result' + (s.chars ? ' (' + s.chars.toLocaleString() + ' characters' + (s.cut ? ', the model read the first part' : '') + ')' : '')));

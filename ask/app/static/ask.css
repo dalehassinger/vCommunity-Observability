@@ -352,3 +352,5 @@ body.chart-open { overflow: hidden; }
 .perf-kv td:first-child { color: var(--subtle); width: 1%; }
 .perf-kv td { white-space: normal; }
 @media (max-width: 600px) { .perf-grid { grid-template-columns: minmax(0, 1fr); } .perf-tools { flex-wrap: wrap; } }
+.tool-links { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; }
+.tool-links li { margin: 2px 0; }

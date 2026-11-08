@@ -64,6 +64,17 @@
       <div class="field"><label for="s-observability_url">Observability URL{% if 'observability_url' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><input type="text" id="s-observability_url" data-key="observability_url" value="{{ settings.observability_url }}" placeholder="http://localhost:8080">
           <div class="hint">Adds a sidebar link back to the vCommunity-Observability dashboards.</div></div></div>
+      <div class="field"><label for="s-web_search">Web search (Ollama){% if 'web_search' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><label class="switch"><input type="checkbox" id="s-web_search" data-key="web_search" {{ 'checked' if settings.web_search else '' }}><span></span>On</label>
+          <div class="hint">Adds <b>Web search (Ollama)</b> to the chat's Sources menu: the model may call <code>web_search</code> and <code>web_fetch</code>
+            (Ollama's cloud web search, needs internet). Needs an ollama.com API key as <code>OLLAMA_API_KEY</code> in <code>.env</code>:
+            {% if web_key_set %}<b>set</b>{% else %}<b>not set</b>{% endif %}. The chat model must support tools. Leave off on dark sites.</div></div></div>
+      <div class="field"><label for="s-web_search_results">Web results per search{% if 'web_search_results' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><input type="number" id="s-web_search_results" data-key="web_search_results" value="{{ settings.web_search_results }}" min="1" max="10" step="1">
+          <div class="hint">Default for web_search (1 to 10, default 5). The model can ask for a different number.</div></div></div>
+      <div class="field"><label for="s-web_search_url">Web search API URL{% if 'web_search_url' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><input type="text" id="s-web_search_url" data-key="web_search_url" value="{{ settings.web_search_url }}" placeholder="https://ollama.com">
+          <div class="hint">Where <code>/api/web_search</code> and <code>/api/web_fetch</code> are called. Keep <code>https://ollama.com</code>.</div></div></div>
     </div>
   </div>
 
