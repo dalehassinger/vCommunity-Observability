@@ -30,7 +30,16 @@
       } catch (e) { /* nothing saved */ }
     }
     scopeRefresh(false);
-    scopePick.addEventListener('change', function () { scopeRefresh(true); });
+    scopePick.addEventListener('change', function (e) {
+      // "No sources" and real sources exclude each other (web search and tools may go with it).
+      var t = e.target;
+      if (t && t.checked && t.value === 'none') {
+        scopeBoxes.forEach(function (b) { if (b !== t && b.getAttribute('data-plugin') !== 'web' && b.getAttribute('data-plugin') !== 'mcp') b.checked = false; });
+      } else if (t && t.checked && t.getAttribute('data-plugin') !== 'web' && t.getAttribute('data-plugin') !== 'mcp') {
+        scopeBoxes.forEach(function (b) { if (b.value === 'none') b.checked = false; });
+      }
+      scopeRefresh(true);
+    });
     scopePick.addEventListener('click', function (e) {
       var t = e.target.closest('[data-scope-all],[data-scope-only]');
       if (!t) return;
@@ -722,7 +731,8 @@
                payload.sources.length && payload.sources[0].kind === 'data' ? 'Query returned ' + payload.sources[0].row_count + ' rows, asking ' :
                payload.sources.length && payload.sources[0].kind === 'catalog' ? 'Catalog of ' + payload.sources.filter(function (s) { return s.kind === 'catalog'; })
                  .reduce(function (t, s) { return t + s.posts; }, 0) + ' posts, asking ' :
-               payload.sources.length ? 'Found ' + payload.sources.length + ' sources, asking ' : 'No matching sources, asking ') +
+               payload.plain ? 'No sources, asking ' :
+              payload.sources.length ? 'Found ' + payload.sources.length + ' sources, asking ' : 'No matching sources, asking ') +
               DOMPurify.sanitize(payload.model) + '…</span>';
           } else if (ev === 'tool') {
             meta.sources = (meta.sources || []).filter(function (s) { return s.n !== payload.n; }).concat([payload])

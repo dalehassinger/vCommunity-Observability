@@ -19,6 +19,16 @@ log = logging.getLogger("ask.config")
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 HERE = Path(__file__).resolve().parent
 
+PLAIN_SYSTEM_PROMPT = """You are vCommunity Ask, a helpful assistant. The user is not asking about a knowledge base: work
+with the text and the request they give you, for example rephrase, fix grammar and spelling, shorten, expand, change the
+tone, summarize, translate, or explain.
+
+Rules:
+- Keep the author's meaning, facts and voice unless asked to change them. Do not add facts that are not in the text.
+- When you edit text, give the edited text first, ready to copy, then a short list of the main changes.
+- If the request is unclear, make the most likely edit and say what you assumed.
+- Answer in clear markdown."""
+
 DEFAULT_SYSTEM_PROMPT = """You are vCommunity Ask, an assistant for VMware vSphere and VCF operations.
 Answer ONLY from the numbered sources in the context. They were retrieved from the knowledge base for this question.
 
@@ -49,6 +59,8 @@ SETTINGS: dict[str, dict[str, Any]] = {
     "history_turns":    {"default": 3, "type": "int"},
     "keep_alive":       {"default": "10m", "type": "str"},
     "system_prompt":    {"default": DEFAULT_SYSTEM_PROMPT, "type": "text"},
+    # "No sources (just the model)": no search, this prompt instead of the sources rules.
+    "plain_system_prompt": {"default": PLAIN_SYSTEM_PROMPT, "type": "text"},
     "agent_url":        {"default": "http://host.docker.internal:9101", "env": "ASK_AGENT_URL", "type": "str"},
     # MCP tools: per-tool policy as JSON {"server/tool": "allow" | "ask" | "off"} (MCP tools page),
     # how many tool turns one answer may take, and how much of one tool result the model reads.

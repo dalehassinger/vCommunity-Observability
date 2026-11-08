@@ -127,6 +127,15 @@
           <button class="link-btn" type="button" id="reset-prompt">Reset to the default</button></div></div>
     </div>
   </div>
+
+  <div class="card span-all">
+    <div class="card-header">System prompt without sources{% if 'plain_system_prompt' in overridden %}<span class="override">saved</span>{% endif %}</div>
+    <div class="card-block">
+      <div class="field" style="grid-template-columns: 1fr"><textarea class="prompt" id="s-plain_system_prompt" data-key="plain_system_prompt">{{ settings.plain_system_prompt }}</textarea>
+        <div class="hint">Used when <b>No sources (just the model)</b> is picked in the chat's Sources menu: rephrasing, grammar, summaries and translations of pasted text. Nothing is searched.
+          <button class="link-btn" type="button" id="reset-plain-prompt">Reset to the default</button></div></div>
+    </div>
+  </div>
 </div>
 
 <div class="form-actions card-actions">
@@ -195,6 +204,7 @@
   }
   document.getElementById('test-ollama').onclick = test;
   document.getElementById('reset-prompt').onclick = function () { document.getElementById('s-system_prompt').value = DEFAULT_PROMPT; };
+  document.getElementById('reset-plain-prompt').onclick = function () { document.getElementById('s-plain_system_prompt').value = {{ defaults.plain_system_prompt | tojson }}; };
   document.getElementById('save').onclick = async function () {
     var values = {};
     document.querySelectorAll('[data-key]').forEach(function (i) { values[i.dataset.key] = i.type === 'checkbox' ? i.checked : i.value; });

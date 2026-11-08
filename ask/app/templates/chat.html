@@ -47,6 +47,7 @@
             <summary class="scope-btn" id="scope-label" aria-label="Which sources to search">All sources (not spreadsheets)</summary>
             <div class="scope-menu" role="group" aria-label="Sources to search">
               <button type="button" class="link-btn scope-all" data-scope-all>All sources (not spreadsheets)</button>
+              <label class="scope-item scope-none" title="No search: the model works only with what you type or paste (rephrase, grammar, summarize, translate)"><input type="checkbox" value="none" data-plugin="none" {{ 'checked' if 'none' in sel else '' }}><span>No sources (just the model)</span></label>
               {% for plugin, label in groups %}
               {% set items = enabled | selectattr('plugin', 'equalto', plugin) | list %}
               {% if items %}

@@ -165,6 +165,17 @@ def build_messages(cfg: dict[str, Any], items: list[dict[str, Any]], question: s
     return msgs
 
 
+def plain_messages(cfg: dict[str, Any], question: str, history: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """No sources: the plain prompt, the recent turns of this chat, and the request as written."""
+    msgs = [{"role": "system", "content": cfg.get("plain_system_prompt") or cfg["system_prompt"]}]
+    turns = max(0, int(cfg["history_turns"]))
+    for m in (history[-turns * 2:] if turns else []):
+        if m["role"] in ("user", "assistant") and m["content"]:
+            msgs.append({"role": m["role"], "content": m["content"]})
+    msgs.append({"role": "user", "content": question})
+    return msgs
+
+
 def overview_sources(db: DB, cfg: dict[str, Any], question: str, sources: list[str] | None,
                      ov: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]]]:
     """Cards, catalog blocks and extra chunks for a whole-source question. The catalogs come
@@ -327,12 +338,13 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
         order = web_order(cfg, tools or [])
         if order:   # state of this answer, not a tool (names starting with _ are never tools)
             mcp_index["_web_order"] = {"first": order[0], "second": order[1], "searched": False}
-        if db.stats()["chunks"] == 0 and not (tools and not sources):
+        plain = sources == [] and not tools    # "No sources (just the model)"
+        if db.stats()["chunks"] == 0 and not (tools and not sources) and not plain:
             raise OllamaError("Nothing is indexed yet. Open Knowledge sources and press Sync now.")
         res = None
         ov = None
-        srcs = data.tables_for(db, sources) if cfg.get("data_questions", True) and not tools else []
-        if not tools and cfg.get("overview_questions", True) and overview.is_overview_question(question) and not (
+        srcs = data.tables_for(db, sources) if cfg.get("data_questions", True) and not tools and not plain else []
+        if not tools and not plain and cfg.get("overview_questions", True) and overview.is_overview_question(question) and not (
                 srcs and data.is_data_question(question, srcs) and not overview.TEXTY.search(question)):
             # "How many posts...", "summarize this blog": a catalog of every post, not the top chunks.
             ov = overview.build(db, cfg, sources)
@@ -357,7 +369,13 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
             if res.get("error"):
                 stats["data_error"] = res["error"]
                 res = None
-        if tools:
+        if plain:
+            # No sources: the question (with pasted text) goes to the model with the plain prompt.
+            cards = []
+            yield sse("meta", {"chat_id": chat_id, "sources": [], "model": model, "plain": True,
+                               "retrieval_ms": int((time.time() - t0) * 1000)})
+            msgs = plain_messages(cfg, question, history)
+        elif tools:
             # Tools picked: the usual search over the picked sources (if any), plus the tools.
             items = retrieve(db, cfg, question, sources) if sources else []
             cards = source_cards(items)

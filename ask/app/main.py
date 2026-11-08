@@ -231,7 +231,10 @@ def create_app() -> FastAPI:
         tools = [n[4:] for n in items if n.startswith("mcp:") and n[4:]]
         # "web:ollama" / "web:brave" = web search tools, passed on with the MCP servers.
         tools += [s for s in websearch.SCOPES if s in items]
-        rest = [n for n in items if n and not n.startswith(("mcp:", "web:"))]
+        rest = [n for n in items if n and n != "none" and not n.startswith(("mcp:", "web:"))]
+        # "none" = No sources (just the model): no search at all ([] sources, no tools).
+        if "none" in items and not rest:
+            return [], tools
         if tools and not rest:
             return [], tools
         return scope_list(rest or "all"), tools
