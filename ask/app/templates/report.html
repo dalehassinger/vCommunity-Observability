@@ -10,7 +10,9 @@
 <script>
   (function () {
     var t = null;
-    try { t = localStorage.getItem('vco-theme'); } catch (e) {}
+    var h = /[#&]theme=(dark|light)/.exec(location.hash);   // set by the chat's inline preview
+    if (h) t = h[1];
+    if (!t) try { t = localStorage.getItem('vco-theme'); } catch (e) {}
     if (!t) t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     document.documentElement.setAttribute('data-theme', t);
   })();

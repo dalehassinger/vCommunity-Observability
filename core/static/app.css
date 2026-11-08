@@ -53,6 +53,8 @@ h3 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacin
 .brand .logo { color: var(--header-accent); }
 .brand-name { font-size: 17px; font-weight: 300; letter-spacing: .01em; }
 .brand-name b { font-weight: 600; }
+.brand-by { margin-left: 18px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px;
+  font-weight: 600; color: #f08c00; white-space: nowrap; margin-top: 3px; }
 .header-spacer { flex: 1; }
 .header-chip { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
   padding: 3px 10px; border-radius: 999px; background: rgba(239, 176, 0, .2); color: #ffd36b; }
@@ -174,6 +176,7 @@ a.btn:hover { text-decoration: none; }
   body.nav-open .sidenav { transform: none; }
   .content { padding: 16px; }
   .brand-name { font-size: 15px; }
+  .brand-by { display: none; }
 }
 
 /* Module on/off switch */

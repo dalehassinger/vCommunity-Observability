@@ -32,6 +32,19 @@
 </div>
 
 <div class="perf-grid">
+  <div class="card perf-wide" id="perf-web-card">
+    <div class="card-header">Web search usage and cost this month (searches made by Ask)</div>
+    <div class="card-block">
+      <div class="perf-kpis" id="perf-web-kpis"></div>
+      <div class="perf-chart" data-chart="web"></div>
+      <div id="perf-web-table"></div>
+      <p class="subtle perf-small">Counted from Ask's own calls; ollama.com and Brave have no API for their usage pages, and searches from other apps with the same keys are not included.
+        Cost = successful calls × the price per call on the <a href="/settings#web">Settings</a> page. Brave's remaining quota is what Brave reported on the last search.</p>
+    </div>
+  </div>
+</div>
+
+<div class="perf-grid">
   <div class="card"><div class="card-header">Ollama</div><div class="card-block" id="perf-ollama"></div></div>
   <div class="card"><div class="card-header">Host</div><div class="card-block" id="perf-host"></div></div>
 </div>

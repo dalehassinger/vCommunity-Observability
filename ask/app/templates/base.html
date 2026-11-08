@@ -40,12 +40,17 @@
       <path d="M11 16h.01M16 16h.01M21 16h.01" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
     </svg>
     <span class="brand-name">vCommunity <b>Ask</b></span>
+    <span class="brand-by">&ndash; By: Dale Hassinger</span>
   </a>
   <div class="header-spacer"></div>
-  <span class="header-model" title="Chat model (change it on the Settings page)">
-    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-    {{ settings.chat_model }}
-  </span>
+  <details class="model-menu" id="model-menu" data-current="{{ settings.chat_model }}">
+    <summary class="header-model" title="Chat model: click to change it" aria-haspopup="menu">
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <span class="model-current">{{ settings.chat_model }}</span>
+      <svg class="model-caret" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </summary>
+    <div class="model-list" role="menu" aria-label="Chat model"></div>
+  </details>
   <button class="icon-btn" aria-label="Switch light or dark theme" title="Light / dark" onclick="
       var r=document.documentElement, t=r.getAttribute('data-theme')==='dark'?'light':'dark';
       r.setAttribute('data-theme',t); try{localStorage.setItem('vco-theme',t)}catch(e){}">
@@ -129,6 +134,7 @@
   </main>
 </div>
 <script src="/static/sidenav.js?v={{ asset_v }}"></script>
+<script src="/static/modelmenu.js?v={{ asset_v }}"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

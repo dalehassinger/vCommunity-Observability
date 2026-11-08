@@ -231,8 +231,44 @@
     box.appendChild(t);
   }
 
+  // -- web search usage (app/webusage.py) ---------------------------------------------
+  function money(v) { return v == null ? '–' : '$' + (v < 0.01 && v > 0 ? v.toFixed(3) : v.toFixed(2)); }
+  function renderWeb() {
+    var w = data.web, box = document.getElementById('perf-web-kpis');
+    if (!w || !box) return;
+    box.innerHTML = '';
+    var o = w.providers.ollama, b = w.providers.brave, q = w.brave_quota;
+    box.appendChild(kpi('Ollama · ' + w.month, o.requests + (o.requests === 1 ? ' request' : ' requests'),
+      money(o.cost) + ' estimated' + (o.failed ? ' · ' + o.failed + ' failed' : ''), o.limited ? 'warn' : 'ok'));
+    box.appendChild(kpi('Brave · ' + w.month, b.requests + (b.requests === 1 ? ' request' : ' requests'),
+      money(b.cost) + ' estimated' + (b.failed ? ' · ' + b.failed + ' failed' : ''), b.limited ? 'warn' : 'ok'));
+    box.appendChild(kpi('Web search cost · ' + w.month, money(w.total_cost), 'estimated, both providers', 'ok'));
+    if (q && q.remaining != null) {
+      var used = q.limit ? 100 - q.remaining / q.limit * 100 : null;
+      box.appendChild(kpi('Brave quota left', q.remaining.toLocaleString(), (q.limit ? 'of ' + q.limit.toLocaleString() + ' this month' : '') +
+        (q.reset_at ? ' · resets ' + new Date(q.reset_at * 1000).toLocaleDateString() : ''), level(used, 80, 95) || 'ok'));
+    }
+    var any = w.days.some(function (d) { return w.series.some(function (s) { return d[s]; }) || d.failed; });
+    var c = base();
+    c.tooltip = { trigger: 'axis', confine: true, axisPointer: { type: 'shadow' }, formatter: function (ps) {
+      var d = w.days[ps[0].dataIndex];
+      return d.date + '<br>' + ps.map(function (p) { return p.marker + p.seriesName + ': ' + p.value; }).join('<br>') +
+        '<br>Estimated cost: ' + money(d.cost);
+    } };
+    c.xAxis = { type: 'category', data: w.days.map(function (d) { return d.date.slice(5); }), axisLabel: { color: css('--subtle', '#5d6c74') } };
+    c.yAxis = c._axis('Requests', '{value}', { minInterval: 1, min: 0 });
+    c.series = w.series.map(function (s) { return { type: 'bar', stack: 'web', name: s, data: w.days.map(function (d) { return d[s]; }), barMaxWidth: 22 }; })
+      .concat([{ type: 'bar', stack: 'web', name: 'Failed', data: w.days.map(function (d) { return d.failed; }), barMaxWidth: 22, itemStyle: { color: '#db2100' } }]);
+    draw('web', c, any ? null : 'No web searches yet in ' + w.month + '.');
+    var t = document.getElementById('perf-web-table');
+    t.innerHTML = '';
+    t.appendChild(table(['Tool', 'Requests ' + w.month, 'Failed', 'Price per call', 'Estimated cost'], w.tools.map(function (x) {
+      return [x.label, String(x.ok), String(x.failed) + (x.limited ? ' (' + x.limited + ' limit)' : ''), money(x.price), money(x.cost)];
+    })));
+  }
+
   function render() {
-    renderKpis(); renderAgentNote(); renderCharts(); renderOllama(); renderHost();
+    renderKpis(); renderAgentNote(); renderCharts(); renderOllama(); renderHost(); renderWeb();
     document.getElementById('perf-updated').textContent = 'Updated ' + ago(data.now.ts) + ' · every ' + data.sample_seconds + ' s';
   }
 

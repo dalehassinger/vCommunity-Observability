@@ -11,7 +11,11 @@ Two kinds:
 
 The page is built from the fixed template report.html. The model only wrote the SQL and the
 summary; the summary is markdown, sanitized by DOMPurify when the report is opened, and the
-data goes in as JSON. Files live in <data_dir>/reports/<id>.html with a <id>.json sidecar."""
+data goes in as JSON. Files live in <data_dir>/reports/<id>.html with a <id>.json sidecar.
+
+A third kind, page, is a web page the model wrote itself in its answer (an ```html block,
+for example "return the results as a modern html web page"). It is saved as written and
+served sandboxed (see main.report_file), since its code comes from the model."""
 
 from __future__ import annotations
 
@@ -96,6 +100,19 @@ class Reports:
         p.with_suffix(".json").unlink(missing_ok=True)
         return True
 
+    # -- model-written web pages ------------------------------------------------
+    def save_page(self, html: str, question: str, model: str, chat_id: str = "") -> dict[str, Any]:
+        m = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
+        title = re.sub(r"\s+", " ", m.group(1)).strip()[:120] if m else ""
+        title = title or report_title(question, "Web page")
+        self.folder.mkdir(parents=True, exist_ok=True)
+        rid = secrets.token_hex(6)
+        (self.folder / f"{rid}.html").write_text(html, encoding="utf-8")
+        meta = {"id": rid, "title": title, "kind": "page", "source": "", "question": question, "panels": 0,
+                "created": time.time(), "chat_id": chat_id, "model": model}
+        (self.folder / f"{rid}.json").write_text(json.dumps(meta), encoding="utf-8")
+        return meta
+
     # -- building ---------------------------------------------------------------
     def _asset(self, path: Path) -> str:
         # Inlined into <script>/<style>: a literal "</script" would end the element early.
@@ -158,3 +175,27 @@ class Reports:
                 "panels": len(v["panels"]) + len(v["kpis"]), "created": time.time(), "chat_id": chat_id, "model": model}
         (self.folder / f"{rid}.json").write_text(json.dumps(meta), encoding="utf-8")
         return meta
+
+
+HTML_FENCE = re.compile(r"```[ \t]*html?[^\n]*\n(.*?)(?:\n```|\Z)", re.I | re.S)
+RAW_DOC = re.compile(r"(<!doctype html.*?</html>|<html[\s>].*?</html>)", re.I | re.S)
+
+
+def page_in_answer(content: str) -> tuple[str, str] | None:
+    """A whole web page the model wrote in its answer: (the html, the answer with the page
+    replaced by a short note), or None. Takes the largest ```html block that is a page
+    (<html>, <!doctype> or <body>), or a raw <!doctype html>...</html> in the text."""
+    best = None
+    for m in HTML_FENCE.finditer(content or ""):
+        body = m.group(1).strip()
+        if re.search(r"<!doctype html|<html[\s>]|<body[\s>]", body, re.I) and (best is None or len(body) > len(best[0])):
+            best = (body, m.group(0))
+    if best is None:
+        m = RAW_DOC.search(content or "")
+        if m:
+            best = (m.group(1).strip(), m.group(1))
+    if best is None or len(best[0]) < 80:
+        return None
+    note = "_The web page is shown below: use **Open web page** to view it full size, or **Download .html**._"
+    rest = content.replace(best[1], note, 1).strip()
+    return best[0], rest

@@ -262,6 +262,8 @@ Open http://localhost:8080. A **Sample data** badge shows in the header while mo
 
 The left sidebar has **Home** and **All dashboards**, then every enabled module's dashboards (in the order set on the Modules page), then **Modules & API**, **Settings** and **API docs (Swagger)**. The moon icon in the header switches light and dark theme; the choice is remembered in the browser.
 
+The header of both apps shows the app name and **– By: Dale Hassinger**. To change or remove the byline, edit the `brand-by` line in `core/templates/base.html` and `ask/app/templates/base.html`.
+
 ### Home
 
 **Home** (and the logo) opens the **DBH Insights** dashboard (`/dash/dbh-insights/insights`): opening `/` redirects there. To open another dashboard instead, set `home:` in `config/config.yaml` (or `VCO_HOME` in `.env`) to its path, for example `home: /dash/vcenter-inventory/inventory`, and restart. If that dashboard's module is missing or switched off on the Modules page, `/` opens **All dashboards** instead.
@@ -464,6 +466,7 @@ ASK_OLLAMA_URL=http://127.0.0.1:11434 uvicorn app.main:create_app --factory --po
 
 ### Using the chat UI
 
+- **Switch the chat model from the header.** The model pill at the top right (for example `qwen3.8:27b-mlx`) is a menu: click it to list the chat models installed in Ollama, with their size and a **no tools** tag for models that can't call tools (web search and MCP tools need them). Picking one saves the **Chat model** setting, the same one as on the Settings page, and it is used from the next question. When `ASK_API_TOKEN` is set, enter the token once on the Settings page first; the menu uses it from this browser.
 - **New chat** shows example questions (set per source) and how much is indexed. Type a question; **Enter** sends, **Shift+Enter** adds a line. **Sources** opens a menu of check boxes grouped by type (blogs and web sites, markdown repositories, spreadsheets): tick one or more, or use **only these** on a group (for example only the blog sites). Nothing ticked searches every source except spreadsheets. A chat keeps the sources it started with, and a new chat starts with your last selection (remembered in this browser). **Stop** ends an answer early (what was written so far is kept).
 - Each answer starts with a compact **Sources** strip: one numbered pill per matching section (title · heading), plus a **+N linked** pill for files added by link expansion. It stays small while the answer streams, so the answer is what you read.
 - Numbered **citation chips** `[n]` in the answer, and the pills in the strip, open **Source details** and jump to the matching card. **Source details** (folded by default) holds the full cards: title, section, file id, `draft`/`reviewed` badge, a snippet, linked diagrams, **Open** (the full file in the app, with its images and metadata) and **View on GitHub**, then a **Linked files** group showing what link expansion added and why.
@@ -471,7 +474,7 @@ ASK_OLLAMA_URL=http://127.0.0.1:11434 uvicorn app.main:create_app --factory --po
 - The footer shows the model, the time and tokens per second, and **Copy answer**. With **Show model thinking** on (Settings), thinking models show their reasoning above the answer.
 - Chats are saved: **Recent chats** in the sidebar reopens them, **Delete chat** removes the open one. To remove several, press **Select** next to **Recent chats**: each chat gets a check box (click a chat to tick it, Shift+click ticks a range, **All** ticks every listed chat), then **Delete (n)** removes them after one confirmation. **Cancel** or **Esc** leaves select mode. Follow-up questions see the last turns (Settings → Chat history).
 - **More room:** the menu button at the top left hides the whole sidebar so chats, reports and dashboards use the full width; click it again to bring the sidebar back. Click a sidebar heading (**Recent chats**, **Knowledge**, **Administration**) to fold just that section. Both choices are remembered in the browser.
-- **Web search (Ollama)** in the Sources menu (group **Web**) lets the model search the web when the knowledge sources don't answer. See [Web search (Ollama)](#web-search-ollama).
+- **Web search (Ollama)** and **Web search (Brave)** in the Sources menu (group **Web**) let the model search the web when the knowledge sources don't answer. See [Web search (Ollama)](#web-search-ollama) and [Web search (Brave)](#web-search-brave).
 - **Tools: &lt;server&gt;** in the Sources menu (group **Tools (MCP)**) lets the model call the tools of your MCP servers; tool calls show in a **Tool calls** box, and tools that change things ask **Run** or **Cancel** first. See [MCP tools](#mcp-tools-your-own-mcp-servers).
 - **Reports** in the sidebar lists the HTML reports and dashboards Ask has made (see [HTML reports and dashboards](#html-reports-and-dashboards)).
 - **About** in the sidebar shows Ask's version, chat and embedding models, sources, documents, chunks and chats, then the full project README (the same page as the dashboards' [About](#about)).
@@ -807,6 +810,8 @@ What is in the page:
 **Where to find them.**
 
 - Under the answer: **Open HTML report** (or **Open dashboard**), **Download .html** and **All reports**. A dashboard also shows a small version in the chat (KPI tiles, the charts with **Enlarge**, top 10 rows of each table).
+- **Web pages the model writes.** Any question can ask for its answer "as a modern HTML web page" (for example web search results, race results, a summary of blog posts). When the answer contains a whole web page (an ```` ```html ```` block with `<html>`, `<!doctype html>` or `<body>`), Ask saves it as a report of kind **Page** and shows it under the answer like the reports above (**Open web page**, **Download .html**, preview with **Expand** and **Hide preview**); the code itself is replaced in the answer by a one-line note. While the answer streams you still see the code; it turns into the page when the answer is done. Because the page is written by the model, it is served sandboxed even when opened in its own tab (CSP `sandbox allow-scripts`): it can't read Ask's storage or token or call Ask, can't load scripts, styles or fonts from the internet, and may show pictures from `https` sites. Pages are listed on the **Reports** page too.
+- **The report is also shown inside the answer**, right under those buttons, as a scrollable preview of the full page (520 px high). **Expand** makes it 85% of the window, **Hide preview** folds it away. The preview runs in a sandboxed frame: its charts and tables work, but it cannot reach Ask, your token or the chat page. It follows the chat's light or dark theme.
 - **Reports** in the sidebar: every report with its type, source, age and size, plus **Open**, **Download**, **Chat** (back to the chat that made it) and **Delete** (needs the API token when `ASK_API_TOKEN` is set).
 - On disk: `data/reports/<id>.html` with a `<id>.json` file holding the title, type, source, question and chat (the `./ask-data` volume). Delete files there to clean up; the page lists whatever is in the folder.
 - API: `GET /api/reports` lists them; `GET /reports/<id>.html` opens one and `?download=1` downloads it as `ask-report-<title>.html`.
@@ -829,6 +834,16 @@ Tips: name the sheet ("using the vInfo sheet") and what to group by ("by OS", "p
 | Host power and temperature | Total power (W) and GPU temperature, shown only when available | Host agent with [macmon](https://github.com/vladkens/macmon) installed |
 | Ollama table | Version, each loaded model with size, memory, share on the GPU, context length and when it unloads | Ollama `/api/ps` |
 | Host table | Chip, OS, cores (performance and efficiency), load, memory (app, wired, compressed), pressure, swap, GPU memory, Ollama processes, disk, network | Host agent |
+
+**Web search usage and cost this month.** ollama.com and Brave have no API for the usage and cost numbers on their account pages, so Ask counts its own web calls (`app/webusage.py`, table `web_usage` in `ask.db`, kept 400 days) and the Performance page shows, for the current calendar month (UTC):
+
+| Part | What it shows |
+| --- | --- |
+| KPI cards | Ollama requests and estimated cost, Brave requests and estimated cost, the total estimated cost, and **Brave quota left** (with the monthly limit and reset date, as Brave reported them in the `X-RateLimit-*` headers of the last search) |
+| Chart | One stacked bar per day of the month: Ollama web search, Ollama web fetch, Brave search and failed calls; the tooltip shows the day's estimated cost |
+| Table | Each tool's requests, failures (and how many were rate limits), price per call and estimated cost |
+
+Estimated cost = successful calls × the **Price per web call** on the Settings page (defaults: Ollama search $0.01, Ollama fetch $0.001, Brave search $0.005 = $5 per 1,000; set 0 for calls a free plan covers). Calls that never reached the provider (no key) are not counted; failed calls are counted but not priced. Searches by other apps that use the same keys are not included, so the providers' own pages can show more. `GET /api/perf` returns the same numbers under `web`.
 
 A GPU share under 100% means part of the model runs on the CPU, which is many times slower: pick a smaller model or a smaller **Model context**. A container can't see the Mac's hardware, so everything about the host comes from the agent.
 
@@ -935,7 +950,36 @@ Ask can let the chat model search the web with **Ollama's web search** ([docs](h
 
 So "What did Brock write about vSAN?" is usually answered from the blogs alone, while "What is the latest PowerCLI version?" usually shows a `web_search` card under **Tool calls**. To force a search, say so in the question ("search the web for …"); to keep the answer to your sources, untick **Web search**.
 
-**Notes.** It needs internet access from the container and a chat model with the `tools` capability (`qwen3.8:27b-mlx` has it). The question and the model's search queries are sent to ollama.com, so leave it off for private data and on dark sites (it is off unless `ASK_WEB_SEARCH=1` or the Settings switch is on, and the menu entry only appears when a key is set). **Web results per search** (default 5) and **Web search API URL** (default `https://ollama.com`) are on the Settings page; the result size the model reads is the MCP tools page's **Result size the model reads**. For tests without internet, `ask/scripts/fake_websearch.py` is a stand-in API on port 11556.
+### Web search (Brave)
+
+A second web search provider, **Brave Search** ([API](https://api-dashboard.search.brave.com)), works the same way and can be used instead of Ollama's or together with it. It gives the model one read-only tool:
+
+| Tool | What it does |
+| --- | --- |
+| `brave_search` | `GET https://api.search.brave.com/res/v1/web/search` with a query; returns titles, URLs, the age of the page, Brave's summary and up to 5 extra snippets of each page (5 results by default, up to 10). There is no page fetch: the snippets are what the model reads |
+
+**Set it up** (once): create a key in the Brave Search API dashboard (the free plan works within its monthly limit) and put it in `.env`, then `docker compose up -d vco-ask`:
+
+```
+BRAVE_API_KEY=<your key>
+ASK_BRAVE_SEARCH=1
+```
+
+Settings → **Web search (Brave)** shows whether the key is set and turns it on or off without a restart; **Brave Search API URL** defaults to `https://api.search.brave.com`. **Web results per search** is shared with Ollama.
+
+**In the chat:** the Sources menu's **Web** group lists **Web search (Ollama)** and **Web search (Brave)**; tick either or both. Knowledge sources still come first, exactly as described above.
+
+**Which web search goes first when both are ticked?** Settings → **Web search order** decides:
+
+| Web search order | What happens |
+| --- | --- |
+| **Ollama first, Brave as fallback** (default) | Every answer searches Ollama first. If Ollama fails (bad key, limit reached, no internet) or finds nothing, Brave is searched automatically with the same query, in the same tool card (**web_search → brave_search**, with a note saying why). If Ollama's results don't answer the question, the model may then search Brave itself |
+| **Brave first, Ollama as fallback** | The same, the other way round |
+| **No fixed order (the model picks)** | The model gets all three tools and chooses; it usually tries the first listed (Ollama) |
+
+The order is enforced by Ask, not only asked of the model: if the model tries the second provider before the first one has searched, Ask runs the first one instead (the card notes "Fixed order"). Ollama's `web_fetch` (read one page in full) can be used at any time. Tool cards say **Ollama web search** or **Brave web search**. `ASK_WEB_ORDER` (`ollama_first`, `brave_first` or `model`) sets the default; the Settings page wins. The REST API takes `"sources": ["web:brave"]` (or `["web:brave", "web:ollama", …]`). The question's search queries are sent to Brave, so leave it off for private data and on dark sites. `ask/scripts/fake_websearch.py` also stands in for Brave (`GET /res/v1/web/search`).
+
+**Notes on both.** Web search needs internet access from the container and a chat model with the `tools` capability (`qwen3.8:27b-mlx` has it). The question and the model's search queries are sent to ollama.com, so leave it off for private data and on dark sites (it is off unless `ASK_WEB_SEARCH=1` or the Settings switch is on, and the menu entry only appears when a key is set). **Web results per search** (default 5) and **Web search API URL** (default `https://ollama.com`) are on the Settings page; the result size the model reads is the MCP tools page's **Result size the model reads**. For tests without internet, `ask/scripts/fake_websearch.py` is a stand-in API on port 11556.
 
 ### Ask configuration
 
@@ -960,6 +1004,9 @@ So "What did Brock write about vSAN?" is usually answered from the blogs alone, 
 | `ASK_AGENT_TOKEN` | Token of the Ask host agent (printed by `Install-AskAgent.ps1`), for the Performance page |
 | `ASK_AGENT_URL` | Where Ask reaches the host agent (default `http://host.docker.internal:9101`) |
 | `OLLAMA_API_KEY` | ollama.com API key for [Web search (Ollama)](#web-search-ollama). Secret: keep it in `.env` only |
+| `BRAVE_API_KEY` | Brave Search API key for [Web search (Brave)](#web-search-brave). Secret: keep it in `.env` only |
+| `ASK_WEB_ORDER` | Which web search goes first when both are ticked: `ollama_first` (default), `brave_first` or `model` (the Settings page wins) |
+| `ASK_BRAVE_SEARCH`, `ASK_BRAVE_SEARCH_URL` | `1` turns Brave web search on by default (the Settings switch wins); API URL (default `https://api.search.brave.com`) |
 | `ASK_WEB_SEARCH`, `ASK_WEB_SEARCH_URL` | `1` turns web search on by default (the Settings switch wins); API URL (default `https://ollama.com`) |
 | `VCO_ASK_URL` | First container: sidebar link to Ask |
 | `ASK_VCO_INTERNAL_URL` | Where Ask reads the Observability container's numbers for its Performance page (default `http://vco:8080`) |
@@ -1263,7 +1310,7 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 
 ## Dark sites
 
-- No runtime internet access is needed: the UI has no JavaScript frameworks or CDN links, and Swagger UI, marked and DOMPurify are vendored into the images. (`github-status` is the one module that needs internet, by design; set `enabled: false` for it at a dark site. Ask's [Web search (Ollama)](#web-search-ollama) also needs internet; leave it off there.)
+- No runtime internet access is needed: the UI has no JavaScript frameworks or CDN links, and Swagger UI, marked and DOMPurify are vendored into the images. (`github-status` is the one module that needs internet, by design; set `enabled: false` for it at a dark site. Ask's [Web search (Ollama)](#web-search-ollama) and [Web search (Brave)](#web-search-brave) also need internet; leave them off there.)
 - **On a connected machine**, build both images and save them as gzipped tarballs with `.sha256` files:
   ```powershell
   ./scripts/New-OfflineBundle.ps1 -Version 0.1.0 -Target core-pwsh
@@ -1311,6 +1358,7 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 | Ask: MCP server "not running" with `Operation not permitted` (stderr) | macOS privacy protection: a LaunchAgent may not read `~/Documents` or `~/Desktop`. Give the Python the installer names Full Disk Access (System Settings → Privacy & Security), then `launchctl kickstart -k gui/$(id -u)/com.vcommunity.ask-host-agent`, or keep the MCP folder outside Documents |
 | Ask: MCP server "not running" with `pwsh` not found or a module error | The agent's PATH has `/opt/homebrew/bin`, `/usr/local/bin` and `/usr/local/microsoft/powershell/7`; put the full path of `pwsh` in `command` otherwise. Modules (PowerCLI, ImportExcel, Posh-SSH, powershell-yaml) must be installed for your user; the server's own messages are under **Server messages (stderr)** |
 | Ask: no **Web search (Ollama)** in the Sources menu, or "Web search is not available" | Settings → **Web search (Ollama)** must be on and say the key is **set**: add `OLLAMA_API_KEY=` to `.env` and run `docker compose up -d vco-ask` |
+| Ask: no **Web search (Brave)** in the Sources menu, or "Brave web search is not available" | Settings → **Web search (Brave)** must be on and say the key is **set**: add `BRAVE_API_KEY=` to `.env` and run `docker compose up -d vco-ask`. "Brave refused the API key" means the key is wrong or revoked; a 429 means the plan's rate or monthly limit was reached |
 | Ask: web search card says "refused the API key", "limit was reached" or "Cannot reach Ollama web search" | Check or create the key on ollama.com (Settings → Keys); 429 = Ollama's usage limit, try later; "cannot reach" = the container has no internet (proxy: set `HTTPS_PROXY` for `vco-ask`) |
 | Ask: "The MCP tools are not available" or the model never calls a tool | The chat model needs the `tools` capability (Settings shows the models; `qwen3.8:27b-mlx` has it). Also check the tools aren't all **Off**, and name what you want in the question ("use the RVTools vHost data") |
 | Ask: Performance page says "Host numbers are off" | The agent isn't installed or running (`launchctl print gui/$(id -u)/com.vcommunity.ask-host-agent`, log in `~/Library/Logs/ask-host-agent.log`), `ASK_AGENT_TOKEN` in `.env` doesn't match `~/.config/ask-host-agent/token` (the note says the token was refused), or Ask wasn't restarted after editing `.env` (`docker compose up -d vco-ask`). Check by hand on the Mac: `curl -H "Authorization: Bearer $(cat ~/.config/ask-host-agent/token)" localhost:9101/metrics` |
@@ -1390,12 +1438,13 @@ ask/                    vCommunity Ask (second container)
   sources/pdf/          built-in source plug-in (PDFs from uploads or a folder; pypdf text, Tesseract OCR for scanned pages)
   app/perf.py           Performance page: container, Ollama and host-agent samples (24 h in ask.db)
   app/mcp.py            MCP tools: client of the host agent's MCP bridge, tool policy, Run / Cancel approvals
-  app/websearch.py      Web search: Ollama's web_search / web_fetch API as two model tools
+  app/websearch.py      Web search: Ollama's web_search / web_fetch and Brave's brave_search as model tools
+  app/webusage.py       counts web calls for the Performance page's usage and cost panel
   agent/ask-host-agent.py  Ask host agent for the Mac (standard library only; performance numbers and the MCP bridge), plus Install-AskAgent.ps1 and install.sh
   config/               ask.example.yaml
   scripts/fake_ollama.py  stand-in for Ollama, for tests (also answers with tool calls)
   scripts/fake_mcp.py   stand-in stdio MCP server (three tools), for tests
-  scripts/fake_websearch.py  stand-in for Ollama's web search API (port 11556), for tests
+  scripts/fake_websearch.py  stand-in for Ollama's and Brave's web search APIs (port 11556), for tests
   scripts/make_sample_rvtools.py  made-up RVTools-style workbook, for tests
   Dockerfile            vcommunity-ask image (build from the repo root)
   requirements.in/.txt  direct dependencies / hashed lock file
@@ -1420,6 +1469,14 @@ requirements.in/.txt    direct dependencies / hashed lock file
 
 | Date | Change |
 | --- | --- |
+| 2026-11-08 | Ask Performance page: **Web search usage and cost this month**, counted from Ask's own calls (`app/webusage.py`, table `web_usage`): requests per provider and tool, failures, estimated cost from the new **Price per web call** settings, a per-day chart, and Brave's remaining monthly quota from its `X-RateLimit-*` headers. `/api/perf` adds `web` |
+| 2026-11-08 | Ask: the **Delete chat** button keeps its size next to a long chat title (text no longer wraps out of the button) |
+| 2026-11-08 | Ask: a whole web page the model writes in its answer (```` ```html ```` block) is saved as a report of kind **Page** (`reports.page_in_answer`, `Reports.save_page`) and shown under the answer with Open / Download and the inline preview instead of raw code; served with a CSP sandbox |
+| 2026-11-08 | Ask: HTML reports and dashboards are shown **inside the chat answer** as a sandboxed preview (`iframe sandbox="allow-scripts"`) under the Open / Download buttons, with **Expand** and **Hide preview**; the report page takes the theme from `#theme=` |
+| 2026-11-08 | Ask: the chat model pill in the header is now a menu (`static/modelmenu.js`) listing Ollama's chat models (size, **no tools**, **thinking** tags); picking one saves the Chat model setting and applies from the next question |
+| 2026-11-08 | Ask: **Web search order** setting for when Ollama and Brave are both ticked: Ollama first (default), Brave first, or the model picks. The first provider always searches first (enforced in `rag.run_web_tool`); the second is searched automatically when the first fails or finds nothing, and the model may search it when the first one's results don't answer; tool cards show a note. `ASK_WEB_ORDER` env default |
+| 2026-11-08 | Ask: **Web search (Brave)**, a second web search provider. New Sources menu entry in the **Web** group (scope `web:brave`) gives the model the read-only `brave_search` tool (Brave Search API, summary + extra snippets per result); usable alone or together with Ollama web search. Key from `BRAVE_API_KEY` in `.env` only; off unless `ASK_BRAVE_SEARCH=1` or the new Settings switch; **Brave Search API URL** setting; `fake_websearch.py` stands in for Brave too |
+| 2026-11-08 | Header of both apps shows **– By: Dale Hassinger** (orange, small monospace) next to the app name (`.brand-by` in the shared `core/static/app.css`; hidden on narrow screens) |
 | 2026-11-08 | **One Performance dashboard for both containers**: Ask's Performance page now also shows vCommunity Observability (KPI card plus CPU and memory, network and disk charts; **Not running** in red when it doesn't answer). The Observability sidebar gets a **Performance** link (first under Administration) to that same page, and `/performance` redirects there. The Observability container serves its raw cgroup counters at open `GET /perf/container` (`core/perfstat.py`), read by Ask at `ASK_VCO_INTERNAL_URL`; smoke test covers it |
 | 2026-11-08 | **Apps on / off**: two sliders (vCommunity Observability, vCommunity Ask) on both Settings pages, saved in the shared `./control/apps.json` (new `./control:/app/control` volume on both services; `core/control.py` = `ask/app/control.py`). Off pauses a part and keeps its container running: Observability stops collection and scheduled exports (banner, last data still shown), Ask stops questions (503) and source syncs; the other side's sidebar link hides. APIs `GET/PUT /api/core/apps` and `/api/apps`; smoke test covers it |
 | 2026-11-08 | README and About page: how Ask orders knowledge sources and web search when both are ticked (sources first, web search only when they don't answer) |

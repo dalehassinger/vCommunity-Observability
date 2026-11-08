@@ -60,6 +60,16 @@ SETTINGS: dict[str, dict[str, Any]] = {
     "web_search":       {"default": False, "env": "ASK_WEB_SEARCH", "type": "bool"},
     "web_search_url":   {"default": "https://ollama.com", "env": "ASK_WEB_SEARCH_URL", "type": "str"},
     "web_search_results": {"default": 5, "type": "int"},
+    # Brave web search (cloud): off by default. The API key is BRAVE_API_KEY in .env.
+    "brave_search":     {"default": False, "env": "ASK_BRAVE_SEARCH", "type": "bool"},
+    "brave_search_url": {"default": "https://api.search.brave.com", "env": "ASK_BRAVE_SEARCH_URL", "type": "str"},
+    # Both web searches ticked: which searches first (ollama_first | brave_first), the other one
+    # only when the first fails, finds nothing or isn't good enough; "model" lets the model pick.
+    "web_order":        {"default": "ollama_first", "env": "ASK_WEB_ORDER", "type": "str"},
+    # Estimated cost per successful web call (US$), for the Performance page's usage panel.
+    "web_price_ollama_search": {"default": 0.01, "type": "float"},
+    "web_price_ollama_fetch":  {"default": 0.001, "type": "float"},
+    "web_price_brave_search":  {"default": 0.005, "type": "float"},
 }
 
 

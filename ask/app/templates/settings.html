@@ -45,7 +45,7 @@
       <div class="field"><label></label><div><button class="btn btn-outline" type="button" id="test-ollama">Test connection</button></div></div>
       <div class="field"><label for="s-chat_model">Chat model{% if 'chat_model' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><select id="s-chat_model" data-key="chat_model" data-current="{{ settings.chat_model }}"><option>{{ settings.chat_model }}</option></select>
-          <div class="hint">Answers the questions. 27-32B models follow "answer only from the sources" best.</div></div></div>
+          <div class="hint">Answers the questions. 27-32B models follow "answer only from the sources" best. You can also switch it from the model menu in the header.</div></div></div>
       <div class="field"><label for="s-embed_model">Embedding model{% if 'embed_model' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><select id="s-embed_model" data-key="embed_model" data-current="{{ settings.embed_model }}"><option>{{ settings.embed_model }}</option></select>
           <div class="hint">Turns text into vectors for search. <b>Changing it clears the index and re-embeds every source.</b></div></div></div>
@@ -91,10 +91,31 @@
             {% if web_key_set %}<b>set</b>{% else %}<b>not set</b>{% endif %}. The chat model must support tools. Leave off on dark sites.</div></div></div>
       <div class="field"><label for="s-web_search_results">Web results per search{% if 'web_search_results' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><input type="number" id="s-web_search_results" data-key="web_search_results" value="{{ settings.web_search_results }}" min="1" max="10" step="1">
-          <div class="hint">Default for web_search (1 to 10, default 5). The model can ask for a different number.</div></div></div>
+          <div class="hint">Default for web_search and brave_search (1 to 10, default 5). The model can ask for a different number.</div></div></div>
       <div class="field"><label for="s-web_search_url">Web search API URL{% if 'web_search_url' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><input type="text" id="s-web_search_url" data-key="web_search_url" value="{{ settings.web_search_url }}" placeholder="https://ollama.com">
           <div class="hint">Where <code>/api/web_search</code> and <code>/api/web_fetch</code> are called. Keep <code>https://ollama.com</code>.</div></div></div>
+      <div class="field"><label for="s-brave_search">Web search (Brave){% if 'brave_search' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><label class="switch"><input type="checkbox" id="s-brave_search" data-key="brave_search" {{ 'checked' if settings.brave_search else '' }}><span></span>On</label>
+          <div class="hint">Adds <b>Web search (Brave)</b> to the chat's Sources menu: the model may call <code>brave_search</code>
+            (Brave Search API, needs internet). Needs a Brave Search API key as <code>BRAVE_API_KEY</code> in <code>.env</code>:
+            {% if brave_key_set %}<b>set</b>{% else %}<b>not set</b>{% endif %}. Can be used together with Ollama web search or on its own. Leave off on dark sites.</div></div></div>
+      <div class="field"><label for="s-web_order">Web search order{% if 'web_order' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><select id="s-web_order" data-key="web_order">
+            {% for v, t in [('ollama_first', 'Ollama first, Brave as fallback'), ('brave_first', 'Brave first, Ollama as fallback'), ('model', 'No fixed order (the model picks)')] %}
+            <option value="{{ v }}" {{ 'selected' if settings.web_order == v else '' }}>{{ t }}</option>
+            {% endfor %}</select>
+          <div class="hint">Used when both web searches are ticked in the chat. The first one always searches first; the other is searched automatically when the first fails or finds nothing, and the model may search it when the first one's results don't answer the question. Ollama's <code>web_fetch</code> (read one page) can be used either way.</div></div></div>
+      <div class="field" id="web"><label for="s-web_price_ollama_search">Price per web call (US$){% if 'web_price_ollama_search' in overridden or 'web_price_brave_search' in overridden or 'web_price_ollama_fetch' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><div class="price-row">
+            <label>Ollama search <input type="number" id="s-web_price_ollama_search" data-key="web_price_ollama_search" value="{{ settings.web_price_ollama_search }}" min="0" step="0.0001"></label>
+            <label>Ollama fetch <input type="number" id="s-web_price_ollama_fetch" data-key="web_price_ollama_fetch" value="{{ settings.web_price_ollama_fetch }}" min="0" step="0.0001"></label>
+            <label>Brave search <input type="number" id="s-web_price_brave_search" data-key="web_price_brave_search" value="{{ settings.web_price_brave_search }}" min="0" step="0.0001"></label>
+          </div>
+          <div class="hint">For the estimated cost on the Performance page (successful calls × price). Defaults: Ollama search $0.01, Ollama fetch $0.001, Brave $0.005 ($5 per 1,000). Set 0 for calls covered by a free plan.</div></div></div>
+      <div class="field"><label for="s-brave_search_url">Brave Search API URL{% if 'brave_search_url' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><input type="text" id="s-brave_search_url" data-key="brave_search_url" value="{{ settings.brave_search_url }}" placeholder="https://api.search.brave.com">
+          <div class="hint">Where <code>/res/v1/web/search</code> is called. Keep <code>https://api.search.brave.com</code>.</div></div></div>
     </div>
   </div>
 

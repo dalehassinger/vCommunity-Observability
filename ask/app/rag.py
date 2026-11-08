@@ -23,6 +23,7 @@ from typing import Any, Iterator
 from urllib.parse import quote
 
 from . import data, mcp, overview, websearch
+from . import reports as reports_mod
 from .db import DB
 from .indexer import embed_prefixes
 
@@ -240,10 +241,40 @@ knowledge sources when they answer it. Search with short, specific queries; fetc
 is not enough. Each result starts with its source number, for example [5]: cite it, and name the web site."""
 
 
+ORDER_NOTE = """Web search has a fixed order. Always search with {first} ({first_name}) first. Read its results: if they
+answer the question, use them (web_fetch reads one page in full when needed). Only if they do not answer the question or
+are not good enough, call {second} ({second_name}) with a short, specific query. If {first} fails or finds nothing,
+{second_name} is searched for you automatically. Each result starts with its source number, for example [5]: cite it,
+and name the web site."""
+
+WEB_ORDERS = {"ollama_first": ("web_search", "brave_search"), "brave_first": ("brave_search", "web_search")}
+
+
+def web_order(cfg: dict[str, Any], servers: list[str]) -> tuple[str, str] | None:
+    """(first, second) search tool when both providers are ticked and a fixed order is set
+    (Settings "Web search order"); None lets the model pick. Unknown values mean Ollama first."""
+    if not all(s in (servers or []) for s in websearch.SCOPES):
+        return None
+    value = str(cfg.get("web_order") or "ollama_first").strip().lower()
+    return None if value == "model" else WEB_ORDERS.get(value, WEB_ORDERS["ollama_first"])
+
+
+BRAVE_NOTE = """You can search the web with the brave_search tool (Brave Search). Use it when the sources above do not
+answer the question, or when it needs current information (versions, releases, news). Prefer the knowledge sources when
+they answer it. Search with short, specific queries. Each result starts with its source number, for example [5]: cite it,
+and name the web site."""
+
+
 def tool_messages(cfg: dict[str, Any], items: list[dict[str, Any]], question: str, history: list[dict[str, Any]],
                   servers: list[str]) -> list[dict[str, Any]]:
-    names = [s for s in servers if s != websearch.SCOPE]
-    notes = ([TOOL_NOTE.format(servers=", ".join(names))] if names else []) + ([WEB_NOTE] if websearch.SCOPE in servers else [])
+    names = [s for s in servers if s not in websearch.SCOPES]
+    notes = [TOOL_NOTE.format(servers=", ".join(names))] if names else []
+    order = web_order(cfg, servers)
+    if order:
+        notes.append(ORDER_NOTE.format(first=order[0], second=order[1], first_name=websearch.label(order[0]),
+                                       second_name=websearch.label(order[1])))
+    else:
+        notes += ([WEB_NOTE] if websearch.SCOPE in servers else []) + ([BRAVE_NOTE] if websearch.BRAVE_SCOPE in servers else [])
     note = "\n\n".join(notes)
     if items:
         msgs = build_messages(cfg, items, question, history)
@@ -277,7 +308,7 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
     try:
         mcp_tools: list[dict[str, Any]] = []
         mcp_index: dict[str, Any] = {}
-        servers = [t for t in (tools or []) if t != websearch.SCOPE]
+        servers = [t for t in (tools or []) if t not in websearch.SCOPES]
         if servers:
             info = mcp.servers(cfg.get("agent_url") or "", fresh=True)
             policy = mcp.load_policy(cfg.get("mcp_tools"))
@@ -286,13 +317,16 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
                 why = info["error"] or next((s["error"] for s in info["servers"] if s["name"] in servers and s.get("error")), "")
                 raise OllamaError("The MCP tools are not available" + (f": {why}" if why else
                                   " (no tools, or every tool is turned off on the MCP tools page)."))
-        if tools and websearch.SCOPE in tools:
-            ws = websearch.status(cfg)
+        for scope in [s for s in websearch.SCOPES if s in (tools or [])]:
+            ws = websearch.status_of(cfg, scope)
             if not ws["available"]:
-                raise OllamaError("Web search is not available: " + ws["why"])
-            web_tools, web_index = websearch.ollama_tools()
+                raise OllamaError(f"{websearch.label(scope)} is not available: " + ws["why"])
+            web_tools, web_index = websearch.ollama_tools(scope)
             mcp_tools = mcp_tools + web_tools
             mcp_index = {**mcp_index, **web_index}
+        order = web_order(cfg, tools or [])
+        if order:   # state of this answer, not a tool (names starting with _ are never tools)
+            mcp_index["_web_order"] = {"first": order[0], "second": order[1], "searched": False}
         if db.stats()["chunks"] == 0 and not (tools and not sources):
             raise OllamaError("Nothing is indexed yet. Open Knowledge sources and press Sync now.")
         res = None
@@ -379,6 +413,21 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
                 yield from run_tool(cfg, chat_id, c, card, mcp_index, interactive)
                 msgs.append({"role": "tool", "tool_name": card["tool"], "content": card.pop("_for_model")})
             stats["tool_calls"] = sum(1 for k in cards if k.get("kind") == "tool")
+        page = reports_mod.page_in_answer(content) if REPORTS is not None and not (res and res.get("report")) else None
+        if page:
+            # The model wrote a whole web page ("return it as an html page"): save it as a report
+            # of kind "page", show it under the answer, and keep the code out of the answer text.
+            try:
+                meta = REPORTS.save_page(page[0], question, model, chat_id)
+                content = page[1]
+                card = {"kind": "page", "n": len(cards) + 1, "title": meta["title"],
+                        "report": {"id": meta["id"], "title": meta["title"], "kind": "page",
+                                   "url": f"/reports/{meta['id']}.html"}}
+                cards.append(card)
+                yield sse("page", {"card": card, "content": content})
+            except Exception as e:  # a failed save must not lose the answer
+                log.exception("page save failed")
+                stats["report_error"] = str(e)
         if res and res.get("report") and REPORTS is not None:
             # The HTML report: built from the results (and the summary just written), saved,
             # and linked from the card.
@@ -418,14 +467,14 @@ def run_tool(cfg: dict[str, Any], chat_id: str, call: dict[str, Any], card: dict
         args = {}
     card.update(tool=name, arguments=args)
     n = card["n"]
-    if name not in index:
+    if name not in index or name.startswith("_"):
         card.update(status="error", error=f"There is no tool named {name}.")
         card["_for_model"] = f"[{n}] Error: there is no tool named {name}. Use only the tools you were given."
         yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
         return
     server, tool = index[name]
     if server == websearch.SERVER:
-        yield from run_web_tool(cfg, card, tool["name"], args)
+        yield from run_web_tool(cfg, card, tool["name"], args, index.get("_web_order"))
         return
     card.update(tool=tool["name"], server=server, read_only=mcp.read_only(tool))
     pol = mcp.policy_of(mcp.load_policy(cfg.get("mcp_tools")), server, tool)
@@ -469,13 +518,39 @@ def run_tool(cfg: dict[str, Any], chat_id: str, call: dict[str, Any], card: dict
     yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
 
 
-def run_web_tool(cfg: dict[str, Any], card: dict[str, Any], tool: str, args: dict[str, Any]) -> Iterator[str]:
-    """web_search / web_fetch: read-only, so they run without a Run / Cancel question."""
+def run_web_tool(cfg: dict[str, Any], card: dict[str, Any], tool: str, args: dict[str, Any],
+                 order: dict[str, Any] | None = None) -> Iterator[str]:
+    """web_search / web_fetch / brave_search: read-only, so they run without a Run / Cancel question.
+
+    `order` is set when both providers are ticked with a fixed order ({"first", "second",
+    "searched"}): a search with the second provider before the first one ran runs the first
+    instead, and a first search that fails or finds nothing is followed by the second
+    provider automatically, in the same card. After that the model may search the second."""
     n = card["n"]
-    card.update(tool=tool, server="Ollama web search", read_only=True, status="running")
+    searches = ("web_search", websearch.BRAVE_TOOL)
+    if order is not None and tool in searches and tool != order["first"] and not order["searched"]:
+        card["note"] = f"Fixed order: {websearch.label(order['first'])} searches first."
+        tool = order["first"]
+    card.update(tool=tool, server=websearch.label(tool), read_only=True, status="running")
     yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
     res = websearch.call(cfg, tool, args)
-    card["ms"] = res["ms"]
+    ms = res["ms"]
+    if order is not None and tool == order["first"]:
+        order["searched"] = True
+        if not res["ok"] or not res["links"]:
+            why = res["error"] if not res["ok"] else "no results"
+            first, second = websearch.label(tool), websearch.label(order["second"])
+            tool = f"{order['first']} → {order['second']}"
+            card.update(tool=tool, server=f"{first}, then {second}", note=f"{first}: {why}. Searched {second} instead.")
+            yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
+            nxt = websearch.call(cfg, order["second"], args)
+            ms += nxt["ms"]
+            if nxt["ok"]:
+                nxt = {**nxt, "text": f"{first}: {why}. {second} results instead:\n\n{nxt['text']}"}
+            else:
+                nxt = {**nxt, "error": f"{first}: {why}; {second}: {nxt['error']}"}
+            res = nxt
+    card["ms"] = ms
     if res["ok"]:
         limit = max(1000, int(cfg.get("mcp_result_chars") or 16000))
         text = res["text"]
@@ -504,6 +579,9 @@ def answer(db: DB, cfg: dict[str, Any], chat_id: str, question: str, sources: li
             cards = payload["sources"]
         elif event.endswith("report") and cards:
             cards[0]["report"] = payload
+        elif event.endswith("page"):
+            text = payload["content"]
+            cards = cards + [payload["card"]]
         elif event.endswith("tool"):
             cards = [c for c in cards if c.get("n") != payload.get("n")] + [payload]
         elif event.endswith("done"):

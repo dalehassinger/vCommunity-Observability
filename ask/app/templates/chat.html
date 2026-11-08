@@ -63,9 +63,15 @@
               <label class="scope-item"><input type="checkbox" value="{{ s.name }}" data-plugin="{{ s.plugin }}" {{ 'checked' if s.name in sel else '' }}><span>{{ s.title }}</span></label>
               {% endfor %}
               {% endif %}
-              {% if web_search and web_search.available %}
+              {% set web_on = (web_search and web_search.available) or (brave_search and brave_search.available) %}
+              {% if web_on %}
               <div class="scope-group"><span>Web</span></div>
+              {% if web_search and web_search.available %}
               <label class="scope-item" title="The model may search the web (Ollama web search) when the sources don't answer"><input type="checkbox" value="web:ollama" data-plugin="web" {{ 'checked' if 'web:ollama' in sel else '' }}><span>Web search (Ollama)</span></label>
+              {% endif %}
+              {% if brave_search and brave_search.available %}
+              <label class="scope-item" title="The model may search the web (Brave Search) when the sources don't answer"><input type="checkbox" value="web:brave" data-plugin="web" {{ 'checked' if 'web:brave' in sel else '' }}><span>Web search (Brave)</span></label>
+              {% endif %}
               {% endif %}
               {% if mcp_servers %}
               <div class="scope-group"><span>Tools (MCP)</span><a class="link-btn" href="/tools">manage</a></div>
@@ -73,7 +79,7 @@
               <label class="scope-item" title="{{ m.tools | length }} tools{{ ' (starting)' if m.starting else '' }}{{ ': ' ~ m.error if m.error else '' }}"><input type="checkbox" value="mcp:{{ m.name }}" data-plugin="mcp" {{ 'checked' if ('mcp:' ~ m.name) in sel else '' }}><span>Tools: {{ m.name }}</span></label>
               {% endfor %}
               {% endif %}
-              <p class="scope-foot">Tick one or more. Nothing ticked searches every source except spreadsheets{{ ' and tools' if mcp_servers or (web_search and web_search.available) else '' }}.</p>
+              <p class="scope-foot">Tick one or more. Nothing ticked searches every source except spreadsheets{{ ' and tools' if mcp_servers or web_on else '' }}.</p>
             </div>
           </details>
         </div>

@@ -166,12 +166,39 @@
   function reportLinks(s) {
     var box = el('div', 'report-links');
     box.appendChild(el('span', 'report-ico', ''));
-    var open = el('a', 'btn btn-primary', s.report.kind === 'dashboard' ? 'Open dashboard report' : 'Open HTML report');
+    var open = el('a', 'btn btn-primary', s.report.kind === 'dashboard' ? 'Open dashboard report' : s.report.kind === 'page' ? 'Open web page' : 'Open HTML report');
     open.href = s.report.url; open.target = '_blank'; open.rel = 'noopener';
     var dl = el('a', 'btn btn-outline', 'Download .html'); dl.href = s.report.url + '?download=1';
     var all = el('a', 'link-btn', 'All reports'); all.href = '/reports';
     box.appendChild(open); box.appendChild(dl); box.appendChild(all);
-    return box;
+    // The report itself, inside the answer. Sandboxed without same-origin: its scripts
+    // (charts, tables) run but cannot reach Ask, its cookies or the chat page.
+    var wrap = el('div', 'report-preview');
+    var frame = document.createElement('iframe');
+    frame.setAttribute('sandbox', 'allow-scripts');
+    frame.setAttribute('loading', 'lazy');
+    frame.title = s.report.title || 'HTML report';
+    frame.src = s.report.url + '#theme=' + (document.documentElement.getAttribute('data-theme') || 'light');
+    wrap.appendChild(frame);
+    var bar = el('div', 'report-preview-bar');
+    var big = el('button', 'link-btn', 'Expand');
+    big.type = 'button';
+    big.addEventListener('click', function () {
+      var on = wrap.classList.toggle('big');
+      big.textContent = on ? 'Shrink' : 'Expand';
+      if (on) wrap.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
+    var hide = el('button', 'link-btn', 'Hide preview');
+    hide.type = 'button';
+    hide.addEventListener('click', function () {
+      var off = wrap.classList.toggle('off');
+      hide.textContent = off ? 'Show preview' : 'Hide preview';
+      big.hidden = off;
+    });
+    bar.appendChild(big); bar.appendChild(hide);
+    var outer = el('div', 'report-block');
+    outer.appendChild(box); outer.appendChild(bar); outer.appendChild(wrap);
+    return outer;
   }
 
   // A dashboard question's card: KPI tiles and small versions of the panels.
@@ -415,6 +442,7 @@
       box.appendChild(run); box.appendChild(no);
       card.appendChild(box);
     }
+    if (s.note) card.appendChild(el('div', 'subtle chart-note', s.note));
     if (s.error) card.appendChild(el('div', 'tool-err', s.error));
     if (s.links && s.links.length) {
       // Web search / fetch: the pages found, as links.
@@ -491,10 +519,14 @@
     container.innerHTML = '';
     if (strip) strip.innerHTML = '';
     if (!sources || !sources.length) return;
+    // A web page the model wrote: shown first, right under the answer text.
+    sources.filter(function (s) { return s.kind === 'page' && s.report; }).forEach(function (s) {
+      container.appendChild(reportLinks(s));
+    });
     var tools = sources.filter(function (s) { return s.kind === 'tool'; });
-    var hits = sources.filter(function (s) { return s.kind !== 'linked' && s.kind !== 'tool'; });
+    var hits = sources.filter(function (s) { return s.kind !== 'linked' && s.kind !== 'tool' && s.kind !== 'page'; });
     var linked = sources.filter(function (s) { return s.kind === 'linked'; });
-    if (strip) {
+    if (strip && (hits.length || tools.length || linked.length)) {
       strip.appendChild(el('span', 'strip-label', 'Sources'));
       hits.forEach(function (s) {
         var c = el('a', 'src-chip');
@@ -709,6 +741,11 @@
               }
               a.text.appendChild(tl);
             }
+          } else if (ev === 'page') {
+            content = payload.content || content;
+            paint();
+            meta.sources = (meta.sources || []).concat([payload.card]);
+            sourceCards(a.sources, meta.sources, a.prefix, a.strip);
           } else if (ev === 'report') {
             if (meta && meta.sources && meta.sources[0]) {
               meta.sources[0].report = payload;

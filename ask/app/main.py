@@ -30,7 +30,7 @@ from .config import SETTINGS, coerce, load_config
 from .db import DB
 from .indexer import NAME_RE, Indexer, discover_plugins
 from .ollama import Ollama, OllamaError
-from . import control, mcp, rag, websearch
+from . import control, mcp, rag, websearch, webusage
 from .reports import Reports
 from .perf import SAMPLE_SECONDS, Sampler
 
@@ -172,6 +172,8 @@ def create_app() -> FastAPI:
     templates.env.globals["asset_v"] = asset_version(HERE / "static", shared_dir())
     reports = Reports(cfg.data_dir / "reports", templates.env, shared_dir(), HERE / "static")
     rag.REPORTS = reports
+    usage = webusage.Usage(db)
+    webusage.RECORDER = usage.record
     templates.env.filters["ago"] = ago
 
     # -- auth -----------------------------------------------------------------
@@ -227,9 +229,8 @@ def create_app() -> FastAPI:
         are MCP tools; with only those picked, no knowledge source is searched (an empty list)."""
         items = [n.strip() for n in scope.split(",")] if isinstance(scope, str) else [str(n) for n in (scope or [])]
         tools = [n[4:] for n in items if n.startswith("mcp:") and n[4:]]
-        # "web:ollama" = Ollama web search (web_search / web_fetch tools), passed on with the MCP servers.
-        if websearch.SCOPE in items:
-            tools.append(websearch.SCOPE)
+        # "web:ollama" / "web:brave" = web search tools, passed on with the MCP servers.
+        tools += [s for s in websearch.SCOPES if s in items]
         rest = [n for n in items if n and not n.startswith(("mcp:", "web:"))]
         if tools and not rest:
             return [], tools
@@ -244,7 +245,8 @@ def create_app() -> FastAPI:
     def chat_new(request: Request):
         examples = [e for s in db.list_sources() if s["enabled"] for e in s["examples"]][:6]
         return page(request, "chat.html", "/chat", chat=None, messages=[], examples=examples, stats=db.stats(),
-                    mcp_servers=mcp.quick_servers(settings()["agent_url"]), web_search=websearch.status(settings()))
+                    mcp_servers=mcp.quick_servers(settings()["agent_url"]), web_search=websearch.status(settings()),
+                    brave_search=websearch.brave_status(settings()))
 
     @app.get("/chat/{chat_id}", response_class=HTMLResponse, include_in_schema=False)
     def chat_page(request: Request, chat_id: str):
@@ -253,7 +255,7 @@ def create_app() -> FastAPI:
             return RedirectResponse("/chat")
         return page(request, "chat.html", f"/chat/{chat_id}", chat=chat, messages=db.messages(chat_id),
                     examples=[], stats=db.stats(), mcp_servers=mcp.quick_servers(settings()["agent_url"]),
-                    web_search=websearch.status(settings()))
+                    web_search=websearch.status(settings()), brave_search=websearch.brave_status(settings()))
 
     @app.get("/sources", response_class=HTMLResponse, include_in_schema=False)
     def sources_page(request: Request):
@@ -319,6 +321,13 @@ def create_app() -> FastAPI:
                                        "img-src data: blob:; font-src data:; base-uri 'none'; form-action 'none'",
             "X-Content-Type-Options": "nosniff",
         }
+        if meta.get("kind") == "page":
+            # Written by the model: run it in a sandbox (its own opaque origin, even when opened
+            # in a tab), so its scripts can't read Ask's storage or call Ask. Pictures from https
+            # are allowed; everything else stays blocked.
+            headers["Content-Security-Policy"] = (
+                "sandbox allow-scripts allow-popups allow-modals; default-src 'none'; script-src 'unsafe-inline'; "
+                "style-src 'unsafe-inline'; img-src data: blob: https:; font-src data:; base-uri 'none'; form-action 'none'")
         if download:
             headers["Content-Disposition"] = f'attachment; filename="ask-report-{slug}.html"'
         return FileResponse(p, media_type="text/html; charset=utf-8", headers=headers)
@@ -403,7 +412,7 @@ def create_app() -> FastAPI:
         return {"now": sampler.last or sampler.sample(), "history": sampler.history(hours),
                 "answers": sampler.answers(max(hours, 24.0)), "num_ctx": s["num_ctx"], "chat_model": s["chat_model"],
                 "agent_url": s.get("agent_url") or "", "agent_token_set": bool(os.environ.get("ASK_AGENT_TOKEN")),
-                "sample_seconds": SAMPLE_SECONDS}
+                "sample_seconds": SAMPLE_SECONDS, "web": usage.summary(s)}
 
     @app.get("/performance", response_class=HTMLResponse, include_in_schema=False)
     def performance_page(request: Request):
@@ -428,7 +437,8 @@ def create_app() -> FastAPI:
 
     @app.get("/api/perf", tags=["performance"], dependencies=[Depends(require_token)])
     def api_perf(hours: float = 1.0):
-        """Latest sample (container, Ollama, host agent), history (up to 24 h) and recent answer speeds."""
+        """Latest sample (container, Ollama, host agent), history (up to 24 h), recent answer speeds and
+        `web`: web search usage made by Ask (this month and the last 30 days, estimated cost, Brave quota)."""
         return perf_payload(hours)
 
     @app.get("/about", response_class=HTMLResponse, include_in_schema=False)
@@ -451,7 +461,7 @@ def create_app() -> FastAPI:
     def settings_page(request: Request):
         overridden = set(db.get_settings())
         return page(request, "settings.html", "/settings", spec=SETTINGS, overridden=overridden,
-                    defaults=cfg.defaults, config_path=str(cfg.path), web_key_set=bool(websearch.api_key()),
+                    defaults=cfg.defaults, config_path=str(cfg.path), web_key_set=bool(websearch.api_key()), brave_key_set=bool(websearch.brave_key()),
                     apps=control.status())
 
     @app.get("/docs", include_in_schema=False)
