@@ -30,7 +30,7 @@ from .config import SETTINGS, coerce, load_config
 from .db import DB
 from .indexer import NAME_RE, Indexer, discover_plugins
 from .ollama import Ollama, OllamaError
-from . import mcp, rag, websearch
+from . import control, mcp, rag, websearch
 from .reports import Reports
 from .perf import SAMPLE_SECONDS, Sampler
 
@@ -140,6 +140,8 @@ def create_app() -> FastAPI:
     logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING)
 
     def due_syncs() -> None:
+        if not control.is_on("ask"):
+            return          # Settings → Apps on / off: Ask is paused
         now = time.time()
         for s in db.list_sources():
             if not s["enabled"] or indexer.is_running(s["name"]):
@@ -203,7 +205,8 @@ def create_app() -> FastAPI:
         s = settings()
         return templates.TemplateResponse(request, name, {
             "active": active, "chats": db.list_chats(20), "sources": db.list_sources(),
-            "observability_url": s["observability_url"], "version": __version__,
+            "observability_url": s["observability_url"] if control.is_on("observability") else "",
+            "ask_paused": not control.is_on("ask"), "version": __version__,
             "auth": bool(cfg.api_tokens), "settings": s, **ctx})
 
     def scope_list(scope: Any) -> list[str] | None:
@@ -411,6 +414,18 @@ def create_app() -> FastAPI:
         same_origin(request)
         return perf_payload(hours)
 
+    @app.get("/perf/container", include_in_schema=False)
+    def perf_container():
+        # Raw cgroup counters of this container for the dashboards' Performance page.
+        # Numbers only (CPU time, memory, byte counts), so no token is needed.
+        from .perf import container_raw
+        raw = container_raw()
+        try:
+            raw["uptime"] = round(time.time() - Path("/proc/1").stat().st_mtime)
+        except OSError:
+            raw["uptime"] = None
+        return {**raw, "app": "ask", "version": __version__}
+
     @app.get("/api/perf", tags=["performance"], dependencies=[Depends(require_token)])
     def api_perf(hours: float = 1.0):
         """Latest sample (container, Ollama, host agent), history (up to 24 h) and recent answer speeds."""
@@ -436,7 +451,8 @@ def create_app() -> FastAPI:
     def settings_page(request: Request):
         overridden = set(db.get_settings())
         return page(request, "settings.html", "/settings", spec=SETTINGS, overridden=overridden,
-                    defaults=cfg.defaults, config_path=str(cfg.path), web_key_set=bool(websearch.api_key()))
+                    defaults=cfg.defaults, config_path=str(cfg.path), web_key_set=bool(websearch.api_key()),
+                    apps=control.status())
 
     @app.get("/docs", include_in_schema=False)
     def swagger():
@@ -473,6 +489,7 @@ def create_app() -> FastAPI:
     @app.post("/ui/chat", include_in_schema=False)
     def ui_chat(request: Request, body: dict = Body(...)):
         same_origin(request)
+        paused()
         question = (body.get("question") or "").strip()
         if not question:
             raise HTTPException(400, "Empty question")
@@ -580,10 +597,38 @@ def create_app() -> FastAPI:
             indexer.start(name, full=True)
         return {"ok": True, "name": name}
 
+    def paused() -> None:
+        if not control.is_on("ask"):
+            raise HTTPException(503, "vCommunity Ask is paused. Turn it on in Settings (Apps on / off).")
+
+    @app.post("/ui/apps", include_in_schema=False, dependencies=[Depends(require_admin)])
+    def ui_apps(body: dict = Body(...)):
+        try:
+            control.set_on(str(body.get("app") or ""), bool(body.get("on")), "ask")
+        except control.ControlError as e:
+            raise HTTPException(409, str(e))
+        return control.status()
+
+    @app.get("/api/apps", tags=["core"], dependencies=[Depends(require_token)])
+    def api_apps():
+        """Which parts are on: vCommunity Observability and vCommunity Ask (./control/apps.json,
+        shared with the dashboards container)."""
+        return control.status()
+
+    @app.put("/api/apps/{name}", tags=["core"], dependencies=[Depends(require_token)])
+    def api_app_set(name: str, on: bool):
+        """Turn `observability` or `ask` on or off. Off pauses it; the container keeps running."""
+        try:
+            control.set_on(name, on, "ask")
+        except control.ControlError as e:
+            raise HTTPException(400 if name not in control.APPS else 409, str(e))
+        return control.status()
+
     @app.post("/ui/sources/{name}/sync", include_in_schema=False, dependencies=[Depends(require_admin)])
     def ui_source_sync(name: str, body: dict = Body(default={})):
         if not db.get_source(name):
             raise HTTPException(404, "Unknown source")
+        paused()
         started = indexer.start(name, full=bool(body.get("full")))
         return {"ok": True, "started": started}
 
@@ -661,6 +706,7 @@ def create_app() -> FastAPI:
     def api_ask(body: dict = Body(..., examples=[{"question": "What does VM CPU Co-stop mean?", "sources": "all"}])):
         """Ask a question and wait for the whole answer. `sources`: "all", a source name or a
         list of names. Pass `chat_id` from a previous answer to ask a follow-up."""
+        paused()
         question = (body.get("question") or "").strip()
         if not question:
             raise HTTPException(400, "Empty question")
@@ -701,6 +747,7 @@ def create_app() -> FastAPI:
     def api_source_sync(name: str, full: bool = False):
         if not db.get_source(name):
             raise HTTPException(404, "Unknown source")
+        paused()
         return {"started": indexer.start(name, full=full)}
 
     @app.get("/api/sources/{name}/documents", tags=["sources"], dependencies=[Depends(require_token)])

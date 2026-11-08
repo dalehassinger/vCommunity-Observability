@@ -223,3 +223,12 @@ label.switch { position: relative; }
 .fd-msg { margin: 0; padding: 0 16px; min-height: 18px; font-size: 13px; color: var(--ok); }
 .fd-msg.bad { color: var(--crit); }
 .fd-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
+
+/* Paused banner (Settings → Apps on / off) */
+.paused-banner { padding: 10px 14px; border-radius: 3px; margin-bottom: 14px; font-size: 13px; border-left: 4px solid var(--warn, #c98a00);
+  background: var(--warn-bg, rgba(201,138,0,.12)); }
+.paused-banner a { font-weight: 600; }
+.app-switches { display: grid; gap: 12px; }
+.app-switch { display: flex; gap: 14px; align-items: flex-start; }
+.app-switch .switch { min-width: 0; }
+.app-switch b { display: block; }

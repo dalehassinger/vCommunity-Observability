@@ -171,7 +171,8 @@ Never commit `.env` or `config/config.yaml`; both are in `.gitignore`.
 The containers run as non-root users (`vco` uid 10001 and `ask` uid 10002), so they need folders they can write to.
 
 ```bash
-mkdir -p data exports extra-modules ask-data ask-knowledge ask-sources
+mkdir -p data exports extra-modules ask-data ask-knowledge ask-sources control
+chmod 777 control      # Apps on / off switches, written by both containers
 # Linux only: give the folders to the container users
 sudo chown -R 10001 data exports extra-modules
 sudo chown -R 10002 ask-data
@@ -179,7 +180,7 @@ sudo chown -R 10002 ask-data
 ```
 
 ```powershell
-New-Item -ItemType Directory -Force data, exports, extra-modules, ask-data, ask-knowledge, ask-sources | Out-Null
+New-Item -ItemType Directory -Force data, exports, extra-modules, ask-data, ask-knowledge, ask-sources, control | Out-Null
 ```
 
 ### 4. Set up Ollama (for Ask)
@@ -283,6 +284,15 @@ The left sidebar has **Home** and **All dashboards**, then every enabled module'
 
 ![Settings page](docs/screenshots/settings.png)
 
+**Apps on / off.** The first card has two sliders, **vCommunity Observability** and **vCommunity Ask**, one for each container. Off *pauses* that part; its container keeps running, so it can always be switched back on:
+
+| Switched off | What stops | What keeps working |
+| --- | --- | --- |
+| vCommunity Observability | Every collector run (scheduled, **Run now**, start-up) and scheduled exports. A yellow banner says it is paused | Dashboards, exports and the API, with the last collected data; Settings. Turning it on runs all collectors once |
+| vCommunity Ask | Questions (chat page and `POST /api/ask` answer 503) and source syncs (scheduled, **Sync now**, uploads). The Ask link in this sidebar is hidden | Chats, sources, Settings and the rest of Ask's pages |
+
+The same two sliders are on Ask's Settings page, and both pages save to one shared file, `./control/apps.json` (mounted at `/app/control` in both containers), so either page can switch either part. Saving here needs the API token when tokens are set; on Ask, the Ask API token. Scripts use `GET /api/core/apps` and `PUT /api/core/apps/{observability|ask}?on=false` (or `/api/apps` on Ask). A missing file means both are on.
+
 **Connections.** Edit the vCenter and VCF Operations address, username, password and TLS check. **Save and test** saves and checks the login straight away. Values saved here are stored in `data/_core.db`, win over `config.yaml` and `.env`, and apply from the next collection without a restart. **Reset to config.yaml** drops them. Leaving the password blank keeps the current one.
 
 **Collection intervals.** How often each collector runs, 1 to 10080 minutes. A new interval starts counting from the moment you save.
@@ -299,6 +309,12 @@ The left sidebar has **Home** and **All dashboards**, then every enabled module'
 ![Schedule saved and verified](docs/screenshots/save-verified.png)
 
 When API tokens are configured, every save on this page needs one of them (there is no UI login yet). The token field sits at the bottom of each card.
+
+### Performance
+
+There is **one Performance dashboard** for both containers, and it lives in vCommunity Ask (it also has the Mac's CPU, GPU and memory, Ollama and answer speed). **Performance**, the first link under Administration in this sidebar, opens it at `VCO_ASK_URL/performance`, the same page as the Performance link in Ask's sidebar. `/performance` here redirects there too. The link is hidden when `VCO_ASK_URL` is empty.
+
+The dashboard shows a KPI card and CPU and memory, network and disk charts for each container, vCommunity Observability (`vco`) and vCommunity Ask (`vco-ask`). This container gives Ask its numbers at the open `GET /perf/container` endpoint (raw cgroup counters, no secrets, no Docker socket). Ask reads it every 10 seconds at `ASK_VCO_INTERNAL_URL` (default `http://vco:8080`). If this container doesn't answer, its card turns red and says **Not running**. Because the dashboard is served by Ask, it needs the Ask container to be running. Pausing Ask with the Apps on / off slider keeps the dashboard working. See [Performance page and host agent](#performance-page-and-host-agent).
 
 ### API docs
 
@@ -476,6 +492,8 @@ One card per source with a status ring (green OK, blue syncing, red error, amber
 ### Settings page
 
 ![Ask settings](docs/screenshots/ask-settings.png)
+
+**Apps on / off** (top card): the same two sliders as on the dashboards' Settings page (see [Settings](#settings)), saved as soon as you flip one (needs the Ask API token when `ASK_API_TOKEN` is set). With **vCommunity Ask** off, the chat answers "vCommunity Ask is paused" and sources don't sync; with **vCommunity Observability** off, the Observability link in Ask's sidebar is hidden.
 
 | Setting | Default | Notes |
 | --- | --- | --- |
@@ -797,7 +815,7 @@ Tips: name the sheet ("using the vInfo sheet") and what to group by ("by OS", "p
 
 ### Performance page and host agent
 
-**Performance** (sidebar, under Administration) shows how Ask, Ollama and the machine that runs Ollama are doing. Ask takes a sample every 10 seconds and keeps 24 hours of them in `ask.db` (table `perf_samples`, about 5 MB); the page refreshes every 10 seconds and offers 1 h, 6 h and 24 h.
+**Performance** (sidebar, under Administration) shows how both containers (Ask and vCommunity Observability), Ollama and the machine that runs Ollama are doing. It is the one Performance dashboard: the Observability sidebar's **Performance** link opens this same page (see [Performance](#performance)). Ask takes a sample every 10 seconds and keeps 24 hours of them in `ask.db` (table `perf_samples`, about 5 MB); the page refreshes every 10 seconds and offers 1 h, 6 h and 24 h.
 
 | Part | What it shows | Where it comes from |
 | --- | --- | --- |
@@ -807,6 +825,7 @@ Tips: name the sheet ("using the vInfo sheet") and what to group by ("by OS", "p
 | Answer speed | Tokens per second (bars) and answer time per answer, last 24 hours; the tooltip names the chat and model | The stats saved with every answer |
 | Prompt size per answer | Prompt tokens of each answer against a dashed **Model context** line. Bars near the line mean sources or history are being cut: see [Chunks, context budget and model context](#chunks-context-budget-and-model-context) | The stats saved with every answer |
 | Ask container | CPU % (of the CPUs the container may use), memory (like `docker stats`, without page cache), network and disk throughput | The container's own cgroup files (`/sys/fs/cgroup`, v2 or v1). No Docker socket is mounted |
+| Observability container | The same numbers for vCommunity Observability (`vco`): a KPI card plus CPU and memory, network and disk charts. **Not running** (red) when it doesn't answer | Its `GET /perf/container` endpoint at `ASK_VCO_INTERNAL_URL` (default `http://vco:8080`) |
 | Host power and temperature | Total power (W) and GPU temperature, shown only when available | Host agent with [macmon](https://github.com/vladkens/macmon) installed |
 | Ollama table | Version, each loaded model with size, memory, share on the GPU, context length and when it unloads | Ollama `/api/ps` |
 | Host table | Chip, OS, cores (performance and efficiency), load, memory (app, wired, compressed), pressure, swap, GPU memory, Ollama processes, disk, network | Host agent |
@@ -943,6 +962,7 @@ So "What did Brock write about vSAN?" is usually answered from the blogs alone, 
 | `OLLAMA_API_KEY` | ollama.com API key for [Web search (Ollama)](#web-search-ollama). Secret: keep it in `.env` only |
 | `ASK_WEB_SEARCH`, `ASK_WEB_SEARCH_URL` | `1` turns web search on by default (the Settings switch wins); API URL (default `https://ollama.com`) |
 | `VCO_ASK_URL` | First container: sidebar link to Ask |
+| `ASK_VCO_INTERNAL_URL` | Where Ask reads the Observability container's numbers for its Performance page (default `http://vco:8080`) |
 
 ### Source plug-ins
 
@@ -1006,11 +1026,13 @@ All under token auth when `ASK_API_TOKEN` is set; Swagger UI at http://localhost
 | Method and path | Purpose |
 | --- | --- |
 | `GET /api/health` | Status and counts (open) |
+| `GET /api/apps`, `PUT /api/apps/{name}?on=false` | Apps on / off (`observability`, `ask`), shared with the dashboards. While Ask is off, `POST /api/ask` and source syncs answer 503 |
 | `POST /api/ask` | `{"question": "...", "sources": "all" \| "isvara" \| [...], "chat_id": "..."}` (`all` = every source except spreadsheets; a name or a list of names picks those sources, spreadsheets included) → answer, source cards, stats, chat id (pass it back for follow-ups) |
 | `GET /api/search?q=...&sources=a,b` | Retrieval only: which chunks a question would get, and the FTS query used |
 | `GET /api/chats`, `GET /api/chats/{id}` | Saved chats and their messages |
 | `GET /api/sources`, `POST /api/sources/{name}/sync?full=false`, `GET /api/sources/{name}/documents` | Sources, sync, indexed files |
-| `GET /api/perf?hours=1` | Performance: the latest sample (container, Ollama, host agent), up to 24 h of history and recent answer speeds |
+| `GET /api/perf?hours=1` | Performance: the latest sample (both containers, Ollama, host agent), up to 24 h of history and recent answer speeds |
+| `GET /perf/container` | Open, numbers only: this container's raw counters, read by the Observability container |
 | `GET /api/mcp` | MCP servers of the host agent, their tools and each tool's policy (allow, ask, off). Use one with `"sources": ["mcp:<server>"]` on `POST /api/ask` (tools set to Ask first are refused there) |
 | `GET /api/reports` | HTML reports and dashboards (id, title, type, source, question, created, size); open one at `/reports/{id}.html`, add `?download=1` to download it |
 
@@ -1024,7 +1046,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8081/api/ask -Headers $h -C
 
 - `ask/Dockerfile`, built from the repository root (it copies `core/static/app.css`, the About page files, the vendored front-end libraries and the README with its screenshots, so a theme or library fix lands in both containers). Python 3.13 slim + git, plus `tesseract-ocr` (English) and `poppler-utils` for OCR of scanned PDFs (build argument `OCR_LANGS` adds Tesseract languages), native arm64 on Apple Silicon, no PowerShell.
 - Runs as non-root user `ask` (uid 10002) on port 8081, health check on `/api/health`.
-- Volumes: `./ask-data` → `/app/data` (index, chats, clones), `./ask-knowledge` → `/knowledge` (read-only, local folders), `./ask-sources` → `/sources` (extra or patched plug-ins), `./exports` → `/exports` (read-only, the dashboards' exports for `spreadsheet` sources).
+- Volumes: `./ask-data` → `/app/data` (index, chats, clones), `./ask-knowledge` → `/knowledge` (read-only, local folders), `./ask-sources` → `/sources` (extra or patched plug-ins), `./exports` → `/exports` (read-only, the dashboards' exports for `spreadsheet` sources), `./control` → `/app/control` (Apps on / off, shared with the dashboards).
 - Front-end libraries are vendored once, in `core/static/vendor/`, with their licences: Swagger UI, marked 18.1.3 (MIT), DOMPurify 3.4.17 (Apache-2.0/MPL-2.0) and Apache ECharts 6.1.0 (Apache-2.0, `echarts.min.js` with its LICENSE and NOTICE). The dashboards serve them at `/static/vendor/`, Ask at `/shared/vendor/`. Every answer, document and About page is sanitised by DOMPurify before display.
 - On a Linux Docker host, uncomment `extra_hosts: host.docker.internal:host-gateway` in `docker-compose.yml`. Leave it commented on Rancher Desktop and Docker Desktop: it replaces their own mapping to the Mac, and Ollama then refuses the connection.
 
@@ -1076,7 +1098,7 @@ Two image targets from one `Dockerfile`:
 
 - Runs as a non-root user (`vco`, uid 10001), listens on port 8080, with a health check on `/api/core/health`.
 - The right PowerShell build (arm64 or x64) is picked automatically. Pin PowerCLI with the `POWERCLI_VERSION` build argument.
-- Compose volumes: `./data` → `/app/data` (SQLite, survives upgrades), `./exports` → `/app/exports` (scheduled exports), `./extra-modules` → `/modules` (new or patched modules), `./config/config.yaml` read-only.
+- Compose volumes: `./data` → `/app/data` (SQLite, survives upgrades), `./exports` → `/app/exports` (scheduled exports), `./extra-modules` → `/modules` (new or patched modules), `./config/config.yaml` read-only, `./control` → `/app/control` (Apps on / off, shared with Ask; `VCO_CONTROL_FILE` overrides the file path).
 - `init: true` adds a tiny init process that reaps finished collector processes and passes stop signals to the app.
 - `restart: unless-stopped`.
 
@@ -1112,6 +1134,8 @@ The full list of endpoints is on the **Modules** page, in Swagger at `/docs`, an
 | `GET /api/core/modules` | token | Every module with its status, collectors, last runs and endpoints |
 | `PUT /api/core/modules/{module}/enabled?enabled=false` | token | The on/off switch |
 | `PUT /api/core/modules/order` | token | Menu order, body is a JSON list of module names |
+| `GET /perf/container` | open | This container's raw counters (CPU time, memory, disk and network bytes, uptime, version). Numbers only, no secrets; Ask's Performance dashboard reads it |
+| `GET /api/core/apps`, `PUT /api/core/apps/{name}?on=false` | token | Apps on / off: `observability` (collection, scheduled exports) and `ask` (chat, syncs). Off pauses the part; shared with Ask in `./control/apps.json` |
 | `GET /api/{module}/...` | token | Module endpoints declared in `module.yaml` |
 | `GET /api/{module}/export/{name}` | token | Module file downloads for scripts |
 | `GET /export/{module}/{name}` | none (UI) | The same downloads for the UI |
@@ -1267,6 +1291,8 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 | `vco` won't start: "not a directory" or "Are you trying to mount a directory onto a file" for `config.yaml` | `config/config.yaml` didn't exist at the first `docker compose up`, so Docker created a folder with that name. Remove the folder, `cp config/config.example.yaml config/config.yaml`, then `docker compose up -d` |
 | Linux: "unable to open database file", "readonly database" or "Permission denied" under `/app/data` | The host folder is owned by your user, but the containers run as uid 10001 (`vco`) and 10002 (`ask`). `sudo chown -R 10001 data exports extra-modules` and `sudo chown -R 10002 ask-data`, then restart |
 | Ask: an answer fails with "model ... not found" | The chat model isn't pulled in Ollama. `ollama pull <model>`, or pick an installed model on Ask's Settings page. `qwen3.8:27b-mlx` is for Apple Silicon only; on other machines use, for example, `qwen3:8b` |
+| Settings → Apps on / off says "not mounted" or "can't be written" | The `./control:/app/control` line is missing under `vco` or `vco-ask` in `docker-compose.yml` (older copy): add it to both and `docker compose up -d`. "Can't be written": `chmod 777 control` on the host (both containers write it, as uid 10001 and 10002) |
+| Dashboards say "vCommunity Observability is paused" or Ask says "vCommunity Ask is paused" | A slider under Settings → Apps on / off is off. Turn it on there (either container's Settings page) |
 | Scheduled export won't save: "Can't write to /app/exports/..." | The host `./exports` folder isn't writable by the container user. Run `chmod 777 exports` (or `chown 10001 exports`) |
 | "Not saved: enter a valid API token" | Enter the token from `.env` (`VCO_API_TOKEN_MPBUILDER`) in the card's API token field |
 | `failed to connect to the docker API at unix:///.../docker.sock` | The Docker CLI points at an engine that isn't running. `docker context ls`, then `docker context use rancher-desktop` (or start Docker Desktop) |
@@ -1338,6 +1364,8 @@ core/                   FastAPI app, scheduler, module loader, runner, storage
   modules.py            module.yaml parsing and validation
   runner.py             runs collectors and exports as subprocesses
   storage.py            SQLite: one db per module + _core.db
+  control.py            Apps on / off (./control/apps.json, same file as ask/app/control.py)
+  perfstat.py           this container's cgroup counters (GET /perf/container) for Ask's Performance dashboard
   templates/            base layout, home, dashboards, Modules, Settings, About
   static/               app.css, about.css/about.js (About page, shared with Ask), vendored Swagger UI, marked, DOMPurify, ECharts
 modules/                built-in modules (one folder each)
@@ -1392,6 +1420,8 @@ requirements.in/.txt    direct dependencies / hashed lock file
 
 | Date | Change |
 | --- | --- |
+| 2026-11-08 | **One Performance dashboard for both containers**: Ask's Performance page now also shows vCommunity Observability (KPI card plus CPU and memory, network and disk charts; **Not running** in red when it doesn't answer). The Observability sidebar gets a **Performance** link (first under Administration) to that same page, and `/performance` redirects there. The Observability container serves its raw cgroup counters at open `GET /perf/container` (`core/perfstat.py`), read by Ask at `ASK_VCO_INTERNAL_URL`; smoke test covers it |
+| 2026-11-08 | **Apps on / off**: two sliders (vCommunity Observability, vCommunity Ask) on both Settings pages, saved in the shared `./control/apps.json` (new `./control:/app/control` volume on both services; `core/control.py` = `ask/app/control.py`). Off pauses a part and keeps its container running: Observability stops collection and scheduled exports (banner, last data still shown), Ask stops questions (503) and source syncs; the other side's sidebar link hides. APIs `GET/PUT /api/core/apps` and `/api/apps`; smoke test covers it |
 | 2026-11-08 | README and About page: how Ask orders knowledge sources and web search when both are ticked (sources first, web search only when they don't answer) |
 | 2026-11-08 | Ask: **Web search (Ollama)**. New Sources menu entry (group **Web**, scope `web:ollama`) gives the model two read-only tools, `web_search` and `web_fetch` (Ollama's cloud API, `app/websearch.py`), through the MCP tool loop; results are numbered, cited sources with their pages as links in the Tool calls box. Key from `OLLAMA_API_KEY` in `.env` only; off unless `ASK_WEB_SEARCH=1` or the new Settings switch; **Web results per search** and **Web search API URL** settings; `scripts/fake_websearch.py` for tests |
 | 2026-11-07 | Ask: new **PDF documents** source plug-in (`pdf`): upload PDFs on the Knowledge sources page (several at once) or read a folder; text via pypdf (added to the lock file), scanned pages via Tesseract OCR (`tesseract-ocr`, `tesseract-ocr-eng`, `poppler-utils` added to the Ask image; `OCR_LANGS` build argument for more languages); one `## Page N` section per page, per-file cache, continues after the 60-minute limit; source cards open the PDF at the cited page (`/files/<source>/<file>.pdf#page=N`); **PDF documents** group in the chat's Sources menu |

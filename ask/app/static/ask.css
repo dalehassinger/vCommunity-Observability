@@ -354,3 +354,12 @@ body.chart-open { overflow: hidden; }
 @media (max-width: 600px) { .perf-grid { grid-template-columns: minmax(0, 1fr); } .perf-tools { flex-wrap: wrap; } }
 .tool-links { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; }
 .tool-links li { margin: 2px 0; }
+
+/* Paused banner (Settings → Apps on / off) */
+.paused-banner { padding: 10px 14px; border-radius: 3px; margin-bottom: 14px; font-size: 13px; border-left: 4px solid var(--warn, #c98a00);
+  background: var(--warn-bg, rgba(201,138,0,.12)); }
+.paused-banner a { font-weight: 600; }
+.app-switches { display: grid; gap: 12px; }
+.app-switch { display: flex; gap: 14px; align-items: flex-start; }
+.app-switch .switch { min-width: 0; }
+.app-switch b { display: block; }

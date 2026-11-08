@@ -14,3 +14,4 @@ ask/config/ask.yaml
 *.db
 *.db-wal
 *.db-shm
+control/

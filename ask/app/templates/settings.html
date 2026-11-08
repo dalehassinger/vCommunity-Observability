@@ -12,6 +12,26 @@
 
 {% include "_token.html" %}
 
+<div class="card" id="apps" style="margin-bottom:16px">
+  <div class="card-header">Apps on / off</div>
+  <div class="card-block">
+    {% if apps.error %}<div class="alert alert-danger">{{ apps.error }}</div>{% endif %}
+    <div class="app-switches">
+    {% for a in apps.apps %}
+      <div class="app-switch">
+        <label class="switch"><input type="checkbox" data-app="{{ a.key }}" id="app-{{ a.key }}" {{ 'checked' if a.on else '' }}><span></span></label>
+        <label for="app-{{ a.key }}"><b>{{ a.title }}</b>
+          <span class="subtle">{% if a.key == 'ask' %}Off pauses the chat (questions in the page and POST /api/ask) and source syncs; chats and sources are kept.
+          {% else %}Off pauses the dashboards' collection and scheduled exports, and hides the Observability link here.{% endif %}</span></label>
+      </div>
+    {% endfor %}
+    </div>
+    <div class="hint">Off pauses a part; its container keeps running, so it can be switched on again here or on the dashboards' Settings page.
+      Shared by both containers in <code>{{ apps.path }}</code> (the <code>./control</code> folder). Saved as soon as you flip a switch.</div>
+    <span class="form-msg" id="apps-msg"></span>
+  </div>
+</div>
+
 <div class="form-grid">
   <div class="card">
     <div class="card-header">Ollama</div>
@@ -97,6 +117,22 @@
 {% block scripts %}
 <script src="/static/admin.js?v={{ asset_v }}"></script>
 <script>
+(function () {
+  // Apps on / off: saved right away.
+  var appsMsg = document.getElementById('apps-msg');
+  document.querySelectorAll('[data-app]').forEach(function (i) {
+    i.onchange = async function () {
+      try {
+        await AskAdmin.post('/ui/apps', { app: i.dataset.app, on: i.checked });
+        appsMsg.textContent = 'Saved.'; appsMsg.className = 'form-msg ok';
+        setTimeout(function () { location.reload(); }, 600);
+      } catch (e) {
+        i.checked = !i.checked;
+        appsMsg.textContent = 'Not saved: ' + e.message; appsMsg.className = 'form-msg bad';
+      }
+    };
+  });
+})();
 (function () {
   var DEFAULT_PROMPT = {{ defaults.system_prompt | tojson }};
   var status = document.getElementById('ollama-status');

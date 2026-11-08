@@ -279,4 +279,40 @@ assert "Schedule saved and verified" in r.text and "Daily at 18:15" in r.text
 assert len(core.storage.export_schedules()) == 1 and core.storage.export_schedules()[0]["at_time"] == "18:15"
 client.post(f"/settings/exports/{core.storage.export_schedules()[0]['id']}/delete", data={"token": "test-token"})
 assert "Create schedule" in client.get("/settings").text
+# Apps on / off (./control/apps.json shared with Ask): identical copies, pause and resume.
+import filecmp, tempfile  # noqa: E401,E402
+assert filecmp.cmp(root / "core" / "control.py", root / "ask" / "app" / "control.py", shallow=False), "control.py copies differ"
+from core import control as ctl  # noqa: E402
+os.environ["VCO_CONTROL_FILE"] = tempfile.mkdtemp() + "/apps.json"
+assert ctl.is_on("observability") and ctl.is_on("ask")
+r = client.post("/settings/apps", data={"ask": "1"}, follow_redirects=False)
+assert r.status_code == 303 and "valid+API+token" in r.headers["location"], r.headers
+assert ctl.is_on("observability")
+r = client.post("/settings/apps", data={"ask": "1", "token": "test-token"}, follow_redirects=False)
+assert r.status_code == 303 and not ctl.is_on("observability") and ctl.is_on("ask")
+assert "is paused" in client.get("/overview").text
+assert core.run_module(next(m for m in core.modules.values() if m.available)) == []
+r = client.post(f"/modules/{next(m.name for m in core.modules.values() if m.available)}/run", follow_redirects=False)
+assert r.status_code == 303 and "where=apps" in r.headers["location"]
+r = client.put("/api/core/apps/ask?on=false", headers=auth)
+assert r.status_code == 200 and not ctl.is_on("ask")
+client.post("/settings/apps", data={"observability": "1", "ask": "1", "token": "test-token"})
+assert ctl.is_on("observability") and ctl.is_on("ask") and "is paused" not in client.get("/overview").text
+assert client.get("/api/core/apps", headers=auth).json()["writable"]
+os.environ["VCO_CONTROL_FILE"] = "/nonexistent/apps.json"
+r = client.post("/settings/apps", data={"ask": "1", "token": "test-token"}, follow_redirects=True)
+assert "not mounted" in r.text and ctl.is_on("observability")
+del os.environ["VCO_CONTROL_FILE"]
+print("  apps on/off: ok")
+# Performance: one dashboard on Ask; this container serves its counters and links/redirects there.
+raw = client.get("/perf/container").json()
+assert raw["app"] == "observability" and "net_rx" in raw, raw
+ask = os.environ.get("VCO_ASK_URL", "")
+r = client.get("/performance", follow_redirects=False)
+if ask:
+    assert r.status_code == 302 and r.headers["location"] == ask.rstrip("/") + "/performance", r.headers
+    assert f'href="{ask}/performance"' in client.get("/overview").text
+else:
+    assert r.status_code == 404 and "/performance" not in client.get("/overview").text
+print("  performance: ok")
 print("ALL OK")

@@ -22,6 +22,7 @@ from typing import Any, Callable
 
 import yaml
 
+from . import control
 from .db import DB, IndexReset
 from .ollama import Ollama, OllamaError
 
@@ -181,7 +182,10 @@ class Indexer:
         return bool(lock and lock.locked())
 
     def start(self, name: str, full: bool = False) -> bool:
-        """Run a sync in a background thread. False when one is already running."""
+        """Run a sync in a background thread. False when one is already running, or when
+        Ask is paused (Settings → Apps on / off)."""
+        if not control.is_on("ask"):
+            return False
         lock = self._locks.setdefault(name, threading.Lock())
         if lock.locked():
             if full:

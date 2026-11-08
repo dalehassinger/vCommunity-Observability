@@ -60,6 +60,11 @@
       recent.length ? 'last ' + recent.length + ' answers · ' + (secs == null ? '?' : secs.toFixed(1)) + ' s each' : 'No answers yet', tps == null ? '' : tps < 5 ? 'warn' : 'ok'));
     box.appendChild(kpi('Ask container', pct(c.cpu_pct), 'CPU · ' + bytes(c.mem) + (c.mem_limit ? ' of ' + bytes(c.mem_limit, 0) : '') + ' memory',
       level(Math.max(c.cpu_pct || 0, c.mem_pct || 0), 70, 90)));
+    var v = n.vco || {};
+    box.appendChild(v.running
+      ? kpi('Observability container', pct(v.cpu_pct), 'CPU · ' + bytes(v.mem) + (v.mem_limit ? ' of ' + bytes(v.mem_limit, 0) : '') + ' memory',
+          level(Math.max(v.cpu_pct || 0, v.mem_pct || 0), 70, 90))
+      : kpi('Observability container', 'Not running', 'The vco container did not answer', 'crit'));
   }
 
   function renderAgentNote() {
@@ -159,6 +164,16 @@
     b.yAxis = b._axis('KB/s', '{value}', { min: 0 });
     b.series = [line('Net in', series('c_rx', 1024)), line('Net out', series('c_tx', 1024)), line('Disk read', series('c_rd', 1024)), line('Disk write', series('c_wr', 1024))];
     draw('c-io', b, hasData(['c_rx', 'c_rd']) ? null : 'Collecting…');
+    // Observability container (only while it is running)
+    var vNone = (data.now.vco || {}).running ? 'Collecting…' : 'Not running';
+    b = base();
+    b.yAxis = [b._axis('CPU %', '{value}', { min: 0 }), b._axis('MB', '{value}', { min: 0, splitLine: { show: false } })];
+    b.series = [line('CPU', series('v_cpu'), 0, true), line('Memory (MB)', series('v_mem', 1048576), 1)];
+    draw('v-load', b, hasData(['v_cpu', 'v_mem']) ? null : vNone);
+    b = base();
+    b.yAxis = b._axis('KB/s', '{value}', { min: 0 });
+    b.series = [line('Net in', series('v_rx', 1024)), line('Net out', series('v_tx', 1024)), line('Disk read', series('v_rd', 1024)), line('Disk write', series('v_wr', 1024))];
+    draw('v-io', b, hasData(['v_rx', 'v_rd']) ? null : vNone);
     // Power / temperature (macmon)
     var pw = hasData(['h_power', 'h_temp']);
     document.getElementById('perf-power-card').hidden = !pw;

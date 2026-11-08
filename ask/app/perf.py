@@ -6,6 +6,9 @@ in ask.db (table perf_samples):
   container  the vco-ask container itself, read from its own cgroup files (CPU, memory,
              disk and network I/O); no Docker socket is needed
   ollama     what Ollama has loaded (/api/ps): models, memory, GPU share, context size
+  vco        the vCommunity Observability container (dashboards), from its
+             /perf/container endpoint (ASK_VCO_INTERNAL_URL, default http://vco:8080);
+             "running": false when it doesn't answer
   host       the Mac (or other host) from the optional Ask host agent
              (ask/agent/ask-host-agent.py), when ASK_AGENT_URL / the Agent URL setting
              points at it and ASK_AGENT_TOKEN matches the agent's token
@@ -177,6 +180,9 @@ class Sampler:
         self.settings = settings
         self.prev: dict[str, Any] | None = None
         self.prev_t = 0.0
+        self.vco_url = os.environ.get("ASK_VCO_INTERNAL_URL", "http://vco:8080")
+        self.vco_prev: dict[str, Any] | None = None
+        self.vco_prev_t = 0.0
         self.last: dict[str, Any] | None = None
         self.lock = threading.Lock()
         with db.conn() as c:
@@ -188,7 +194,7 @@ class Sampler:
             cfg = self.settings()
             t = time.time()
             raw = container_raw()
-            s = {"ts": t, "container": container_view(raw, self.prev, t - self.prev_t),
+            s = {"ts": t, "container": container_view(raw, self.prev, t - self.prev_t), "vco": self.vco_view(t),
                  "ollama": ollama_view(cfg["ollama_url"].rstrip("/")),
                  "host": host_view(cfg.get("agent_url") or "", os.environ.get("ASK_AGENT_TOKEN", ""))}
             self.prev, self.prev_t, self.last = raw, t, s
@@ -199,6 +205,20 @@ class Sampler:
             except Exception:   # a full disk must not stop the app
                 log.exception("perf sample not saved")
             return s
+
+    def vco_view(self, t: float) -> dict[str, Any]:
+        """The dashboards container's numbers, or {"running": False} when it doesn't answer."""
+        try:
+            r = requests.get(f"{self.vco_url.rstrip('/')}/perf/container", timeout=2)
+            r.raise_for_status()
+            raw = r.json()
+        except (requests.RequestException, ValueError) as e:
+            self.vco_prev = None
+            return {"running": False, "error": e.__class__.__name__}
+        v = {**container_view(raw, self.vco_prev, t - self.vco_prev_t), "running": True,
+             "uptime": raw.get("uptime"), "version": raw.get("version")}
+        self.vco_prev, self.vco_prev_t = raw, t
+        return v
 
     def history(self, hours: float) -> list[dict[str, Any]]:
         since = time.time() - max(0.05, min(24.0, hours)) * 3600
@@ -212,6 +232,9 @@ class Sampler:
                         "c_rx": s["container"].get("net_rx_bps"), "c_tx": s["container"].get("net_tx_bps"),
                         "c_rd": s["container"].get("io_read_bps"), "c_wr": s["container"].get("io_write_bps"),
                         "o_mem": (s.get("ollama") or {}).get("mem"),
+                        "v_cpu": (s.get("vco") or {}).get("cpu_pct"), "v_mem": (s.get("vco") or {}).get("mem"),
+                        "v_rx": (s.get("vco") or {}).get("net_rx_bps"), "v_tx": (s.get("vco") or {}).get("net_tx_bps"),
+                        "v_rd": (s.get("vco") or {}).get("io_read_bps"), "v_wr": (s.get("vco") or {}).get("io_write_bps"),
                         "h_cpu": (h.get("cpu") or {}).get("pct") if h.get("ok") else None,
                         "h_gpu": (h.get("gpu") or {}).get("pct") if h.get("ok") else None,
                         "h_mem": (h.get("memory") or {}).get("used") if h.get("ok") else None,

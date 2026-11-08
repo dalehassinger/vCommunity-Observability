@@ -123,6 +123,8 @@
   </nav>
 
   <main class="content {% block content_class %}{% endblock %}">
+    {% if ask_paused %}<div class="paused-banner"><b>vCommunity Ask is paused.</b> Questions and source syncs are off;
+      chats and sources are kept. <a href="/settings#apps">Turn it on in Settings</a></div>{% endif %}
     {% block body %}{% endblock %}
   </main>
 </div>

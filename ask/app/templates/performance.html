@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Performance · vCommunity Ask{% endblock %}
+{% block title %}Performance · vCommunity Observability and Ask{% endblock %}
 {% block body %}
 <div class="page-head">
   <div>
     <div class="breadcrumb">Administration</div>
     <h1>Performance</h1>
-    <p class="subtle">The Ask container, Ollama and the host that runs it, sampled every 10 seconds and kept for 24 hours
+    <p class="subtle">Both containers (Ask and, when it is running, vCommunity Observability), Ollama and the host that runs them, sampled every 10 seconds and kept for 24 hours
       in <code>ask.db</code>. Host numbers come from the optional Ask host agent (<code>ask/agent</code>).</p>
   </div>
   <div class="perf-tools">
@@ -26,6 +26,8 @@
   <div class="card"><div class="card-header">Prompt size per answer</div><div class="card-block"><div class="perf-chart" data-chart="prompt"></div></div></div>
   <div class="card"><div class="card-header">Ask container: CPU and memory</div><div class="card-block"><div class="perf-chart" data-chart="c-load"></div></div></div>
   <div class="card"><div class="card-header">Ask container: network and disk</div><div class="card-block"><div class="perf-chart" data-chart="c-io"></div></div></div>
+  <div class="card"><div class="card-header">Observability container: CPU and memory</div><div class="card-block"><div class="perf-chart" data-chart="v-load"></div></div></div>
+  <div class="card"><div class="card-header">Observability container: network and disk</div><div class="card-block"><div class="perf-chart" data-chart="v-io"></div></div></div>
   <div class="card" id="perf-power-card" hidden><div class="card-header">Host power and temperature</div><div class="card-block"><div class="perf-chart" data-chart="power"></div></div></div>
 </div>
 

@@ -49,6 +49,30 @@
   {% if auth %}<div class="token-row"><label>API token</label><input type="password" name="token" autocomplete="off" placeholder="Required to save: the token from .env (VCO_API_TOKEN_...)"></div>{% endif %}
 {% endmacro %}
 
+<section class="card" id="apps" style="margin-bottom:16px">
+  <div class="card-header">Apps on / off</div>
+  <div class="card-block">
+    {{ card_msg('apps') }}
+    {% if apps.error %}<div class="alert alert-danger">{{ apps.error }}</div>{% endif %}
+    <form method="post" action="/settings/apps">
+      <div class="app-switches">
+      {% for a in apps.apps %}
+        <div class="app-switch">
+          <label class="switch" style="font-weight:400"><input type="checkbox" id="app-{{ a.key }}" name="{{ a.key }}" value="1" {{ 'checked' if a.on }}><span></span></label>
+          <label for="app-{{ a.key }}"><b>{{ a.title }}</b>
+            <span class="subtle">{% if a.key == 'observability' %}Off pauses collection (scheduled runs, Run now) and scheduled exports; dashboards and the API keep the last data.
+            {% else %}Off pauses the chat (questions in the page and POST /api/ask) and source syncs, and hides the Ask link here.{% endif %}</span></label>
+        </div>
+      {% endfor %}
+      </div>
+      <div class="hint">Off pauses a part; its container keeps running, so it can be switched on again here or on Ask's Settings page.
+        Shared by both containers in <code>{{ apps.path }}</code> (the <code>./control</code> folder).</div>
+      {{ token_field() }}
+      <div class="form-actions"><button class="btn btn-primary">Save</button></div>
+    </form>
+  </div>
+</section>
+
 <section class="card" id="vcenters" style="margin-bottom:16px">
   <div class="card-header">vCenter connections
     {% if vcenters_from_ui %}<span class="src">edited here</span>{% endif %}</div>

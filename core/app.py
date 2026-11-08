@@ -26,6 +26,7 @@ from fastapi.templating import Jinja2Templates
 from . import CORE_API, CORE_VERSION
 from .config import Config, load_config
 from .connections import LABELS, as_bool, fields_for, test_connection
+from . import control, perfstat
 from . import export_schedule as xs
 from .modules import Module, discover
 from .runner import run_collector, run_export
@@ -172,15 +173,21 @@ class Core:
         threading.Thread(target=self.run_all, daemon=True).start()
 
     def _scheduled_run(self, mod: Module, c) -> None:
-        if mod.available:
+        # Settings → Apps on / off: a paused Observability collects nothing.
+        if mod.available and control.is_on("observability"):
             run_collector(self.cfg, self.storage, mod, c)
 
     def run_all(self) -> None:
+        if not control.is_on("observability"):
+            log.info("vCommunity Observability is paused (Settings): no collection")
+            return
         for mod in self.modules.values():
             if mod.available:
                 self.run_module(mod)
 
     def run_module(self, mod: Module) -> list[dict]:
+        if not control.is_on("observability"):
+            return []
         return [run_collector(self.cfg, self.storage, mod, c) for c in mod.collectors]
 
     def set_connection(self, name: str, values: dict[str, str]) -> None:
@@ -269,6 +276,8 @@ class Core:
                 raise RuntimeError(f"export {sched['module']}/{sched['export']} no longer exists")
             if not mod.available:
                 raise RuntimeError(f"module {mod.name} is switched off")
+            if not control.is_on("observability"):
+                raise RuntimeError("vCommunity Observability is paused (Settings → Apps on / off)")
             params = json.loads(sched["params"] or "{}")
             body = run_export(self.cfg, self.storage, mod, exp, params)
             folder = xs.resolve_folder(sched["folder"])
@@ -320,6 +329,8 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
     templates.env.globals["asset_v"] = asset_version(HERE / "static")
     # Sidebar link to the vCommunity Ask chat container (empty = no link).
     templates.env.globals["ask_url"] = os.environ.get("VCO_ASK_URL", "")
+    # Apps on / off (shared with the Ask container through ./control/apps.json).
+    templates.env.globals["control"] = control
     # Module templates are addressed as "<module>/<file>" and can extend base.html.
     from jinja2 import ChoiceLoader, FileSystemLoader, PrefixLoader
     templates.env.loader = ChoiceLoader([
@@ -372,6 +383,39 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
                 ],
             })
         return {"count": len(items), "items": items}
+
+    # -- performance -------------------------------------------------------------
+    # There is one Performance dashboard for both containers, on vCommunity Ask (it also has
+    # the host, Ollama and answer speed). /performance here just opens it.
+    @app.get("/performance", include_in_schema=False)
+    def performance_page():
+        ask = templates.env.globals.get("ask_url") or ""
+        if not ask:
+            raise HTTPException(404, "The Performance dashboard is on vCommunity Ask; set VCO_ASK_URL")
+        return RedirectResponse(f"{ask.rstrip('/')}/performance", status_code=302)
+
+    @app.get("/perf/container", include_in_schema=False)
+    def perf_container() -> dict[str, Any]:
+        # Raw cgroup counters of this container for Ask's Performance dashboard.
+        # Numbers only (CPU time, memory, byte counts), so no token is needed.
+        return {**perfstat.container_raw(), "app": "observability", "version": CORE_VERSION}
+
+    @app.get("/api/core/apps", tags=["core"], dependencies=[Depends(require_token)])
+    def api_apps() -> dict[str, Any]:
+        """Which parts are on: vCommunity Observability (collection, scheduled exports) and
+        vCommunity Ask (chat, source syncs). Shared by both containers in ./control/apps.json."""
+        return control.status()
+
+    @app.put("/api/core/apps/{name}", tags=["core"], dependencies=[Depends(require_token)])
+    def api_app_set(name: str, on: bool) -> dict[str, Any]:
+        """Turn a part on or off: `observability` or `ask`. Off pauses it; the container keeps running."""
+        try:
+            control.set_on(name, on, "observability")
+        except control.ControlError as e:
+            raise HTTPException(400 if name not in control.APPS else 409, str(e))
+        if name == "observability" and on:
+            threading.Thread(target=core.run_all, daemon=True).start()
+        return control.status()
 
     @app.put("/api/core/modules/{module}/enabled", tags=["core"], dependencies=[Depends(require_token)])
     def set_module_enabled(module: str, enabled: bool) -> dict[str, Any]:
@@ -636,7 +680,27 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
             "export_choices": [(m, e) for m in core.modules.values() for e in m.exports],
             "weekdays": xs.WEEKDAYS, "frequencies": xs.FREQUENCIES, "timezones": xs.timezone_names(),
             "default_tz": xs.default_timezone(), "exports_root": str(xs.exports_root()),
+            "apps": control.status(),
         })
+
+    @app.post("/settings/apps", include_in_schema=False)
+    async def save_apps(request: Request):
+        form = await read_form(request)
+        if not admin_ok(form.get("token", "")):
+            return denied("apps")
+        before = control.load()
+        try:
+            for key in control.APPS:
+                want = form.get(key) == "1"
+                if before[key] != want:
+                    control.set_on(key, want, "observability")
+        except control.ControlError as e:
+            return settings_redirect(f"Not saved: {e}", False, "#apps")
+        now = control.load()
+        if now["observability"] and not before["observability"]:
+            threading.Thread(target=core.run_all, daemon=True).start()
+        return settings_redirect("Saved: " + ", ".join(f"{t} {'on' if now[k] else 'off (paused)'}"
+                                                        for k, t in control.APPS.items()) + ".", True, "#apps")
 
     @app.get("/settings", response_class=HTMLResponse, include_in_schema=False)
     def settings_page(request: Request):
@@ -933,6 +997,9 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
         mod = core.modules.get(module)
         if not mod or not mod.available:
             raise HTTPException(404, "Module not available")
+        if not control.is_on("observability"):
+            return settings_redirect("vCommunity Observability is paused, so nothing was collected. Turn it on here first.",
+                                     False, "#apps")
         core.run_module(mod)
         return RedirectResponse("/modules", status_code=303)
 
