@@ -1,0 +1,11 @@
+{# A failed collector, in plain English: summary, what to do, and the raw error folded away.
+   Used by every dashboard: {% from "_run_error.html" import run_error %} ... {{ run_error(r) }} #}
+{% macro run_error(r) %}{% set e = r.message | explain_error(r.module, r.collector) %}
+<div class="alert alert-danger run-error">
+  <div><b>{{ r.collector }}</b> collector failed: {{ e.summary }}</div>
+  {% if e.hint %}<div class="run-error-hint">{{ e.hint }}</div>{% endif %}
+  {% if e.details %}<details class="run-error-details"><summary>Details</summary><pre>{{ e.details }}</pre></details>{% endif %}
+</div>
+{% endmacro %}
+{% macro short_error(message, module=None, collector=None) %}{% set e = message | explain_error(module, collector) %}{{ e.summary }}{% if e.details %}
+<details class="run-error-details"><summary>Details</summary>{% if e.hint %}<p>{{ e.hint }}</p>{% endif %}<pre>{{ e.details }}</pre></details>{% endif %}{% endmacro %}

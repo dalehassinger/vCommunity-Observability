@@ -83,14 +83,14 @@
   del.addEventListener('click', async function () {
     var ids = ticked().map(function (b) { return b.value; });
     if (!ids.length) return;
-    if (!confirm('Delete ' + ids.length + (ids.length === 1 ? ' chat' : ' chats') + '? This cannot be undone.')) return;
+    if (!(await vcoConfirm('Delete ' + ids.length + (ids.length === 1 ? ' chat' : ' chats') + '? This cannot be undone.', { ok: 'Delete', danger: true }))) return;
     del.disabled = true;
     try {
       var res = await fetch('/ui/chats/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids: ids }) });
       if (!res.ok) throw new Error((await res.text()) || res.statusText);
     } catch (err) {
-      alert('Could not delete the chats: ' + err.message);
+      await vcoAlert('Could not delete the chats: ' + err.message);
       refresh();
       return;
     }

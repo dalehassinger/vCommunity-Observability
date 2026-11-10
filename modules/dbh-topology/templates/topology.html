@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_run_error.html" import run_error %}
 {% block title %}DBH Topology · vCommunity-Observability{% endblock %}
 {% set source = data.source[0] if data.source else none %}
 {% set source_label = (data.source|map(attribute='server')|list)|join(' · ') if data.source else none %}
@@ -54,7 +55,7 @@
   </div>
 </div>
 
-{% for r in run_errors %}<div class="alert alert-danger"><b>{{ r.collector }}</b> collector failed: {{ r.message }}</div>{% endfor %}
+{% for r in run_errors %}{{ run_error(r) }}{% endfor %}
 {% for e in query_errors %}<div class="alert alert-danger">{{ e }}</div>{% endfor %}
 
 <div class="topo" id="topo">

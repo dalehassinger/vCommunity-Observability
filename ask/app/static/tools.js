@@ -27,7 +27,7 @@
     rl.onclick = async function () {
       rl.disabled = true; rl.textContent = 'Reloading…';
       try { await AskAdmin.post('/ui/mcp/' + encodeURIComponent(s.name) + '/reload'); await load(true); }
-      catch (e) { rl.disabled = false; rl.textContent = 'Reload tools'; alert(e.message); }
+      catch (e) { rl.disabled = false; rl.textContent = 'Reload tools'; vcoAlert(e.message); }
     };
     head.appendChild(rl);
     card.appendChild(head);

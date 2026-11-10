@@ -339,6 +339,15 @@ def create_app() -> FastAPI:
     def api_reports():
         return {"reports": reports.list()}
 
+    @app.post("/ui/reports/delete", include_in_schema=False, dependencies=[Depends(require_admin)])
+    def ui_reports_delete(body: dict = Body(...)):
+        """Delete several reports: {"ids": [...]} or every report: {"all": true}."""
+        ids = [r["id"] for r in reports.list()] if body.get("all") is True else body.get("ids")
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+            raise HTTPException(400, "Send ids (a list of report ids) or all: true")
+        deleted = sum(1 for rid in ids if reports.delete(rid))
+        return {"ok": True, "deleted": deleted}
+
     @app.post("/ui/reports/{rid}/delete", include_in_schema=False, dependencies=[Depends(require_admin)])
     def ui_report_delete(rid: str):
         if not reports.delete(rid):

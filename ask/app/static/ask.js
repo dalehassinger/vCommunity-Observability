@@ -2,6 +2,8 @@
    renders markdown with the vendored marked + DOMPurify, and shows source cards. */
 (function () {
   'use strict';
+  // Smooth scrolling only when the OS "reduce motion" setting is off.
+  function scrollMode() { return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'; }
   var thread = document.getElementById('thread');
   var form = document.getElementById('composer');
   var input = document.getElementById('question');
@@ -195,7 +197,7 @@
     big.addEventListener('click', function () {
       var on = wrap.classList.toggle('big');
       big.textContent = on ? 'Shrink' : 'Expand';
-      if (on) wrap.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      if (on) wrap.scrollIntoView({ block: 'start', behavior: scrollMode() });
     });
     var hide = el('button', 'link-btn', 'Hide preview');
     hide.type = 'button';
@@ -744,7 +746,7 @@
               if (payload.status === 'waiting') {
                 tl.textContent = 'Waiting for you: Run or Cancel ' + payload.tool + ' (under Tool calls).';
                 var go = a.sources.querySelector('.tool-confirm');
-                if (go) setTimeout(function () { go.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 50);
+                if (go) setTimeout(function () { go.scrollIntoView({ behavior: scrollMode(), block: 'center' }); }, 50);
               } else {
                 a.text.innerHTML = '<span class="typing"><i></i><i></i><i></i></span> ';
                 tl.textContent = payload.status === 'running' ? 'Running ' + payload.tool + '…' : 'Asking ' + (meta.model || 'the model') + '…';
@@ -817,12 +819,12 @@
     if (card) {
       e.preventDefault();
       for (var d = card.closest('details'); d; d = d.parentElement && d.parentElement.closest('details')) d.open = true;
-      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      card.scrollIntoView({ behavior: scrollMode(), block: 'center' });
       card.classList.add('flash'); setTimeout(function () { card.classList.remove('flash'); }, 1200);
     }
   });
   document.getElementById('delete-chat').addEventListener('click', async function () {
-    if (!chatId || !confirm('Delete this chat?')) return;
+    if (!chatId || !(await vcoConfirm('Delete this chat?', { ok: 'Delete', danger: true }))) return;
     await fetch('/ui/chats/' + chatId + '/delete', { method: 'POST' });
     location.href = '/chat';
   });

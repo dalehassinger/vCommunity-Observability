@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_run_error.html" import run_error %}
 {% set group_order = ['Overview', 'Inventory', 'Virtual machines', 'Host network & storage', 'Distributed switch', 'Performance', 'Health', 'System'] %}
 {% set all_sheets = data.sheets %}
 {% set current = (all_sheets|selectattr('table_name', 'equalto', q.sheet)|first) if q.sheet else none %}
@@ -52,7 +53,7 @@
   </div>
 </div>
 
-{% for r in run_errors %}<div class="alert alert-danger"><b>{{ r.collector }}</b> collector failed: {{ r.message }}</div>{% endfor %}
+{% for r in run_errors %}{{ run_error(r) }}{% endfor %}
 
 {% if not all_sheets %}
 <div class="alert alert-danger">No sheets collected yet. Click Refresh, or check the collector message on the Modules page.</div>

@@ -14,6 +14,7 @@
     var dark = document.documentElement.getAttribute('data-theme') === 'dark';
     var text = cssVar('--text', '#21333b'), subtle = cssVar('--subtle', '#5d6c74'), border = cssVar('--border', '#dde3e7');
     var base = { color: dark ? PALETTE_DARK : PALETTE, backgroundColor: 'transparent', animationDuration: 400,
+      animation: !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches),
       textStyle: { color: text, fontFamily: getComputedStyle(document.body).fontFamily },
       tooltip: { confine: true }, title: { show: showTitle === undefined ? !big : showTitle, text: c.title, left: 'center', top: 0, textStyle: { color: text, fontSize: 13, fontWeight: 600 } } };
     if (c.type === 'pie' || c.type === 'donut') {

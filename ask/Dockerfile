@@ -28,7 +28,7 @@ RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 
 # Shared look and feel: the first container's stylesheet, the About page files and the
 # vendored front-end libraries (Swagger UI, marked, DOMPurify), served under /shared.
-COPY core/static/app.css core/static/about.css core/static/about.js ./shared/
+COPY core/static/app.css core/static/about.css core/static/about.js core/static/dialogs.js ./shared/
 COPY core/static/vendor ./shared/vendor
 # The About page shows the project README and its screenshots.
 COPY README.md ./README.md

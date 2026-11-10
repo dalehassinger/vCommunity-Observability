@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_run_error.html" import run_error %}
 {% block title %}{{ dash.title }} · vCommunity-Observability{% endblock %}
 {% set statuses = ['green', 'yellow', 'red', 'gray', 'Connected', 'Disconnected', 'NotResponding', 'Maintenance'] %}
 {% block body %}
@@ -15,7 +16,7 @@
 </div>
 
 {% for r in run_errors %}
-<div class="alert alert-danger"><b>{{ r.collector }}</b> collector failed: {{ r.message }}</div>
+{{ run_error(r) }}
 {% endfor %}
 
 <div class="widget-grid">

@@ -264,6 +264,13 @@ The left sidebar has **Home** and **All dashboards**, then every enabled module'
 
 The header of both apps shows the app name and **– By: Dale Hassinger**. To change or remove the byline, edit the `brand-by` line in `core/templates/base.html` and `ask/app/templates/base.html`.
 
+**Accessibility and browser behavior (both apps):**
+
+- **Confirm and alert dialogs** (delete a chat, a report, a source or a schedule, remove a vCenter, change the embedding model, error messages) use one shared themed dialog, `core/static/dialogs.js`, instead of the browser's gray `confirm()` / `alert()` popups. It follows the light / dark theme, keeps focus inside the dialog, and **Esc**, **Cancel** or a click outside it cancel. Destructive actions show a red button and start with focus on **Cancel**. In scripts use `await vcoConfirm('Question?', { ok: 'Delete', danger: true })` and `await vcoAlert('Message')`; on a plain HTML form add `data-confirm="Question?"` (and optionally `data-confirm-ok="Remove"`).
+- **Reduced motion:** with the operating system's *Reduce motion* setting on, the sync spinner, the typing dots, the sidebar slide, switch and tree arrow animations, chart animations and smooth scrolling are turned off. Colour changes still happen.
+- **Switches:** the on/off sliders on both Settings pages and the Ask Knowledge sources page are announced as switches (`role="switch"`), not checkboxes.
+- **Folder picker** (Settings → Scheduled export → Browse…) closes on a click outside it (`closedby="any"`, with a small fallback for Safari). The Ask source editor dialog does not, so a stray click can't lose what you typed.
+
 ### Home
 
 **Home** (and the logo) opens the **DBH Insights** dashboard (`/dash/dbh-insights/insights`): opening `/` redirects there. To open another dashboard instead, set `home:` in `config/config.yaml` (or `VCO_HOME` in `.env`) to its path, for example `home: /dash/vcenter-inventory/inventory`, and restart. If that dashboard's module is missing or switched off on the Modules page, `/` opens **All dashboards** instead.
@@ -813,7 +820,7 @@ What is in the page:
 - Under the answer: **Open HTML report** (or **Open dashboard**), **Download .html** and **All reports**. A dashboard also shows a small version in the chat (KPI tiles, the charts with **Enlarge**, top 10 rows of each table).
 - **Web pages the model writes.** Any question can ask for its answer "as a modern HTML web page" (for example web search results, race results, a summary of blog posts). When the answer contains a whole web page (an ```` ```html ```` block with `<html>`, `<!doctype html>` or `<body>`), Ask saves it as a report of kind **Page** and shows it under the answer like the reports above (**Open web page**, **Download .html**, preview with **Expand** and **Hide preview**); the code itself is replaced in the answer by a one-line note. While the answer streams you still see the code; it turns into the page when the answer is done. Because the page is written by the model, it is served sandboxed even when opened in its own tab (CSP `sandbox allow-scripts`): it can't read Ask's storage or token or call Ask, can't load scripts, styles or fonts from the internet, and may show pictures from `https` sites. Pages are listed on the **Reports** page too.
 - **The report is also shown inside the answer**, right under those buttons, as a scrollable preview of the full page (520 px high). **Expand** makes it 85% of the window, **Hide preview** folds it away. The preview runs in a sandboxed frame: its charts and tables work, but it cannot reach Ask, your token or the chat page. It follows the chat's light or dark theme.
-- **Reports** in the sidebar: every report with its type, source, age and size, plus **Open**, **Download**, **Chat** (back to the chat that made it) and **Delete** (needs the API token when `ASK_API_TOKEN` is set).
+- **Reports** in the sidebar: every report with its type, source, age and size, plus **Open**, **Download**, **Chat** (back to the chat that made it) and **Delete** (needs the API token when `ASK_API_TOKEN` is set). To delete several at once, tick their checkboxes (Shift-click ticks a range, the header box ticks all) and press **Delete selected (n)**; **Delete all** removes every report. Both ask first and can't be undone (`POST /ui/reports/delete` with `{"ids": [...]}` or `{"all": true}`).
 - On disk: `data/reports/<id>.html` with a `<id>.json` file holding the title, type, source, question and chat (the `./ask-data` volume). Delete files there to clean up; the page lists whatever is in the folder.
 - API: `GET /api/reports` lists them; `GET /reports/<id>.html` opens one and `?download=1` downloads it as `ask-report-<title>.html`.
 
@@ -1092,7 +1099,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8081/api/ask -Headers $h -C
 
 ### Ask image
 
-- `ask/Dockerfile`, built from the repository root (it copies `core/static/app.css`, the About page files, the vendored front-end libraries and the README with its screenshots, so a theme or library fix lands in both containers). Python 3.13 slim + git, plus `tesseract-ocr` (English) and `poppler-utils` for OCR of scanned PDFs (build argument `OCR_LANGS` adds Tesseract languages), native arm64 on Apple Silicon, no PowerShell.
+- `ask/Dockerfile`, built from the repository root (it copies `core/static/app.css`, `core/static/dialogs.js`, the About page files, the vendored front-end libraries and the README with its screenshots, so a theme or library fix lands in both containers). Python 3.13 slim + git, plus `tesseract-ocr` (English) and `poppler-utils` for OCR of scanned PDFs (build argument `OCR_LANGS` adds Tesseract languages), native arm64 on Apple Silicon, no PowerShell.
 - Runs as non-root user `ask` (uid 10002) on port 8081, health check on `/api/health`.
 - Volumes: `./ask-data` → `/app/data` (index, chats, clones), `./ask-knowledge` → `/knowledge` (read-only, local folders), `./ask-sources` → `/sources` (extra or patched plug-ins), `./exports` → `/exports` (read-only, the dashboards' exports for `spreadsheet` sources), `./control` → `/app/control` (Apps on / off, shared with the dashboards).
 - Front-end libraries are vendored once, in `core/static/vendor/`, with their licences: Swagger UI, marked 18.1.3 (MIT), DOMPurify 3.4.17 (Apache-2.0/MPL-2.0) and Apache ECharts 6.1.0 (Apache-2.0, `echarts.min.js` with its LICENSE and NOTICE). The dashboards serve them at `/static/vendor/`, Ask at `/shared/vendor/`. Every answer, document and About page is sanitised by DOMPurify before display.
@@ -1336,6 +1343,7 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 
 | Symptom | Fix |
 | --- | --- |
+| A dashboard says a collector failed, for example "Can't find vcsa91.vcrocs.local on the network: the DNS lookup failed." | Failed collectors show a **plain-English summary** and what to do, with the full error under **Details** (also on the Modules page and for scheduled exports). For the DNS case, check `nslookup <vCenter>` on the computer running Docker: if it fails there too, the lab DNS server or network/VPN is the problem; if it works there but not in the container, add `extra_hosts: ["<vCenter name>:<IP>"]` (or `dns: [<lab DNS IP>]`) to the `vco` service in `docker-compose.yml`. Other cases covered: connection refused, no route, wrong user or password, untrusted certificate, missing password or vCenter, no PowerShell, timeouts, permission and server errors. Add more in `core/errors.py` (`RULES`) |
 | `vco` won't start: "not a directory" or "Are you trying to mount a directory onto a file" for `config.yaml` | `config/config.yaml` didn't exist at the first `docker compose up`, so Docker created a folder with that name. Remove the folder, `cp config/config.example.yaml config/config.yaml`, then `docker compose up -d` |
 | Linux: "unable to open database file", "readonly database" or "Permission denied" under `/app/data` | The host folder is owned by your user, but the containers run as uid 10001 (`vco`) and 10002 (`ask`). `sudo chown -R 10001 data exports extra-modules` and `sudo chown -R 10002 ask-data`, then restart |
 | Ask: an answer fails with "model ... not found" | The chat model isn't pulled in Ollama. `ollama pull <model>`, or pick an installed model on Ask's Settings page. `qwen3.8:27b-mlx` is for Apple Silicon only; on other machines use, for example, `qwen3:8b` |
@@ -1412,11 +1420,12 @@ core/                   FastAPI app, scheduler, module loader, runner, storage
   export_schedule.py    scheduled exports: validation, triggers, folder picker, pruning
   modules.py            module.yaml parsing and validation
   runner.py             runs collectors and exports as subprocesses
+  errors.py             plain-English summaries of collector errors (shown by templates/_run_error.html)
   storage.py            SQLite: one db per module + _core.db
   control.py            Apps on / off (./control/apps.json, same file as ask/app/control.py)
   perfstat.py           this container's cgroup counters (GET /perf/container) for Ask's Performance dashboard
   templates/            base layout, home, dashboards, Modules, Settings, About
-  static/               app.css, about.css/about.js (About page, shared with Ask), vendored Swagger UI, marked, DOMPurify, ECharts
+  static/               app.css, about.css/about.js (About page, shared with Ask), dialogs.js (themed confirm / alert dialog, shared with Ask), vendored Swagger UI, marked, DOMPurify, ECharts
 modules/                built-in modules (one folder each)
 config/                 config.example.yaml
 scripts/                smoke_test.py, New-OfflineBundle.ps1
@@ -1470,6 +1479,9 @@ requirements.in/.txt    direct dependencies / hashed lock file
 
 | Date | Change |
 | --- | --- |
+| 2026-11-10 | Ask **Reports** page: checkboxes to pick several reports (Shift-click for a range, header box for all), **Delete selected (n)** and **Delete all**, both confirmed first (`POST /ui/reports/delete`) |
+| 2026-11-10 | Collector errors in **plain English**: dashboards, the Modules page and scheduled exports show a one-line summary (DNS lookup failed, connection refused, login failed, untrusted certificate, timeout...) and what to do, with the raw traceback folded under **Details** (`core/errors.py`, `core/templates/_run_error.html`). Terminal colour codes from PowerShell errors are stripped before saving |
+| 2026-11-10 | Both apps, from a modern web guidance review: one themed **confirm / alert dialog** (`core/static/dialogs.js`, `vcoConfirm` / `vcoAlert` / `form[data-confirm]`) replaces the 11 browser `confirm()` / `alert()` popups; **reduced motion** respected (spinner, typing dots, sidebar slide, switch and tree arrows, chart animation, smooth scroll); on/off sliders are `role="switch"`; the export **folder picker** closes on a click outside it (`closedby="any"` + Safari fallback) |
 | 2026-11-08 | Ask: **No sources (just the model)** in the Sources menu (scope `none`) for rephrasing, grammar, summaries and translations of pasted text: no search or embedding, a separate editable **System prompt without sources** (`plain_system_prompt`), chat history kept. Works with an empty index |
 | 2026-11-08 | Ask Performance page: **Web search usage and cost this month**, counted from Ask's own calls (`app/webusage.py`, table `web_usage`): requests per provider and tool, failures, estimated cost from the new **Price per web call** settings, a per-day chart, and Brave's remaining monthly quota from its `X-RateLimit-*` headers. `/api/perf` adds `web` |
 | 2026-11-08 | Ask: the **Delete chat** button keeps its size next to a long chat title (text no longer wraps out of the button) |

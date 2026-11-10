@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_run_error.html" import short_error %}
 {% block title %}Settings · vCommunity-Observability{% endblock %}
 {% block head %}
 <style>
@@ -14,7 +15,8 @@
   .src { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 3px; background: var(--info-bg); color: var(--primary); margin-left: 6px; }
   .token-row { display: flex; gap: 10px; align-items: center; margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border); }
   .token-row label { font-size: 13px; font-weight: 600; color: var(--subtle); white-space: nowrap; }
-  .save-ok { display: flex; gap: 12px; align-items: flex-start; background: var(--ok-bg); border: 1px solid var(--ok); border-left-width: 4px; border-radius: 3px; padding: 12px 14px; margin-bottom: 14px; animation: save-ok-in .35s ease-out; }
+  .save-ok { display: flex; gap: 12px; align-items: flex-start; background: var(--ok-bg); border: 1px solid var(--ok); border-left-width: 4px; border-radius: 3px; padding: 12px 14px; margin-bottom: 14px;
+    @media (prefers-reduced-motion: no-preference) { animation: save-ok-in .35s ease-out; } }
   .save-ok-icon { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--ok); color: #fff; display: grid; place-items: center; font-weight: 700; }
   .save-ok-title { font-weight: 700; color: var(--ok); margin-bottom: 2px; }
   .save-ok-checks { margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--subtle); }
@@ -58,7 +60,7 @@
       <div class="app-switches">
       {% for a in apps.apps %}
         <div class="app-switch">
-          <label class="switch" style="font-weight:400"><input type="checkbox" id="app-{{ a.key }}" name="{{ a.key }}" value="1" {{ 'checked' if a.on }}><span></span></label>
+          <label class="switch" style="font-weight:400"><input type="checkbox" role="switch" id="app-{{ a.key }}" name="{{ a.key }}" value="1" {{ 'checked' if a.on }}><span></span></label>
           <label for="app-{{ a.key }}"><b>{{ a.title }}</b>
             <span class="subtle">{% if a.key == 'observability' %}Off pauses collection (scheduled runs, Run now) and scheduled exports; dashboards and the API keep the last data.
             {% else %}Off pauses the chat (questions in the page and POST /api/ask) and source syncs, and hides the Ask link here.{% endif %}</span></label>
@@ -93,7 +95,7 @@
             <a class="btn btn-outline" style="height:26px;font-size:11px" href="/settings?edit_vcenter={{ v.id }}#vcenters">Edit</a>
             {% if vcenters|length > 1 %}
             <form class="row-form reset-form" method="post" action="/settings/vcenters/{{ v.id }}/delete" style="margin:0"
-                  onsubmit="return confirm('Remove vCenter {{ v.id }}?')">
+                  data-confirm="Remove vCenter {{ v.id }}?" data-confirm-ok="Remove">
               {% if auth %}<input type="hidden" name="token" class="token-copy">{% endif %}
               <button class="btn btn-outline" style="height:26px;font-size:11px">Remove</button>
             </form>
@@ -128,7 +130,7 @@
         <div><input type="password" id="vc-password" name="password" autocomplete="new-password"
                placeholder="{{ 'Saved. Leave blank to keep it' if edit_vcenter.password_set else 'Not set' }}"></div></div>
       <div class="form-row"><label for="vc-ssl">Verify TLS certificate</label>
-        <div><label class="switch" style="font-weight:400"><input type="checkbox" id="vc-ssl" name="verify_ssl" value="1" {{ 'checked' if edit_vcenter.verify }}><span></span></label>
+        <div><label class="switch" style="font-weight:400"><input type="checkbox" role="switch" id="vc-ssl" name="verify_ssl" value="1" {{ 'checked' if edit_vcenter.verify }}><span></span></label>
           <div class="hint">Leave off for self-signed lab certificates.</div></div></div>
       {{ token_field() }}
       <div class="form-actions">
@@ -167,7 +169,7 @@
           {% if f == 'password' %}
             <input type="password" id="{{ c.name }}-{{ f }}" name="password" autocomplete="new-password" placeholder="{{ 'Saved. Leave blank to keep it' if c.password_set else 'Not set' }}">
           {% elif f == 'verify_ssl' %}
-            <label class="switch" style="font-weight:400"><input type="checkbox" id="{{ c.name }}-{{ f }}" name="verify_ssl" value="1" {{ 'checked' if c.verify }}><span></span></label>
+            <label class="switch" style="font-weight:400"><input type="checkbox" role="switch" id="{{ c.name }}-{{ f }}" name="verify_ssl" value="1" {{ 'checked' if c.verify }}><span></span></label>
             <div class="hint">Leave off for self-signed lab certificates.</div>
           {% else %}
             <input type="text" id="{{ c.name }}-{{ f }}" name="{{ f }}" value="{{ c['values'].get(f, '') }}">
@@ -242,11 +244,11 @@
         <div class="hint" style="margin-top:6px">Export</div><b>{{ cur.module }}: {{ cur.export_title }}</b>{% if cur.param_text %} <span class="subtle">({{ cur.param_text }})</span>{% endif %}</div>
       <div><div class="hint">Next run</div><b>{{ cur.next or '—' }}</b>
         <div class="hint" style="margin-top:6px">Folder</div><code class="sched-folder" title="{{ cur.folder_path }}">exports/{{ cur.folder if cur.folder != '.' else '' }}</code><div class="hint">keeps newest {{ cur.keep or 'all' }}</div></div>
-      <div><div class="hint">Last run</div>{% if cur.last_run %}<span class="label label-{{ 'ok' if cur.last_status == 'ok' else 'crit' }}">{{ cur.last_status }}</span> {{ cur.last_run }} UTC<div class="hint">{{ cur.last_message }}</div>{% else %}<b>never</b>{% endif %}</div>
+      <div><div class="hint">Last run</div>{% if cur.last_run %}<span class="label label-{{ 'ok' if cur.last_status == 'ok' else 'crit' }}">{{ cur.last_status }}</span> {{ cur.last_run }} UTC<div class="hint">{% if cur.last_status != 'ok' %}{{ short_error(cur.last_message) }}{% else %}{{ cur.last_message }}{% endif %}</div>{% else %}<b>never</b>{% endif %}</div>
       <div class="sched-actions">
         <button type="button" class="btn btn-primary" id="x-edit" style="height:26px;font-size:11px" {{ 'hidden' if editing }}>Edit</button>
         {% for action, label in [('run', 'Run now'), ('toggle', 'Resume' if not cur.enabled else 'Pause'), ('delete', 'Remove')] %}
-        <form class="row-form" method="post" action="/settings/exports/{{ cur.id }}/{{ action }}" style="margin:0" {% if action == 'delete' %}onsubmit="return confirm('Remove the schedule? Files already written are kept.')"{% endif %}>
+        <form class="row-form" method="post" action="/settings/exports/{{ cur.id }}/{{ action }}" style="margin:0" {% if action == 'delete' %}data-confirm="Remove the schedule? Files already written are kept." data-confirm-ok="Remove"{% endif %}>
           <input type="hidden" name="token" class="token-copy"><button class="btn btn-outline" style="height:26px;font-size:11px">{{ label }}</button></form>
         {% endfor %}
       </div>
@@ -285,7 +287,7 @@
     {% if auth %}<div class="token-row"><label for="exports-token">API token</label><input type="password" name="token" id="exports-token" form="add-export" autocomplete="off" placeholder="Required to save, edit, run, pause or remove the schedule"></div>{% endif %}
   </div>
 </section>
-<dialog id="folder-dialog" class="folder-dialog" aria-labelledby="fd-title">
+<dialog id="folder-dialog" class="folder-dialog" closedby="any" aria-labelledby="fd-title">
   <div class="fd-head"><h3 id="fd-title">Choose a folder</h3><button type="button" class="fd-x" data-close aria-label="Close">×</button></div>
   <div class="fd-path"><button type="button" class="btn btn-outline fd-up" title="Up one folder">↑ Up</button><code class="fd-where"></code></div>
   <ul class="fd-list" role="listbox"></ul>
@@ -327,6 +329,15 @@
     });
     up.addEventListener("click", () => cur.parent !== null && go(cur.parent));
     dlg.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", () => dlg.close()));
+    // A click on the backdrop closes it too: closedby="any" does that natively; this covers
+    // browsers without closedby (Safari).
+    if (!("closedBy" in HTMLDialogElement.prototype)) {
+      dlg.addEventListener("click", (e) => {
+        if (e.target !== dlg) return;
+        const r = dlg.getBoundingClientRect();
+        if (e.clientY < r.top || e.clientY > r.bottom || e.clientX < r.left || e.clientX > r.right) dlg.close();
+      });
+    }
     dlg.querySelector(".fd-select").addEventListener("click", () => { input.value = cur.path || "."; dlg.close(); });
     dlg.querySelector(".fd-create").addEventListener("click", async () => {
       const t = document.getElementById("exports-token");
@@ -344,7 +355,7 @@
     const edit = document.getElementById("x-edit");
     edit?.addEventListener("click", () => {
       f.hidden = false; edit.hidden = true;
-      f.scrollIntoView({ block: "start", behavior: "smooth" }); f.querySelector("select, input")?.focus({ preventScroll: true });
+      f.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); f.querySelector("select, input")?.focus({ preventScroll: true });
     });
     const freq = f.querySelector("#x-frequency"), exp = f.querySelector("#x-export");
     const sync = () => {

@@ -21,7 +21,7 @@
   <div class="card source-card {{ cls }}" data-name="{{ s.name }}" data-status="{{ s.status }}">
     <div class="card-header">
       <span>{{ s.title }} <span class="badge">{{ s.name }}</span>{% if s.origin == 'config' %}<span class="badge badge-info" title="Defined in ask.yaml; edits here win">ask.yaml</span>{% endif %}</span>
-      <button class="switch {{ 'on' if s.enabled else '' }}" type="button" data-toggle="{{ s.name }}" aria-pressed="{{ 'true' if s.enabled else 'false' }}">
+      <button class="switch {{ 'on' if s.enabled else '' }}" type="button" data-toggle="{{ s.name }}" role="switch" aria-checked="{{ 'true' if s.enabled else 'false' }}">
         <span></span>{{ 'On' if s.enabled else 'Off' }}
       </button>
     </div>
@@ -128,8 +128,8 @@
     b.onclick = function () { act(b.dataset.sync, '/ui/sources/' + b.dataset.sync + '/sync', {}, 'Sync started'); };
   });
   document.querySelectorAll('[data-full]').forEach(function (b) {
-    b.onclick = function () {
-      if (confirm('Re-embed every document of this source? This takes a few minutes.'))
+    b.onclick = async function () {
+      if (await vcoConfirm('Re-embed every document of this source? This takes a few minutes.', { ok: 'Re-index' }))
         act(b.dataset.full, '/ui/sources/' + b.dataset.full + '/sync', { full: true }, 'Full re-index started');
     };
   });
@@ -167,14 +167,14 @@
     });
   });
   document.querySelectorAll('[data-unload]').forEach(function (b) {
-    b.onclick = function () {
-      if (confirm('Remove ' + b.dataset.fname + ' and re-index?'))
+    b.onclick = async function () {
+      if (await vcoConfirm('Remove ' + b.dataset.fname + ' and re-index?', { ok: 'Remove', danger: true }))
         act(b.dataset.unload, '/ui/sources/' + b.dataset.unload + '/files/' + encodeURIComponent(b.dataset.fname) + '/delete', {}, 'Removed');
     };
   });
   document.querySelectorAll('[data-delete]').forEach(function (b) {
-    b.onclick = function () {
-      if (confirm('Delete source "' + b.dataset.delete + '" and its index? The files themselves are not touched.'))
+    b.onclick = async function () {
+      if (await vcoConfirm('Delete source "' + b.dataset.delete + '" and its index? The files themselves are not touched.', { ok: 'Delete', danger: true }))
         act(b.dataset.delete, '/ui/sources/' + b.dataset.delete + '/delete', {}, 'Deleted');
     };
   });

@@ -327,6 +327,20 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     templates = Jinja2Templates(directory=HERE / "templates")
     templates.env.globals["asset_v"] = asset_version(HERE / "static")
+    from .errors import explain
+
+    def explain_error(message: str | None, module: str | None = None, collector: str | None = None) -> dict:
+        """Plain-English collector error. For a vCenter collector the configured vCenter host
+        stands in when the error text itself doesn't name the server."""
+        host = ""
+        mod = core.modules.get(module or "")
+        if mod and any("vcenter" in c.connections for c in mod.collectors if not collector or c.name == collector):
+            vc = core.cfg.connections.get("vcenter") or {}
+            hosts = [i.get("host") for i in vc.get("instances") or [] if i.get("enabled", True) and i.get("host")]
+            host = ", ".join(hosts)
+        return explain(message, default_host=host)
+
+    templates.env.filters["explain_error"] = explain_error
     # Sidebar link to the vCommunity Ask chat container (empty = no link).
     templates.env.globals["ask_url"] = os.environ.get("VCO_ASK_URL", "")
     # Apps on / off (shared with the Ask container through ./control/apps.json).

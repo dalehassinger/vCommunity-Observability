@@ -13,11 +13,17 @@
 {% include "_token.html" %}
 <div class="card">
   {% if reports %}
-  <table class="datagrid">
-    <thead><tr><th>Report</th><th>Type</th><th>Source</th><th>Created</th><th class="num">Size</th><th></th></tr></thead>
+  <div class="reports-bar">
+    <span class="subtle" id="r-count">{{ reports | length }} report{{ '' if reports | length == 1 else 's' }}</span>
+    <button class="btn btn-outline btn-sm" type="button" id="r-del-sel" disabled>Delete selected</button>
+    <button class="btn btn-outline btn-sm" type="button" id="r-del-all">Delete all</button>
+  </div>
+  <table class="datagrid reports-table">
+    <thead><tr><th class="pick"><input type="checkbox" id="r-all" aria-label="Select all reports"></th><th>Report</th><th>Type</th><th>Source</th><th>Created</th><th class="num">Size</th><th></th></tr></thead>
     <tbody>
     {% for r in reports %}
       <tr>
+        <td class="pick"><input type="checkbox" class="r-pick" value="{{ r.id }}" aria-label="Select {{ r.title }}"></td>
         <td><a href="/reports/{{ r.id }}.html" target="_blank" rel="noopener">{{ r.title }}</a>
           {% if r.question %}<div class="subtle" style="font-size:12px">“{{ r.question | truncate(120) }}”</div>{% endif %}</td>
         <td><span class="badge {{ 'badge-info' if r.kind == 'dashboard' else '' }}" style="margin:0">{{ r.kind | capitalize }}</span></td>
@@ -43,9 +49,46 @@
 {% block scripts %}
 <script src="/static/admin.js?v={{ asset_v }}"></script>
 <script>
+  // Several at once: tick rows (Shift-click ticks a range), then Delete selected; or Delete all.
+  var picks = Array.prototype.slice.call(document.querySelectorAll('.r-pick'));
+  var all = document.getElementById('r-all'), delSel = document.getElementById('r-del-sel'), delAll = document.getElementById('r-del-all');
+  var last = -1;
+  function ticked() { return picks.filter(function (b) { return b.checked; }); }
+  function sync() {
+    var n = ticked().length;
+    if (delSel) { delSel.disabled = !n; delSel.textContent = n ? 'Delete selected (' + n + ')' : 'Delete selected'; }
+    if (all) { all.checked = n > 0 && n === picks.length; all.indeterminate = n > 0 && n < picks.length; }
+    picks.forEach(function (b) { b.closest('tr').classList.toggle('picked', b.checked); });
+  }
+  picks.forEach(function (b, i) {
+    b.addEventListener('click', function (e) {
+      if (e.shiftKey && last >= 0) {
+        var lo = Math.min(last, i), hi = Math.max(last, i);
+        for (var k = lo; k <= hi; k++) picks[k].checked = b.checked;
+      }
+      last = i; sync();
+    });
+  });
+  if (all) all.addEventListener('change', function () { picks.forEach(function (b) { b.checked = all.checked; }); sync(); });
+  async function bulk(body, question) {
+    if (!(await vcoConfirm(question, { ok: 'Delete', danger: true }))) return;
+    var m = document.getElementById('r-msg');
+    try {
+      var r = await AskAdmin.post('/ui/reports/delete', body);
+      m.textContent = 'Deleted ' + r.deleted + (r.deleted === 1 ? ' report.' : ' reports.'); m.className = 'form-msg ok';
+      setTimeout(function () { location.reload(); }, 500);
+    } catch (e) { m.textContent = e.message; m.className = 'form-msg bad'; }
+  }
+  if (delSel) delSel.addEventListener('click', function () {
+    var ids = ticked().map(function (b) { return b.value; });
+    if (ids.length) bulk({ ids: ids }, 'Delete ' + ids.length + (ids.length === 1 ? ' report' : ' reports') + '? This cannot be undone.');
+  });
+  if (delAll) delAll.addEventListener('click', function () {
+    bulk({ all: true }, 'Delete all ' + picks.length + (picks.length === 1 ? ' report' : ' reports') + '? This cannot be undone.');
+  });
   document.querySelectorAll('[data-rdel]').forEach(function (b) {
     b.onclick = async function () {
-      if (!confirm('Delete the report "' + b.dataset.title + '"?')) return;
+      if (!(await vcoConfirm('Delete the report "' + b.dataset.title + '"?', { ok: 'Delete', danger: true }))) return;
       var m = document.getElementById('r-msg');
       try { await AskAdmin.post('/ui/reports/' + b.dataset.rdel + '/delete', {}); location.reload(); }
       catch (e) { m.textContent = e.message; m.className = 'form-msg bad'; }

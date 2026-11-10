@@ -19,7 +19,7 @@
     <div class="app-switches">
     {% for a in apps.apps %}
       <div class="app-switch">
-        <label class="switch"><input type="checkbox" data-app="{{ a.key }}" id="app-{{ a.key }}" {{ 'checked' if a.on else '' }}><span></span></label>
+        <label class="switch"><input type="checkbox" role="switch" data-app="{{ a.key }}" id="app-{{ a.key }}" {{ 'checked' if a.on else '' }}><span></span></label>
         <label for="app-{{ a.key }}"><b>{{ a.title }}</b>
           <span class="subtle">{% if a.key == 'ask' %}Off pauses the chat (questions in the page and POST /api/ask) and source syncs; chats and sources are kept.
           {% else %}Off pauses the dashboards' collection and scheduled exports, and hides the Observability link here.{% endif %}</span></label>
@@ -50,7 +50,7 @@
         <div><select id="s-embed_model" data-key="embed_model" data-current="{{ settings.embed_model }}"><option>{{ settings.embed_model }}</option></select>
           <div class="hint">Turns text into vectors for search. <b>Changing it clears the index and re-embeds every source.</b></div></div></div>
       <div class="field"><label for="s-think">Show model thinking{% if 'think' in overridden %}<span class="override">saved</span>{% endif %}</label>
-        <div><label class="switch"><input type="checkbox" id="s-think" data-key="think" {{ 'checked' if settings.think else '' }}><span></span>On</label>
+        <div><label class="switch"><input type="checkbox" role="switch" id="s-think" data-key="think" {{ 'checked' if settings.think else '' }}><span></span>On</label>
           <div class="hint">For thinking models (Qwen 3.x and others): slower, but the reasoning is shown above the answer.</div></div></div>
       <div class="field"><label for="s-keep_alive">Keep model loaded{% if 'keep_alive' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><input type="text" id="s-keep_alive" data-key="keep_alive" value="{{ settings.keep_alive }}"><div class="hint">How long Ollama keeps the models in memory after a question, e.g. 10m, 1h, 0.</div></div></div>
@@ -70,13 +70,13 @@
         <div><input type="number" id="s-{{ key }}" data-key="{{ key }}" value="{{ settings[key] }}" step="{{ '0.05' if key == 'temperature' else '1' }}"><div class="hint">{{ hint }}</div></div></div>
       {% endfor %}
       <div class="field"><label for="s-expand_links">Follow links{% if 'expand_links' in overridden %}<span class="override">saved</span>{% endif %}</label>
-        <div><label class="switch"><input type="checkbox" id="s-expand_links" data-key="expand_links" {{ 'checked' if settings.expand_links else '' }}><span></span>On</label>
+        <div><label class="switch"><input type="checkbox" role="switch" id="s-expand_links" data-key="expand_links" {{ 'checked' if settings.expand_links else '' }}><span></span>On</label>
           <div class="hint">Add files the matches link to (same_name, internal_derive, same_meaning, related).</div></div></div>
       <div class="field"><label for="s-data_questions">Data questions{% if 'data_questions' in overridden %}<span class="override">saved</span>{% endif %}</label>
-        <div><label class="switch"><input type="checkbox" id="s-data_questions" data-key="data_questions" {{ 'checked' if settings.data_questions else '' }}><span></span>On</label>
+        <div><label class="switch"><input type="checkbox" role="switch" id="s-data_questions" data-key="data_questions" {{ 'checked' if settings.data_questions else '' }}><span></span>On</label>
           <div class="hint">For spreadsheet sources: counting, totals and top-N questions are answered by a read-only SQL query the model writes over the sheets, shown with the answer.</div></div></div>
       <div class="field"><label for="s-overview_questions">Whole-source questions{% if 'overview_questions' in overridden %}<span class="override">saved</span>{% endif %}</label>
-        <div><label class="switch"><input type="checkbox" id="s-overview_questions" data-key="overview_questions" {{ 'checked' if settings.overview_questions else '' }}><span></span>On</label>
+        <div><label class="switch"><input type="checkbox" role="switch" id="s-overview_questions" data-key="overview_questions" {{ 'checked' if settings.overview_questions else '' }}><span></span>On</label>
           <div class="hint">"How many posts…", "summarize this blog", "what does it write about most": answered from a catalog of every post in the selected sources (titles, dates, headings, exact counts) instead of only the best few chunks.</div></div></div>
       <div class="field"><label for="s-agent_url">Host agent URL{% if 'agent_url' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><input type="text" id="s-agent_url" data-key="agent_url" value="{{ settings.agent_url }}" placeholder="http://host.docker.internal:9101">
@@ -85,7 +85,7 @@
         <div><input type="text" id="s-observability_url" data-key="observability_url" value="{{ settings.observability_url }}" placeholder="http://localhost:8080">
           <div class="hint">Adds a sidebar link back to the vCommunity-Observability dashboards.</div></div></div>
       <div class="field"><label for="s-web_search">Web search (Ollama){% if 'web_search' in overridden %}<span class="override">saved</span>{% endif %}</label>
-        <div><label class="switch"><input type="checkbox" id="s-web_search" data-key="web_search" {{ 'checked' if settings.web_search else '' }}><span></span>On</label>
+        <div><label class="switch"><input type="checkbox" role="switch" id="s-web_search" data-key="web_search" {{ 'checked' if settings.web_search else '' }}><span></span>On</label>
           <div class="hint">Adds <b>Web search (Ollama)</b> to the chat's Sources menu: the model may call <code>web_search</code> and <code>web_fetch</code>
             (Ollama's cloud web search, needs internet). Needs an ollama.com API key as <code>OLLAMA_API_KEY</code> in <code>.env</code>:
             {% if web_key_set %}<b>set</b>{% else %}<b>not set</b>{% endif %}. The chat model must support tools. Leave off on dark sites.</div></div></div>
@@ -96,7 +96,7 @@
         <div><input type="text" id="s-web_search_url" data-key="web_search_url" value="{{ settings.web_search_url }}" placeholder="https://ollama.com">
           <div class="hint">Where <code>/api/web_search</code> and <code>/api/web_fetch</code> are called. Keep <code>https://ollama.com</code>.</div></div></div>
       <div class="field"><label for="s-brave_search">Web search (Brave){% if 'brave_search' in overridden %}<span class="override">saved</span>{% endif %}</label>
-        <div><label class="switch"><input type="checkbox" id="s-brave_search" data-key="brave_search" {{ 'checked' if settings.brave_search else '' }}><span></span>On</label>
+        <div><label class="switch"><input type="checkbox" role="switch" id="s-brave_search" data-key="brave_search" {{ 'checked' if settings.brave_search else '' }}><span></span>On</label>
           <div class="hint">Adds <b>Web search (Brave)</b> to the chat's Sources menu: the model may call <code>brave_search</code>
             (Brave Search API, needs internet). Needs a Brave Search API key as <code>BRAVE_API_KEY</code> in <code>.env</code>:
             {% if brave_key_set %}<b>set</b>{% else %}<b>not set</b>{% endif %}. Can be used together with Ollama web search or on its own. Leave off on dark sites.</div></div></div>
@@ -209,7 +209,7 @@
     var values = {};
     document.querySelectorAll('[data-key]').forEach(function (i) { values[i.dataset.key] = i.type === 'checkbox' ? i.checked : i.value; });
     var emb = document.getElementById('s-embed_model');
-    if (emb.value !== emb.dataset.current && !confirm('Changing the embedding model clears the index and re-embeds every source. Continue?')) return;
+    if (emb.value !== emb.dataset.current && !(await vcoConfirm('Changing the embedding model clears the index and re-embeds every source. Continue?', { ok: 'Continue', danger: true }))) return;
     var m = document.getElementById('save-msg');
     try {
       var r = await AskAdmin.post('/ui/settings', { values: values });

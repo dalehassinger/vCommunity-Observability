@@ -30,6 +30,7 @@ import tempfile
 from pathlib import Path
 
 from .config import Config
+from .errors import clean
 from .modules import Collector, Export, Module
 from .storage import Storage, utcnow
 from .vcenters import normalize_vcenter, public_instance, selected_instances
@@ -154,7 +155,7 @@ def run_collector(cfg: Config, storage: Storage, mod: Module, c: Collector) -> d
         log.info("%s/%s: %d rows", mod.name, c.name, total)
         return {"status": "ok", "rows": total}
     except Exception as exc:
-        storage.record_run(mod.name, c.name, started, "error", 0, str(exc))
+        storage.record_run(mod.name, c.name, started, "error", 0, clean(str(exc)))
         log.error("%s/%s failed: %s", mod.name, c.name, exc)
         return {"status": "error", "message": str(exc)}
     finally:

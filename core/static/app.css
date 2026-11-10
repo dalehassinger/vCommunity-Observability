@@ -172,7 +172,8 @@ a.btn:hover { text-decoration: none; }
 /* Small screens: sidebar becomes a slide-out drawer */
 @media (max-width: 860px) {
   .nav-toggle { display: inline-flex; }
-  .sidenav { position: fixed; left: 0; top: 56px; z-index: 15; transform: translateX(-100%); transition: transform .2s; box-shadow: 2px 0 8px rgba(0,0,0,.2); }
+  .sidenav { position: fixed; left: 0; top: 56px; z-index: 15; transform: translateX(-100%); box-shadow: 2px 0 8px rgba(0,0,0,.2);
+    @media (prefers-reduced-motion: no-preference) { transition: transform .2s; } }
   body.nav-open .sidenav { transform: none; }
   .content { padding: 16px; }
   .brand-name { font-size: 15px; }
@@ -187,7 +188,8 @@ a.btn:hover { text-decoration: none; }
 .switch span { position: relative; width: 36px; height: 20px; border-radius: 999px; background: var(--track);
   border: 1px solid var(--border); transition: background .15s; flex: none; }
 .switch span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
-  background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: left .15s; }
+  background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3);
+  @media (prefers-reduced-motion: no-preference) { transition: left .15s; } }
 .switch.on { color: var(--ok); }
 .switch.on span { background: var(--ok); border-color: var(--ok); }
 .switch.on span::after { left: 18px; }
@@ -235,3 +237,23 @@ label.switch { position: relative; }
 .app-switch { display: flex; gap: 14px; align-items: flex-start; }
 .app-switch .switch { min-width: 0; }
 .app-switch b { display: block; }
+
+/* Confirm and alert dialog (core/static/dialogs.js: vcoConfirm, vcoAlert, form[data-confirm]) */
+.ui-dialog { width: min(440px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); color: var(--text); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+.ui-dialog::backdrop { background: rgba(15, 26, 32, .5); }
+.ui-dialog form { padding: 18px 20px 16px; margin: 0; }
+.ui-dialog-text { margin: 0 0 18px; white-space: pre-line; overflow-wrap: anywhere; }
+.ui-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.btn-danger { background: var(--crit); border-color: var(--crit); color: #fff; }
+.btn-danger:hover { filter: brightness(.92); }
+[data-theme="dark"] .btn-danger { color: #1b2a32; }
+
+/* Failed collector box (core/templates/_run_error.html, core/errors.py) */
+.run-error-hint { margin-top: 4px; color: var(--subtle); }
+.run-error-details { margin-top: 6px; }
+.run-error-details > summary { cursor: pointer; font-size: 12px; color: var(--subtle); width: max-content; }
+.run-error-details pre { margin: 6px 0 0; max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 3px; padding: 8px 10px; }
+.run-error-details p { margin: 6px 0 0; }

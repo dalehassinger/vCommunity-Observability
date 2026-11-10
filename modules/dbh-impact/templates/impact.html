@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_run_error.html" import run_error %}
 {% block title %}DBH Impact · vCommunity-Observability{% endblock %}
 {% set source = data.source[0] if data.source else none %}
 {% set targets = data.targets %}
@@ -57,7 +58,7 @@
   </div>
 </div>
 
-{% for r in run_errors %}<div class="alert alert-danger"><b>{{ r.collector }}</b> collector failed: {{ r.message }}</div>{% endfor %}
+{% for r in run_errors %}{{ run_error(r) }}{% endfor %}
 {% for e in query_errors %}<div class="alert alert-danger">{{ e }}</div>{% endfor %}
 
 {% if not targets %}
