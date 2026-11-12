@@ -282,6 +282,7 @@ assert "Create schedule" in client.get("/settings").text
 # Apps on / off (./control/apps.json shared with Ask): identical copies, pause and resume.
 import filecmp, tempfile  # noqa: E401,E402
 assert filecmp.cmp(root / "core" / "control.py", root / "ask" / "app" / "control.py", shallow=False), "control.py copies differ"
+assert filecmp.cmp(root / "core" / "links.py", root / "ask" / "app" / "links.py", shallow=False), "links.py copies differ"
 from core import control as ctl  # noqa: E402
 os.environ["VCO_CONTROL_FILE"] = tempfile.mkdtemp() + "/apps.json"
 assert ctl.is_on("observability") and ctl.is_on("ask")
@@ -310,9 +311,74 @@ assert raw["app"] == "observability" and "net_rx" in raw, raw
 ask = os.environ.get("VCO_ASK_URL", "")
 r = client.get("/performance", follow_redirects=False)
 if ask:
-    assert r.status_code == 302 and r.headers["location"] == ask.rstrip("/") + "/performance", r.headers
-    assert f'href="{ask}/performance"' in client.get("/overview").text
+    # A localhost link follows the host the browser used (core/links.py); the test client is "testserver".
+    from core.links import follow_host
+    want = follow_host(ask, "testserver").rstrip("/")
+    assert r.status_code == 302 and r.headers["location"] == want + "/performance", r.headers
+    assert f'href="{want}/performance"' in client.get("/overview").text
+    assert follow_host("http://localhost:8081", "192.168.1.50") == "http://192.168.1.50:8081"
+    assert follow_host("https://ask.lab.local", "192.168.1.50") == "https://ask.lab.local"
+    assert follow_host("http://localhost:8081", "localhost") == "http://localhost:8081"
 else:
     assert r.status_code == 404 and "/performance" not in client.get("/overview").text
 print("  performance: ok")
+
+# Logs module: the syslog service (started for real on a free port), search, alerts, settings.
+if "logs" in runnable:
+    import socket
+    import time as _time
+    sys.path.insert(0, str(root / "modules" / "logs"))
+    import logstore  # noqa: E402
+    r5424 = logstore.parse('<134>1 2026-11-12T10:00:00.123Z esx9-01.lab.local vobd 2097 - [meta@6876 a="b\\"c"] '
+                           'Lost access to volume', "10.0.0.1")
+    assert (r5424["host"], r5424["app"], r5424["severity"], r5424["facility"], r5424["message"]) == \
+        ("esx9-01.lab.local", "vobd", 6, 16, "Lost access to volume"), r5424
+    assert '"a": "b\\"c"' in r5424["sd"], r5424["sd"]
+    r3164 = logstore.parse("<13>Nov 12 07:01:02 myhost sshd[123]: hello", "10.0.0.2")
+    assert (r3164["host"], r3164["app"], r3164["procid"], r3164["message"]) == ("myhost", "sshd", "123", "hello"), r3164
+    assert logstore.parse("plain text", "10.0.0.3")["host"] == "10.0.0.3"
+    w, p = logstore.build_where('"lost access" host:esx9-* -debug sev:err app:vobd')
+    assert "logs_fts MATCH" in w and "severity <= ?" in w and "LIKE" in w, w
+    for page in ("/dash/logs/search", "/dash/logs/alerts", "/dash/logs/settings"):
+        assert client.get(page).status_code == 200, page
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    os.environ["VCO_SYSLOG_UDP_PORT"] = os.environ["VCO_SYSLOG_TCP_PORT"] = str(port)
+    core.services.start()
+    try:
+        deadline = _time.time() + 20
+        while _time.time() < deadline and not (core.services.status("logs", "syslog") or {}).get("running"):
+            _time.sleep(0.2)
+        _time.sleep(1.0)
+        msg = b"<11>1 2026-11-12T10:00:00Z esx9-02.lab.local vobd 1 - - Device has entered the All Paths Down state"
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as u:
+            for _ in range(3):
+                u.sendto(msg, ("127.0.0.1", port))
+        with socket.create_connection(("127.0.0.1", port)) as t:
+            t.sendall(str(len(msg)).encode() + b" " + msg + b"<13>Nov 12 07:01:02 myhost sshd[9]: tcp line\n")
+        found = 0
+        while _time.time() < deadline + 10 and found < 5:
+            _time.sleep(0.5)
+            found = client.get("/ui/logs/search?range=1h").json()["total"]
+        assert found == 5, found
+        res = client.get('/ui/logs/search?q="all paths down" host:esx9-02*&sev=err').json()
+        assert res["total"] == 4 and res["items"][0]["app"] == "vobd", res
+        assert client.get("/api/logs/search").status_code == 401
+        assert client.get("/api/logs/summary", headers=auth).json()["last_hour"] == 5
+        assert client.get("/ui/logs/hosts").json()["count"] == 2
+        assert {a["app"] for a in client.get("/ui/logs/apps").json()["items"]} == {"vobd", "sshd"}
+        assert client.get("/ui/logs/search?range=1h&app=sshd").json()["total"] == 1
+        assert client.get("/ui/logs/histogram?range=1h").json()["buckets"]
+        assert client.get("/ui/logs/export.csv?range=1h").text.count("\n") == 6
+        rule = {"name": "APD", "query": '"all paths down"', "threshold": 2, "window_minutes": 10}
+        assert client.post("/ui/logs/alerts", json=rule).status_code == 401, "changes need the token"
+        assert client.post("/ui/logs/alerts", json=rule, headers=auth).json()["ok"]
+        assert client.post("/ui/logs/alerts/preview", json=rule).json()["would_fire"]
+        assert client.put("/ui/logs/settings", json={"retention_days": 999}, headers=auth).status_code == 400
+        assert client.put("/ui/logs/settings", json={"retention_days": 5, "max_size_gb": 5}, headers=auth).json()["ok"]
+        assert client.get("/perf/container").json()["logs"]["per_hour"] == 5
+    finally:
+        core.services.stop()
+    print("  logs: ok")
 print("ALL OK")

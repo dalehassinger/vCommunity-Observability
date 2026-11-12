@@ -68,6 +68,12 @@ SETTINGS: dict[str, dict[str, Any]] = {
     "mcp_max_rounds":   {"default": 6, "type": "int"},
     "mcp_result_chars": {"default": 16000, "type": "int"},
     "observability_url": {"default": "", "env": "ASK_OBSERVABILITY_URL", "type": "str"},
+    # Activity log: prompts, the model's thinking, tool calls and answers sent as syslog to the
+    # Logs module (app vcommunity-ask). tcp://vco:5514 is the vco container on the compose network.
+    "activity_log":          {"default": True, "env": "ASK_ACTIVITY_LOG", "type": "bool"},
+    "activity_log_url":      {"default": "tcp://vco:5514", "env": "ASK_ACTIVITY_LOG_URL", "type": "str"},
+    "activity_log_thinking": {"default": True, "type": "bool"},
+    "activity_log_answers":  {"default": True, "type": "bool"},
     # Ollama web search (cloud): off by default (dark sites). The API key is OLLAMA_API_KEY in .env.
     "web_search":       {"default": False, "env": "ASK_WEB_SEARCH", "type": "bool"},
     "web_search_url":   {"default": "https://ollama.com", "env": "ASK_WEB_SEARCH_URL", "type": "str"},

@@ -26,11 +26,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from . import __version__
+from .links import follow_host
 from .config import SETTINGS, coerce, load_config
 from .db import DB
 from .indexer import NAME_RE, Indexer, discover_plugins
 from .ollama import Ollama, OllamaError
-from . import control, mcp, rag, websearch, webusage
+from . import control, mcp, rag, syslog_out, websearch, webusage
 from .reports import Reports
 from .perf import SAMPLE_SECONDS, Sampler
 
@@ -60,9 +61,24 @@ def find_readme() -> Path | None:
 log = logging.getLogger("ask")
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 # File types each upload-capable source plug-in accepts on the Knowledge sources page.
-UPLOAD_TYPES_BY_PLUGIN = {"spreadsheet": {".xlsx", ".csv"}, "pdf": {".pdf"}}
+UPLOAD_TYPES_BY_PLUGIN = {"spreadsheet": {".xlsx", ".csv"}, "pdf": {".pdf"}, "openapi": {".json", ".yaml", ".yml"}}
 UPLOAD_TYPES = set().union(*UPLOAD_TYPES_BY_PLUGIN.values())
-UPLOAD_DEFAULT_MODE = {"spreadsheet": "replace", "pdf": "keep"}
+UPLOAD_DEFAULT_MODE = {"spreadsheet": "replace", "pdf": "keep", "openapi": "keep"}
+
+
+def _check_spec(path: Path, filename: str) -> None:
+    """An uploaded API spec must parse and look like OpenAPI / Swagger (paths + openapi or swagger)."""
+    try:
+        raw = path.read_text(encoding="utf-8-sig")
+        if filename.lower().endswith(".json"):
+            spec = json.loads(raw)
+        else:
+            import yaml
+            spec = yaml.safe_load(raw)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"That file does not parse as {'JSON' if filename.lower().endswith('.json') else 'YAML'}: {str(e)[:160]}")
+    if not isinstance(spec, dict) or not isinstance(spec.get("paths"), dict) or not (spec.get("openapi") or spec.get("swagger")):
+        raise HTTPException(400, "That is not an OpenAPI or Swagger spec (it needs openapi or swagger, and paths)")
 UPLOAD_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._()+-]{0,150}$")
 
 
@@ -207,7 +223,7 @@ def create_app() -> FastAPI:
         s = settings()
         return templates.TemplateResponse(request, name, {
             "active": active, "chats": db.list_chats(20), "sources": db.list_sources(),
-            "observability_url": s["observability_url"] if control.is_on("observability") else "",
+            "observability_url": follow_host(s["observability_url"], request.url.hostname) if control.is_on("observability") else "",
             "ask_paused": not control.is_on("ask"), "version": __version__,
             "auth": bool(cfg.api_tokens), "settings": s, **ctx})
 
@@ -433,7 +449,9 @@ def create_app() -> FastAPI:
     @app.get("/ui/perf", include_in_schema=False)
     def ui_perf(request: Request, hours: float = 1.0):
         same_origin(request)
-        return perf_payload(hours)
+        obs = settings().get("observability_url") or ""
+        return {**perf_payload(hours),
+                "observability_url": follow_host(obs, request.url.hostname) if obs and control.is_on("observability") else ""}
 
     @app.get("/perf/container", include_in_schema=False)
     def perf_container():
@@ -474,7 +492,18 @@ def create_app() -> FastAPI:
         overridden = set(db.get_settings())
         return page(request, "settings.html", "/settings", spec=SETTINGS, overridden=overridden,
                     defaults=cfg.defaults, config_path=str(cfg.path), web_key_set=bool(websearch.api_key()), brave_key_set=bool(websearch.brave_key()),
-                    apps=control.status())
+                    apps=control.status(), activity=syslog_out.status(settings()))
+
+    @app.get("/ui/activity-log", include_in_schema=False)
+    def ui_activity_status():
+        """Where the activity log goes, and how many messages were sent or dropped."""
+        return syslog_out.status(settings())
+
+    @app.post("/ui/activity-log/test", include_in_schema=False, dependencies=[Depends(require_admin)])
+    def ui_activity_test(body: dict = Body(default={})):
+        """Send one test message to the URL typed on the Settings page (saved or not)."""
+        url = str(body.get("url") or "").strip() or settings()["activity_log_url"]
+        return syslog_out.test({**settings(), "activity_log_url": url})
 
     @app.get("/docs", include_in_schema=False)
     def swagger():
@@ -576,6 +605,12 @@ def create_app() -> FastAPI:
             if key in ("top_k", "history_turns") and not (0 <= v <= 50):
                 errors[key] = "use 0 to 50"
                 continue
+            if key == "activity_log_url" and v:
+                try:
+                    syslog_out.parse_url(v)
+                except ValueError as e:
+                    errors[key] = str(e)
+                    continue
             if v == cfg.defaults.get(key):
                 db.delete_setting(key)  # back to the default: keep the table clean
             else:
@@ -661,11 +696,11 @@ def create_app() -> FastAPI:
 
     @app.put("/ui/sources/{name}/files/{filename}", include_in_schema=False, dependencies=[Depends(require_admin)])
     async def ui_upload(name: str, filename: str, request: Request):
-        """Upload one file to a spreadsheet (.xlsx, .csv) or pdf (.pdf) source (the raw
-        file is the request body), then sync the source."""
+        """Upload one file to a spreadsheet (.xlsx, .csv), pdf (.pdf) or openapi (.json,
+        .yaml, .yml) source (the raw file is the request body), then sync the source."""
         src = db.get_source(name)
         if not src or src["plugin"] not in UPLOAD_TYPES_BY_PLUGIN:
-            raise HTTPException(404, "Uploads are for spreadsheet and PDF sources")
+            raise HTTPException(404, "Uploads are for spreadsheet, PDF and API spec sources")
         types = UPLOAD_TYPES_BY_PLUGIN[src["plugin"]]
         filename = os.path.basename(filename).strip()
         if Path(filename).suffix.lower() not in types or not UPLOAD_NAME_RE.match(filename):
@@ -691,6 +726,8 @@ def create_app() -> FastAPI:
                 raise HTTPException(400, "That is not an .xlsx workbook (an .xls or .xlsm file? Save it as .xlsx)")
             if filename.lower().endswith(".pdf") and head != b"%PDF":
                 raise HTTPException(400, "That is not a PDF file")
+            if src["plugin"] == "openapi":
+                _check_spec(part, filename)
         except BaseException:
             part.unlink(missing_ok=True)
             raise

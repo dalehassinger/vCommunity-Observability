@@ -23,6 +23,7 @@ The core stays small. Every feature is an **add-on module** that can be written 
 - [Getting started](#getting-started)
 - [Using the web UI](#using-the-web-ui)
 - [Modules included](#modules-included)
+- [Logs (syslog server)](#logs-syslog-server)
 - [vCommunity Ask (local AI chat)](#vcommunity-ask-local-ai-chat)
 - [Configuration reference](#configuration-reference)
 - [Docker image and runtime](#docker-image-and-runtime)
@@ -97,6 +98,8 @@ SQLite is the only data store. It runs inside the Python process, so there is no
 Passwords saved on the Settings page are stored **unencrypted** in `_core.db`, so protect `data/` as you would `.env`.
 
 **Reads are read-only.** Dashboards and the REST endpoints that MP Builder calls open module databases with a read-only connection (`mode=ro`), and manifest queries must be `SELECT`. Only collectors write.
+
+**The Logs module has its own database**, `data/syslog.db`: the syslog messages (with an FTS5 full-text index), per-minute message counts, the Logs settings and the alert rules and fired alerts. Only the syslog listener writes messages; it trims the file by age and size (see [Logs (syslog server)](#logs-syslog-server)).
 
 **vCommunity Ask has its own database**, `ask.db` in its own volume, completely separate from these files. See [The Ask database](#the-ask-database-askdb).
 
@@ -323,7 +326,7 @@ When API tokens are configured, every save on this page needs one of them (there
 
 There is **one Performance dashboard** for both containers, and it lives in vCommunity Ask (it also has the Mac's CPU, GPU and memory, Ollama and answer speed). **Performance**, the first link under Administration in this sidebar, opens it at `VCO_ASK_URL/performance`, the same page as the Performance link in Ask's sidebar. `/performance` here redirects there too. The link is hidden when `VCO_ASK_URL` is empty.
 
-The dashboard shows a KPI card and CPU and memory, network and disk charts for each container, vCommunity Observability (`vco`) and vCommunity Ask (`vco-ask`). This container gives Ask its numbers at the open `GET /perf/container` endpoint (raw cgroup counters, no secrets, no Docker socket). Ask reads it every 10 seconds at `ASK_VCO_INTERNAL_URL` (default `http://vco:8080`). If this container doesn't answer, its card turns red and says **Not running**. Because the dashboard is served by Ask, it needs the Ask container to be running. Pausing Ask with the Apps on / off slider keeps the dashboard working. See [Performance page and host agent](#performance-page-and-host-agent).
+The dashboard shows a KPI card and CPU and memory, network and disk charts for each container, vCommunity Observability (`vco`) and vCommunity Ask (`vco-ask`). This container gives Ask its numbers at the open `GET /perf/container` endpoint (raw cgroup counters, no secrets, no Docker socket). Ask reads it every 10 seconds at `ASK_VCO_INTERNAL_URL` (default `http://vco:8080`). If this container doesn't answer, its card turns red and says **Not running**. When the `logs` module is on, the dashboard also has a **Logs** panel: logs per second, per minute and per hour, log disk space used and disk space available (the numbers come in the same `/perf/container` answer, under `logs`). Because the dashboard is served by Ask, it needs the Ask container to be running. Pausing Ask with the Apps on / off slider keeps the dashboard working. See [Performance page and host agent](#performance-page-and-host-agent).
 
 ### API docs
 
@@ -346,6 +349,7 @@ The README and `docs/screenshots/` are copied into both images at build time, so
 | `dbh-insights` | Python (pyVmomi) | The [DBH Insights](https://github.com/DBH-Insights/DBH-Insights) inventory: 27 sheets plus Cluster Capacity. Insights and Sheets pages, **Export XLSX** and CSV per sheet | `/<sheet>` for every sheet (`/vinfo`, `/vhost`, `/cluster-capacity`...), `/sheets`, `/vhealth/by-type`, `/export/xlsx`, `/export/csv?sheet=vInfo` |
 | `dbh-topology` | Python (pyVmomi) | DBH Insights **Topology**: hosts by cluster, datastores and every mount between them, with **Download HTML** | `/hosts`, `/datastores`, `/mounts`, `/single-host-datastores` |
 | `dbh-impact` | Python (pyVmomi) | DBH Insights **Impact**: what stops if one host or datastore fails, and whether HA could restart it | `/hosts`, `/datastores`, `/critical`, `/single-points-of-failure` |
+| `logs` | Python (service + web extension) | **Syslog server** on port 514 (UDP and TCP): full-text search, live tail, senders, alerts by email or webhook, retention by days and size. Three pages: Logs, Log alerts, Log settings. See [Logs (syslog server)](#logs-syslog-server) | `/logs/search`, `/logs/summary`, `/logs/hosts`, `/logs/alerts` |
 
 All vCenter modules use the shared `vcenter` connection. Configure one or many vCenters in `config.yaml` (`connections.vcenter` flat form, or `instances:`) or on the Settings page. Collectors receive every enabled instance as `VCO_VCENTERS` (JSON) and stamp rows with a `vcenter` id so names and morefs do not collide. A module can limit itself with settings `vcenters: [id, ...]`.
 
@@ -402,6 +406,89 @@ Port of the Impact view (`collect/js/impact.js`). Pick a host or datastore under
 Each collection answers the question for every host and datastore, so the answers are also REST endpoints for MP Builder (`/api/dbh-impact/hosts` gives severity, VMs running, memory to restart and headroom per host). Memory figures use assigned VM memory, which is what an HA restart admits against, so they are estimates.
 
 `dbh-topology` and `dbh-impact` share one collector library, `fabric.py`. Each module keeps an identical copy so it stays self-contained; the smoke test fails if the copies drift. HA and DRS state come from the same vSphere session (`configuration.dasConfig.enabled`), so no extra credentials are needed.
+
+## Logs (syslog server)
+
+The `logs` module makes vCommunity Observability a syslog server. ESXi hosts, vCenter, NSX, switches, your own scripts and apps (vCommunity Ask sends its activity here, see [Ask activity log](#ask-activity-log)) or anything else that speaks syslog send to this computer on port **514**, and the **Logs** pages search what arrived. A **source** is whatever sent the message (the syslog HOSTNAME field: a host, an appliance, or an app's container), and the **app** is the program inside it (`vpxa`, `hostd`, `vcommunity-ask`, your script's name). It is open source, standard-library Python, needs no extra container or image, and works offline.
+
+| Page | What it does |
+| --- | --- |
+| **Logs** (`/dash/logs/search`) | Status cards (messages and errors in the last hour, sources sending, unacknowledged alerts, storage used against the cap). A search box with time range (15 min to 7 days, or everything kept), severity, **source** and **app** pickers, and **Quick** searches (Errors, vCommunity Ask activity, Ask prompts, Ask thinking, Ask tool calls, Clear). A chart of messages over time, colored by severity (click a bar to zoom into that slice; **Reset zoom** goes back). The results newest first, the search words highlighted, the message ID under the app; a message longer than 500 characters (a prompt, the model's thinking) is cut in the list. Click a row for the whole message and every field (time in the message, sender IP, facility, process and message ID, RFC 5424 structured data) and **Only this source**, **Hide this source**, **Only this app**, **Messages around this one**. **Load older messages** pages back. **Live tail** adds new matching messages at the top every 2 seconds. **Export CSV** downloads the current search (up to 100,000 rows). The search is kept in the URL, so it can be bookmarked or shared |
+| **Log alerts** (`/dash/logs/alerts`) | Alert rules you define in the page: a name, a search, a severity, "fire when N or more messages in M minutes", a wait before it can fire again, and whether to send email and/or a webhook. **Test against current logs** shows how many messages match now and whether it would fire. Fired alerts are listed with the count, the five newest matching messages, what was sent, and **Show messages** (opens Logs at that time window). Acknowledge or delete them one by one, selected, or all. **Notifications** holds the SMTP server (port, no TLS / STARTTLS / SSL, optional user and password, From, To) and the webhook URL, with **Send test email** and **Send test webhook**, and **Check alert rules**, the master switch for every rule (shown On or Off; saving it off asks first, and while it is off a yellow banner at the top of the page says so, with **Turn alert checking on**) |
+| **Log settings** (`/dash/logs/settings`) | **Keep logs for** (days, default **5**) and **Size cap** (GB, default **5**), **Idle source after** (minutes, default 15; only a label, because apps such as Ask send only when used; make a log alert to be told a host stopped sending). Listener status (running, ports, messages received and dropped, rate, TCP connections, recent problems), disk use, every **source** (name, IP, its apps in the last 24 h, last message, messages and errors in 24 h, idle or sending), and copy-and-paste setup for ESXi, PowerCLI, vCenter, vCommunity Ask, and your own PowerShell or Python scripts, using the address you opened the page with |
+
+**Point hosts and apps at it.** Use the address of the computer that runs the containers, port 514, or the port you set as `SYSLOG_PORT` in `.env` (containers in the same compose project use `vco:5514`). The Log settings page fills that port into every example; the examples below use 514:
+
+```bash
+# One ESXi host (SSH or ESXi Shell)
+esxcli system syslog config set --loghost='udp://<this-computer-ip>:514'
+esxcli network firewall ruleset set --ruleset-id=syslog --enabled=true
+esxcli system syslog reload
+```
+
+```powershell
+# Every host in vCenter (PowerCLI)
+Get-VMHost | Get-AdvancedSetting -Name Syslog.global.logHost |
+    Set-AdvancedSetting -Value 'udp://<this-computer-ip>:514' -Confirm:$false
+Get-VMHost | Get-VMHostFirewallException -Name 'syslog' | Set-VMHostFirewallException -Enabled:$true
+```
+
+```powershell
+# Your own PowerShell 7 script: TCP by default (fails loudly when nothing listens), -Protocol udp also works
+function Send-Syslog {
+    param([Parameter(Mandatory)][string]$Message, [string]$App = 'my-script', [int]$Severity = 6,
+          [string]$Server = '<this-computer-ip>', [int]$Port = 514, [ValidateSet('tcp', 'udp')][string]$Protocol = 'tcp')
+    $ts    = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+    $raw   = "<$(8 * 16 + $Severity)>1 $ts $([Environment]::MachineName) $App $PID - - $Message"
+    $bytes = [Text.Encoding]::UTF8.GetBytes($raw)
+    if ($Protocol -eq 'udp') {
+        $udp = [System.Net.Sockets.UdpClient]::new(); [void]$udp.Send($bytes, $bytes.Length, $Server, $Port); $udp.Close(); return
+    }
+    $tcp = [System.Net.Sockets.TcpClient]::new($Server, $Port)
+    $s   = $tcp.GetStream()
+    $len = [Text.Encoding]::ASCII.GetBytes("$($bytes.Length) ")    # octet counting (RFC 6587), like ESXi
+    $s.Write($len, 0, $len.Length); $s.Write($bytes, 0, $bytes.Length); $s.Flush(); $tcp.Close()
+}
+Send-Syslog 'Nightly report finished: 42 VMs checked'
+Send-Syslog 'Datastore DS01 is 91% full' -Severity 4 -Server 127.0.0.1 -Port 1514   # same computer, SYSLOG_PORT=1514
+```
+
+```python
+# Your own Python script: the standard library's SysLogHandler (UDP)
+import logging, logging.handlers
+log = logging.getLogger("my-script")
+log.addHandler(logging.handlers.SysLogHandler(address=("<this-computer-ip>", 514)))
+log.setLevel(logging.INFO)
+log.warning("my-script: datastore DS01 is 91% full")
+```
+
+vCenter: VAMI (`https://<vcenter>:5480`) → **Syslog** → **Configure**. `tcp://...:514` works too; TCP does not drop messages when the network is busy. To try it without a lab, `python scripts/send_test_syslog.py --host <this-computer-ip>` sends 200 ESXi- and vCenter-like messages (`--count`, `--rate`, `--proto udp|tcp|both`).
+
+**Search language** (the search box and alert rules):
+
+| Type | Finds |
+| --- | --- |
+| `error disk` | both words, in the message, app or source name (full-text, any order) |
+| `"lost access"` | the exact phrase |
+| `vmk*` | words that start with `vmk` |
+| `-debug` | leaves out messages with the word; works on fields too (`-host:esx9-04*`) |
+| `host:esx9-0*`, `ip:192.168.1.*` | source name (the syslog HOSTNAME field) or sender IP; `*` matches any text; not case sensitive |
+| `app:vpxa`, `procid:1234`, `msgid:...`, `facility:local4` | syslog fields (`app:vcommunity-ask msgid:prompt` = every Ask question) |
+| `sev:err` | that severity or worse: `emerg`, `alert`, `crit`, `err`, `warning`, `notice`, `info`, `debug` |
+
+**How it works.**
+
+- The listener, `modules/logs/syslog_service.py`, is a core **service** (see [Writing a module](#writing-a-module)): the core starts it with the app, restarts it if it stops, and stops it when the module is switched off on the Modules page or vCommunity Observability is paused (Settings → Apps on / off). Its status and restarts are on the Modules page.
+- It listens on **5514** UDP and TCP inside the container (no root needed); `docker-compose.yml` maps the host's port **514** to it (`SYSLOG_PORT` in `.env` changes the host port). TCP accepts newline-delimited and octet-counted framing (RFC 6587; ESXi uses octet counting). The UDP socket asks for an 8 MB receive buffer, so bursts are not lost.
+- Messages are parsed as RFC 5424 (ESXi 7+, vCenter, vCommunity Ask), RFC 3164 (classic BSD syslog) or plain text. The source is the name in the message, or the sender's IP when there is none. A TCP message may span several lines (octet counting), which is how Ask sends a prompt or the model's thinking in one message. Every message is stored with the time the server **received** it (the time inside the message is kept too, but host clocks can be wrong).
+- Rows are written in batches every second to **`data/syslog.db`**, a SQLite file of its own (WAL, FTS5 full-text index), so log traffic never slows the dashboards. In tests it took 5,000 messages per second over UDP and TCP with none dropped, using about 35 MB of memory. A message takes about 400 bytes with its index, so the default 5 GB holds roughly 12 million messages.
+- **Retention:** every 5 minutes, messages older than **Keep logs for** are deleted, then, if the data is still above **Size cap**, the oldest 5% at a time until it fits. Freed space is given back to the disk (incremental vacuum). Changes on the Log settings page apply at the next cleanup.
+- **Alerts** are checked every 30 seconds. A rule fires when its search finds at least its threshold of messages in its window, then waits its cooldown before it can fire again. Every fired alert is listed on Log alerts (and counted on the Logs page); email and webhook are optional per rule. The webhook is a JSON POST with a `text` field (Slack, Mattermost, Rocket.Chat style) plus the alert details (rule, count, window, search, newest messages). Both work at a dark site with a local mail relay or chat server.
+- The **Performance** dashboard (on Ask) has a **Logs** panel: logs per second, per minute and per hour, log disk space used (against the cap) and disk space available, with charts. See [Performance](#performance).
+
+**REST API** (token required, in Swagger under `logs`): `GET /api/logs/search?q=...&range=1h&sev=err&host=...&limit=200&before=<id>` (or `since`/`until` as epoch seconds), `app=` filters by app name too. `GET /api/logs/summary`, `GET /api/logs/hosts` (every source with its top apps; `quiet: true` = idle), `GET /api/logs/apps` (every app name: last seen, messages and errors in 24 h, how many sources), `GET /api/logs/alerts`.
+
+**Limits.** It is sized for a lab or a small site, not for a whole data center (use a dedicated log platform there). No TLS syslog (port 6514) yet. Syslog itself has no authentication: anyone who can reach port 514 can send messages, so keep it on the management network. The SMTP password is stored unencrypted in `data/syslog.db`, like the vCenter passwords in `_core.db`.
 
 ## vCommunity Ask (local AI chat)
 
@@ -522,10 +609,35 @@ One card per source with a status ring (green OK, blue syncing, red error, amber
 | Data questions | on | Counting and totals questions about spreadsheet sources are answered with a read-only SQL query (see [Spreadsheets and data questions](#spreadsheets-and-data-questions)) |
 | Whole-source questions | on | "How many posts…", "summarize this blog", "what does it write about most" are answered from a catalog of every post in the selected sources (see [Whole-source questions](#whole-source-questions)) |
 | Host agent URL | `http://host.docker.internal:9101` | The Ask host agent for the [Performance page](#performance-page-and-host-agent); empty turns it off (`ASK_AGENT_URL`) |
-| Observability URL | `http://localhost:8080` | Sidebar link back to the dashboards |
+| Observability URL | `http://localhost:8080` | Sidebar link back to the dashboards. A `localhost` address follows the host you opened Ask with, so it works from another computer too |
+| Send activity to the log server | on | Prompts, thinking, tool calls and answers go to the Logs module as syslog (`ASK_ACTIVITY_LOG`). See [Ask activity log](#ask-activity-log) |
+| Log server | `tcp://vco:5514` | Where the activity goes: `tcp://` or `udp://` host and port (`ASK_ACTIVITY_LOG_URL`). **Send a test message** tries the address in the box |
+| Include the model's thinking | on | The thinking, sent when the answer ends, in parts of about 6,000 characters |
+| Include the answer text | on | Off sends only the answer's length, time and token counts |
 | System prompt | built in | Editable; **Reset to the default** restores it |
 
 Saved values live in `data/ask.db` and win over `ask.yaml` and environment variables; they apply on the next question. Saving needs the API token when `ASK_API_TOKEN` is set (enter it in the bar at the top; it is kept in that browser only). The first container's sidebar shows an **Ask (AI chat)** link (set `VCO_ASK_URL`, default `http://localhost:8081`, empty hides it).
+
+### Ask activity log
+
+Ask tells the [Logs module](#logs-syslog-server) what it is being used for. Every question becomes a few syslog messages from source `vco-ask`, app **`vcommunity-ask`**, facility `local5`. The message ID says what each one is:
+
+| Message ID | Severity | What is sent |
+| --- | --- | --- |
+| `prompt` | notice | The question as typed, with the chat ID, model, sources picked (or "no sources"), MCP tools and web search picked, whether it came from the chat page or the REST API, and whether thinking is on |
+| `data` | info | For a data question or dashboard: the SQL the model wrote and how many rows it returned |
+| `tool` | info (warning when refused or failed) | Each MCP or web search tool call: tool, server, arguments, status, time and result size |
+| `thinking` | info | The model's thinking, when **Show model thinking** is on and the model supports it. Long thinking is cut into parts (`part="2/5"`) |
+| `answer` | info | The answer text (or only its size when **Include the answer text** is off), with seconds, tokens and tokens per second |
+| `error` | err | Why the answer failed |
+| `stopped` | warning | The reader closed the page or pressed Stop before the answer finished; what was written so far |
+| `test` | notice | **Send a test message** on the Settings page |
+
+Details are in RFC 5424 structured data (`[ask@32473 chat="..." model="..." sources="..." part="1/3" seconds="..." tokens="..."]`), shown in a row's details on the Logs page. The chat ID is in the text too, so searching it finds every message of one chat. Useful searches: the **Ask prompts**, **Ask thinking** and **Ask tool calls** quick buttons, `app:vcommunity-ask sev:warning` (refused tools, failures and stops), or an alert rule on `app:vcommunity-ask msgid:error`.
+
+How it is sent: TCP to `vco:5514` (the vco container on the compose network) with octet counting, so a message can hold many lines. A background thread sends the messages, so the activity log never slows or breaks an answer. When the log server can't be reached (for example vCommunity Observability is paused or the Logs module is off), messages are dropped for 10 seconds at a time and the Settings page shows how many were sent and dropped and the last problem. Any other syslog server works too (`udp://...` or `tcp://...`). Turn it off on the Settings page or with `ASK_ACTIVITY_LOG=0`.
+
+Privacy: prompts, answers and thinking can contain whatever users paste into the chat. They are kept in `data/syslog.db` for the Logs retention (5 days by default) and are visible to anyone who can open the Logs page. Turn off **Include the model's thinking** or **Include the answer text** if that is too much.
 
 ### The Ask database (`ask.db`)
 
@@ -753,6 +865,38 @@ Tips for good data answers:
 - Use a chat model that is good at SQL; Qwen 3.x models are. Smaller models write wrong queries more often, and you see it in the query card.
 - Turn **Data questions** off on the Settings page to send every question through the normal search.
 
+### API specs (OpenAPI)
+
+An **API specs (OpenAPI)** source (plug-in `openapi`) indexes REST API specifications in OpenAPI 3 or Swagger 2 format, JSON or YAML: the VCF Operations API, vCenter, SDDC Manager, NSX or any other product that publishes one. Ask can then answer "which call do I use to ...", "what fields does that body take" and "show me that in PowerShell", with citations to the exact endpoint.
+
+**Why not just drop the JSON in a folder?** A spec is one large file (the VCF Operations 9.1.1 spec is 2.3 MB with 535 calls and 640 schemas), and each call's fields live in schemas elsewhere in the file. Searched as plain text, the model would see fragments of JSON with no context. The plug-in turns it into one short markdown document per API call instead.
+
+**Add one:** **Knowledge sources** → **Add source** → **API specs (OpenAPI)**. Then drag the spec onto the source's card (or **choose files**, several at once). Uploads must parse as JSON or YAML and contain `openapi` or `swagger` plus `paths`. To read a folder instead, set **Files from** = `folder` and copy the specs into `./ask-knowledge` (mounted read-only at `/knowledge`).
+
+**What each API call's document holds:**
+
+1. `# METHOD /path - summary`, then the API name and version, the area (tag), the operationId and the description as plain text.
+2. `## Request`: the full path with the server base path (for VCF Operations `/suite-api`), the authentication scheme and every parameter (where it goes, type, required, default).
+3. `## Request body`: the body fields with types, enum values and descriptions. `$ref` schemas are expanded up to 3 levels deep (60 lines at most), with a guard against schemas that refer to themselves. The spec's JSON example is added when it has one (cut at 1,500 characters).
+4. `## Response` and `## Response fields`: every status code and the fields of the success response.
+5. `## PowerShell`: an `Invoke-RestMethod` call. When the spec has `/api/auth/token/acquire` (VCF Operations), the example first gets a token and sends it as `OpsToken`.
+
+Each `##` section becomes its own chunk, headed with the call's title, so a long field list never loses its endpoint. One more document per spec, **API overview**, lists every area with its description and calls, for "what can this API do with alerts?" questions.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `location` (Files from) | `upload` | `upload` = specs uploaded on the Knowledge sources page; `folder` = a folder in the container |
+| `path` (Folder) | `/knowledge` | Only for `folder` |
+| `pattern` (File names) | `**/*openapi*.json`, `**/*swagger*.json`, `**/*openapi*.yaml`, `**/*openapi*.yml` | Only for `folder`. Globs relative to the folder, one per line |
+| `tags` (Only these areas) | empty | One API tag per line (for example `Alerts`, `Resources`). Empty = every area |
+| `deprecated` | `skip` | `skip` leaves out calls marked deprecated; `include` keeps them (marked **deprecated**) |
+| `base_url` (Server for examples) | empty | Used only in the PowerShell examples, for example `https://ops.lab.local`. Empty = `$server` |
+| `uploads` | `keep` | `keep` = every uploaded spec is indexed (same file name overwrites); `replace` = a new upload removes the earlier files |
+
+**Size and speed.** The VCF Operations 9.1.1 spec gives 522 calls (13 deprecated skipped) plus the overview: 523 documents and about 2,860 chunks. Reading the spec takes under a second; embedding the chunks is the slow part and depends on the embedding model (a few minutes on Apple Silicon with `nomic-embed-text`). Re-syncs with no file change answer "no changes" at once.
+
+**Not included:** XML examples and media types other than JSON, `$ref` links to other files (only references inside the same spec are followed), and the spec's response examples (the response fields are listed instead).
+
 ### PDF documents (with OCR)
 
 A **PDF documents** source (plug-in `pdf`) indexes PDF files such as product guides, design documents, runbooks and white papers. Scanned PDFs work too: pages with no text layer are read with OCR.
@@ -839,6 +983,7 @@ Tips: name the sheet ("using the vInfo sheet") and what to group by ("by OS", "p
 | Prompt size per answer | Prompt tokens of each answer against a dashed **Model context** line. Bars near the line mean sources or history are being cut: see [Chunks, context budget and model context](#chunks-context-budget-and-model-context) | The stats saved with every answer |
 | Ask container | CPU % (of the CPUs the container may use), memory (like `docker stats`, without page cache), network and disk throughput | The container's own cgroup files (`/sys/fs/cgroup`, v2 or v1). No Docker socket is mounted |
 | Observability container | The same numbers for vCommunity Observability (`vco`): a KPI card plus CPU and memory, network and disk charts. **Not running** (red) when it doesn't answer | Its `GET /perf/container` endpoint at `ASK_VCO_INTERNAL_URL` (default `http://vco:8080`) |
+| Logs | Logs per second (last 10 s), per minute (last 60 s) and per hour, log disk space used against the size cap, and disk space available on the data volume, with a rate chart and a disk chart. Shown only while the Observability `logs` module is on | The `logs` part of the Observability container's `GET /perf/container` |
 | Host power and temperature | Total power (W) and GPU temperature, shown only when available | Host agent with [macmon](https://github.com/vladkens/macmon) installed |
 | Ollama table | Version, each loaded model with size, memory, share on the GPU, context length and when it unloads | Ollama `/api/ps` |
 | Host table | Chip, OS, cores (performance and efficiency), load, memory (app, wired, compressed), pressure, swap, GPU memory, Ollama processes, disk, network | Host agent |
@@ -889,7 +1034,7 @@ Ask can call the tools of your own **MCP servers**, for example a PowerShell MCP
 **Where the server runs.** On the Mac, not in a container: an MCP server's tools usually need what only the Mac has (pwsh, PowerCLI, ImportExcel, Posh-SSH, the lab config file, SSH keys and `known_hosts`). The [Ask host agent](#performance-page-and-host-agent) starts the server, keeps it running and passes Ask's tool calls to it over HTTP, protected by the same token as the Performance page. The server itself is not changed and stays where it is, so you keep editing it in place: add a function, add its name to `$FunctionsToExpose`, and the next question (or **Reload tools**) restarts the server and shows the new tool. The agent restarts a server by itself when its script, or a `.ps1` next to it, changes.
 
 ```
-Ask (container) --HTTP + token--> Ask host agent (Mac) --stdio JSON-RPC--> pwsh MCP-Server-OpenAI.ps1
+Ask (container) --HTTP + token--> Ask host agent (Mac) --stdio JSON-RPC--> pwsh MCP-Server-vCommunity-Ask.ps1
 ```
 
 **Set it up** (once):
@@ -905,7 +1050,7 @@ Ask (container) --HTTP + token--> Ask host agent (Mac) --stdio JSON-RPC--> pwsh 
 
    ```json
    { "mcpServers": { "powershell-mcp": { "type": "stdio", "command": "pwsh",
-       "args": ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", "/Users/you/.../MCP/MCP-Server-OpenAI.ps1"], "env": {} } } }
+       "args": ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", "/Users/you/.../MCP/MCP-Server-vCommunity-Ask.ps1"], "env": {} } } }
    ```
 
 2. `ASK_AGENT_TOKEN` in `.env` (as for the Performance page), then `docker compose up -d --build vco-ask`.
@@ -1008,7 +1153,7 @@ The order is enforced by Ask, not only asked of the model: if the model tries th
 | `ASK_OBSERVABILITY_URL` | Sidebar link to the dashboards |
 | `ASK_CONFIG`, `ASK_DATA_DIR`, `ASK_SHARED_DIR` | Config file, data folder, folder holding the shared `app.css` (set in the image) |
 | `ASK_GITHUB_TOKEN` (any name) | Read-only token for a private repository; put the variable's **name** in the source's "Token env var" |
-| `ASK_UPLOAD_MAX_MB` | Largest upload (spreadsheet or PDF) in MB (default 50). Raise it for large scanned PDFs |
+| `ASK_UPLOAD_MAX_MB` | Largest upload (spreadsheet, PDF or API spec) in MB (default 50). Raise it for large scanned PDFs |
 | `ASK_AGENT_TOKEN` | Token of the Ask host agent (printed by `Install-AskAgent.ps1`), for the Performance page |
 | `ASK_AGENT_URL` | Where Ask reaches the host agent (default `http://host.docker.internal:9101`) |
 | `OLLAMA_API_KEY` | ollama.com API key for [Web search (Ollama)](#web-search-ollama). Secret: keep it in `.env` only |
@@ -1016,7 +1161,7 @@ The order is enforced by Ask, not only asked of the model: if the model tries th
 | `ASK_WEB_ORDER` | Which web search goes first when both are ticked: `ollama_first` (default), `brave_first` or `model` (the Settings page wins) |
 | `ASK_BRAVE_SEARCH`, `ASK_BRAVE_SEARCH_URL` | `1` turns Brave web search on by default (the Settings switch wins); API URL (default `https://api.search.brave.com`) |
 | `ASK_WEB_SEARCH`, `ASK_WEB_SEARCH_URL` | `1` turns web search on by default (the Settings switch wins); API URL (default `https://ollama.com`) |
-| `VCO_ASK_URL` | First container: sidebar link to Ask |
+| `VCO_ASK_URL` | First container: sidebar link to Ask (and the Performance link). A `localhost` / `127.0.0.1` address follows the host you opened the page with, so the link also works from another computer |
 | `ASK_VCO_INTERNAL_URL` | Where Ask reads the Observability container's numbers for its Performance page (default `http://vco:8080`) |
 
 ### Source plug-ins
@@ -1071,6 +1216,8 @@ The publish date comes from the feed first, then the page itself (`article:publi
 For a blog whose markdown is in a Git repository (Hugo, Jekyll and similar), `markdown-repo` gives cleaner text with no crawling; `web-site` is for sites you don't have the source for.
 
 **`pdf`.** Reads PDF files from uploads or a folder: pypdf for the text layer, Tesseract OCR (via `pdftoppm`) for scanned pages, one document per PDF with one `## Page N` section per page, cached per file. See [PDF documents (with OCR)](#pdf-documents-with-ocr) for the options.
+
+**`openapi`.** Reads OpenAPI 3 / Swagger 2 specs (JSON or YAML) from uploads or a folder: one document per API call (request, parameters, body and response fields with `$ref` schemas expanded, JSON example, PowerShell call) plus an overview per spec. See [API specs (OpenAPI)](#api-specs-openapi) for the options.
 
 **`spreadsheet`.** Reads `.xlsx` and `.csv` files (RVTools, DBH Insights) from a folder such as `/exports` or from uploads. One document per row plus cluster and sheet summaries for search, and every sheet loaded into `data/sources/<name>/tables.db` for data questions; it also returns the table list (columns, types, sample rows) in its `state`. See [Spreadsheets and data questions](#spreadsheets-and-data-questions) for the options.
 
@@ -1141,6 +1288,10 @@ Precedence for module on/off: `enabled_by_default` in `module.yaml` → `modules
 | `VCO_CONFIG` | Path to `config.yaml` (default `config/config.yaml`) |
 | `VCO_EXPORT_DIR` | Root folder for scheduled exports (default `exports`; `/app/exports` in Docker) |
 | `TZ` | Default time zone offered for scheduled exports (for example `America/New_York`) |
+| `VCO_SYSLOG_UDP_PORT`, `VCO_SYSLOG_TCP_PORT` | Ports the Logs module's syslog listener uses inside the container (default 5514) |
+| `ASK_ACTIVITY_LOG`, `ASK_ACTIVITY_LOG_URL` | Ask's activity log on or off (default on) and where it goes (default `tcp://vco:5514`); the Settings page overrides both |
+| `ASK_SYSLOG_HOSTNAME` | The source name Ask's activity messages carry (default `vco-ask`) |
+| `SYSLOG_PORT` (`.env`, used by `docker-compose.yml`) | Host port mapped to the syslog listener (default 514). Use 1514 if your container runtime can't open ports below 1024 |
 
 ## Docker image and runtime
 
@@ -1151,7 +1302,7 @@ Two image targets from one `Dockerfile`:
 | `core` | Python 3.13 slim, the app and its locked dependencies | Python modules only (smallest) |
 | `core-pwsh` | `core` plus PowerShell 7 and VMware PowerCLI | Default in `docker-compose.yml`; needed for `host-health` and other `.ps1` modules |
 
-- Runs as a non-root user (`vco`, uid 10001), listens on port 8080, with a health check on `/api/core/health`.
+- Runs as a non-root user (`vco`, uid 10001), listens on port 8080 (web and API) and 5514 UDP and TCP (the Logs module's syslog server; compose maps the host's port 514 to it), with a health check on `/api/core/health`.
 - The right PowerShell build (arm64 or x64) is picked automatically. Pin PowerCLI with the `POWERCLI_VERSION` build argument.
 - Compose volumes: `./data` → `/app/data` (SQLite, survives upgrades), `./exports` → `/app/exports` (scheduled exports), `./extra-modules` → `/modules` (new or patched modules), `./config/config.yaml` read-only, `./control` → `/app/control` (Apps on / off, shared with Ask; `VCO_CONTROL_FILE` overrides the file path).
 - `init: true` adds a tiny init process that reaps finished collector processes and passes stop signals to the app.
@@ -1192,6 +1343,7 @@ The full list of endpoints is on the **Modules** page, in Swagger at `/docs`, an
 | `GET /perf/container` | open | This container's raw counters (CPU time, memory, disk and network bytes, uptime, version). Numbers only, no secrets; Ask's Performance dashboard reads it |
 | `GET /api/core/apps`, `PUT /api/core/apps/{name}?on=false` | token | Apps on / off: `observability` (collection, scheduled exports) and `ask` (chat, syncs). Off pauses the part; shared with Ask in `./control/apps.json` |
 | `GET /api/{module}/...` | token | Module endpoints declared in `module.yaml` |
+| `GET /api/logs/search`, `/api/logs/summary`, `/api/logs/hosts`, `/api/logs/alerts` | token | The Logs module's search, counts and rates, senders and alerts (added by its web extension) |
 | `GET /api/{module}/export/{name}` | token | Module file downloads for scripts |
 | `GET /export/{module}/{name}` | none (UI) | The same downloads for the UI |
 
@@ -1295,6 +1447,19 @@ exports:
 
 The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXPORT` (which export), `VCO_PARAMS` (the allowed URL parameters as JSON) and `VCO_SETTINGS`, and writes the file to `VCO_OUTPUT_FILE`. Every export can also be picked on the Settings page as the scheduled export.
 
+**Services (always-running scripts).** A collector runs on a schedule and exits. Work that has to keep running, such as listening on a port, is a **service**:
+
+```yaml
+services:
+  - name: syslog
+    script: syslog_service.py     # or .ps1
+    restart_seconds: 5            # wait before a restart; doubles (up to 5 min) while it keeps failing quickly
+```
+
+The core (`core/services.py`) starts every service of an available module with the app, restarts it when it exits, stops it when the module is switched off or vCommunity Observability is paused (and starts it again after), and stops it with the app. It gets `VCO_MODULE`, `VCO_MODULE_DIR`, `VCO_DATA_DIR`, `VCO_SETTINGS` and `VCO_MOCK`, plus any `VCO_SYSLOG_*` variable; its output goes to the container log, and the Modules page shows whether it is running, since when, restarts and its last line. A service writes its own files in `VCO_DATA_DIR` (the Logs module uses `syslog.db`).
+
+**Web extensions.** When a module needs more than read-only queries (a search box with live results, forms that save settings), `web: web.py` names a Python file with `register(app, ctx)` that adds routes (`core/extensions.py`). Use `/api/<module>/...` with `ctx.require_token` for the REST API and `/ui/<module>/...` for the module's own pages (reads open like the dashboards, changes call `ctx.check_admin(request)`, which wants the API token when tokens are set). `ctx.add_perf(fn)` adds numbers to the Performance dashboard. The pages themselves stay ordinary dashboards with a `template:`. Extensions are Python because the web app is FastAPI; collectors and services can still be PowerShell. A broken extension marks the module unavailable instead of stopping the app. See `modules/logs` for a full example.
+
 **Installing a module:** copy the folder into the `/modules` volume (`./extra-modules` with Compose) and restart. A module in `/modules` with the same name overrides the built-in copy, which is also how a patched module is shipped to a dark site. Built-in modules are baked into the image, so changes to `modules/` need `docker compose up -d --build`.
 
 ## Security
@@ -1303,6 +1468,7 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 - The web UI has no login yet. Changes on the Settings page need an API token when tokens are configured; dashboards and **Run now** are open. Keep the port on a management network until UI login lands.
 - Secrets live in `.env`, never in `config.yaml`. A password saved on the Settings page is stored **unencrypted** in `data/_core.db`, so protect the `data` folder as you would `.env`.
 - The container runs as a non-root user. Collectors only receive the connections they list in `module.yaml`.
+- The syslog port (514) accepts messages from anyone who can reach it (syslog has no authentication). Keep it on the management network. The Logs pages are open like the dashboards; changing Logs settings and alert rules needs the API token when tokens are set. The SMTP password for alert email is stored unencrypted in `data/syslog.db`.
 - `verify_ssl: false` is the default for lab use; turn it on where vCenter has a trusted certificate.
 - **vCommunity Ask:** the chat UI has no login either (like the dashboards); changing Settings or Sources needs `ASK_API_TOKEN`, and the UI endpoints refuse requests sent from other web sites (Origin check). Answers and documents are rendered through DOMPurify. Indexed documents could contain text aimed at the model (prompt injection); in phase 1 the model has no tools, so the worst case is a wrong answer. Image serving is limited to image files inside each source's folder. Ollama itself has no authentication: with `OLLAMA_HOST=0.0.0.0` it is reachable from your network.
 
@@ -1343,6 +1509,10 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 
 | Symptom | Fix |
 | --- | --- |
+| `docker compose up` fails with "ports are not available ... 514" or "permission denied" | Ports below 1024 need extra rights on some runtimes. Rancher Desktop on a Mac: Preferences → Application → General → turn on **Allow Rancher Desktop to acquire administrative credentials (sudo access)**, then restart Rancher Desktop. Or set `SYSLOG_PORT=1514` in `.env` and point hosts at port 1514. Also check nothing else on the computer already uses 514 (`sudo lsof -i :514`) |
+| Nothing from hosts or scripts arrives on the Logs page (only Ask's messages) | The host port isn't reaching the container. On Rancher Desktop port 514 can be mapped without anything listening on the Mac: check `docker port vco` and `sudo lsof -nP -iUDP:514 -iTCP:514`. Set `SYSLOG_PORT=1514` in `.env`, run `docker compose up -d` (changing `.env` alone does nothing until the container is recreated), and send to port 1514. Test with TCP first (the PowerShell `Send-Syslog -Protocol tcp`): a TCP send fails with an error when nothing listens, a UDP send never does |
+| The Logs page stays empty | Log settings shows whether the listener is **running**, and messages received. Send a test: `python scripts/send_test_syslog.py --host <this-computer-ip>`. If that arrives but ESXi doesn't: check the ESXi firewall rule (`esxcli network firewall ruleset list -r syslog`), the loghost (`esxcli system syslog config get`), and that the host can reach this computer on 514. On a Mac, macOS's own firewall can block incoming UDP for the container runtime |
+| Every message shows the IP instead of the host name | The sender put no host name in its messages (some switches). The sender's IP is used instead; search it with `ip:` |
 | A dashboard says a collector failed, for example "Can't find vcsa91.vcrocs.local on the network: the DNS lookup failed." | Failed collectors show a **plain-English summary** and what to do, with the full error under **Details** (also on the Modules page and for scheduled exports). For the DNS case, check `nslookup <vCenter>` on the computer running Docker: if it fails there too, the lab DNS server or network/VPN is the problem; if it works there but not in the container, add `extra_hosts: ["<vCenter name>:<IP>"]` (or `dns: [<lab DNS IP>]`) to the `vco` service in `docker-compose.yml`. Other cases covered: connection refused, no route, wrong user or password, untrusted certificate, missing password or vCenter, no PowerShell, timeouts, permission and server errors. Add more in `core/errors.py` (`RULES`) |
 | `vco` won't start: "not a directory" or "Are you trying to mount a directory onto a file" for `config.yaml` | `config/config.yaml` didn't exist at the first `docker compose up`, so Docker created a folder with that name. Remove the folder, `cp config/config.example.yaml config/config.yaml`, then `docker compose up -d` |
 | Linux: "unable to open database file", "readonly database" or "Permission denied" under `/app/data` | The host folder is owned by your user, but the containers run as uid 10001 (`vco`) and 10002 (`ask`). `sudo chown -R 10001 data exports extra-modules` and `sudo chown -R 10002 ask-data`, then restart |
@@ -1381,7 +1551,7 @@ The script gets `VCO_DB` (the module's SQLite file; open it read-only), `VCO_EXP
 | Ask: spreadsheet source indexes 0 files | No file matches **File names** in the folder. The default is `dbh-insights-*.xlsx`; for RVTools set it to `*.xlsx` or `RVTools*.xlsx`. Check the folder with `docker compose exec vco-ask ls /exports` |
 | Ask: PDF source indexes 0 pages or a PDF is missing | Check the log (`docker compose logs vco-ask`): "password protected" (remove the password and upload again), "cannot read" (a damaged file: re-save it as PDF), "no text found" with OCR `off` (a scanned PDF: set **OCR** to `auto`). OCR quality: raise **OCR resolution** to 300 |
 | Ask: "tesseract failed" or "Failed loading language" in the log | The language in **OCR languages** isn't installed. Use `eng`, or rebuild with `--build-arg OCR_LANGS="tesseract-ocr-<lang>"` (see [PDF documents](#pdf-documents-with-ocr)) |
-| Ask: upload refused | Spreadsheet sources take `.xlsx` and `.csv` (an `.xlsx` must be a real Excel file, not a renamed one), PDF sources take `.pdf` (a real PDF), up to `ASK_UPLOAD_MAX_MB` (default 50), and the API token must be entered when `ASK_API_TOKEN` is set |
+| Ask: upload refused | Spreadsheet sources take `.xlsx` and `.csv` (an `.xlsx` must be a real Excel file, not a renamed one), PDF sources take `.pdf` (a real PDF), API spec sources take `.json`, `.yaml` and `.yml` that parse and contain `openapi` or `swagger` plus `paths`, up to `ASK_UPLOAD_MAX_MB` (default 50), and the API token must be entered when `ASK_API_TOKEN` is set |
 | Ask: "The sources do not contain the individual rows" after a spreadsheet import | The question went through search, which only finds a few matching rows plus the sheet overview. Ask it as a data question ("show all hosts from the vHost sheet", "how many ...") with the spreadsheet source selected; the answer then has a **Query and result** card. Sheets with more rows than **Max searchable rows per sheet** (default 5000, for example a large vInfo) are not searchable at all, only queryable |
 | Ask or the dashboards still behave like the old version after a rebuild | Fixed from 2026-11-05: script and stylesheet URLs carry `?v=<fingerprint>`, so browsers load the new files. Once, after updating to this version, reload the page with **Shift+Reload** (Cmd+Shift+R) to drop the old cached copy |
 | Ask: no **Open HTML report** link under the answer | The question didn't say *report* or *dashboard*, or it went through search instead of a data question (pick the spreadsheet source). If the answer's stats show `report_error`, the report could not be written: check that `data/reports` is writable (`./ask-data` volume) and look at `docker compose logs vco-ask` |
@@ -1408,7 +1578,9 @@ curl -s "localhost:8081/api/search?q=VM%20CPU%20Co-stop"                 # retri
 
 For the spreadsheet source, `python3 ask/scripts/make_sample_rvtools.py /tmp/sample.xlsx` writes a made-up RVTools-style workbook (40 VMs in `vInfo`, plus `vHost` and `vDatastore`) to upload. The stand-in Ollama answers data questions with canned SQL (a count of powered-on VMs, or a per-host count when the question says "per host").
 
-The smoke test also checks that the DBH sheet tables match `module.yaml`, that the two `fabric.py` copies are identical, that Impact gives the same answers as the original website for the sample lab, and that schedules save, verify, edit, run, pause and remove correctly.
+`python scripts/send_test_syslog.py --port 514 --count 5000 --rate 500` sends ESXi- and vCenter-like syslog messages (RFC 5424 over TCP with octet counting, RFC 3164 over UDP) to try the Logs pages and alerts.
+
+The smoke test also starts the Logs module's syslog service on a free port, sends it messages over UDP and TCP, and checks the parser, search, alerts, settings and the Performance numbers. It also checks that the DBH sheet tables match `module.yaml`, that the two `fabric.py` copies are identical, that Impact gives the same answers as the original website for the sample lab, and that schedules save, verify, edit, run, pause and remove correctly.
 
 ## Repository layout
 
@@ -1420,6 +1592,8 @@ core/                   FastAPI app, scheduler, module loader, runner, storage
   export_schedule.py    scheduled exports: validation, triggers, folder picker, pruning
   modules.py            module.yaml parsing and validation
   runner.py             runs collectors and exports as subprocesses
+  services.py           keeps module services (always-running scripts, e.g. the syslog listener) running
+  extensions.py         module web extensions (module.yaml web: web.py → register(app, ctx))
   errors.py             plain-English summaries of collector errors (shown by templates/_run_error.html)
   storage.py            SQLite: one db per module + _core.db
   control.py            Apps on / off (./control/apps.json, same file as ask/app/control.py)
@@ -1427,8 +1601,10 @@ core/                   FastAPI app, scheduler, module loader, runner, storage
   templates/            base layout, home, dashboards, Modules, Settings, About
   static/               app.css, about.css/about.js (About page, shared with Ask), dialogs.js (themed confirm / alert dialog, shared with Ask), vendored Swagger UI, marked, DOMPurify, ECharts
 modules/                built-in modules (one folder each)
+  logs/                 syslog server: syslog_service.py (listener, retention, alerts), logstore.py (database, search, parser),
+                        notify.py (email, webhook), web.py (search, alerts and settings routes, REST API), templates/, static/
 config/                 config.example.yaml
-scripts/                smoke_test.py, New-OfflineBundle.ps1
+scripts/                smoke_test.py, New-OfflineBundle.ps1, send_test_syslog.py (test syslog messages)
 docs/screenshots/       screenshots used in this README
 ask/                    vCommunity Ask (second container)
   app/main.py           routes: chat, sources, settings, document view, REST API
@@ -1446,6 +1622,7 @@ ask/                    vCommunity Ask (second container)
   sources/web-site/     built-in source plug-in (blog/site crawler: sitemap, feed, links, date range)
   sources/spreadsheet/  built-in source plug-in (xlsx/csv from /exports or uploads, sheets into tables.db)
   sources/pdf/          built-in source plug-in (PDFs from uploads or a folder; pypdf text, Tesseract OCR for scanned pages)
+  sources/openapi/      built-in source plug-in (OpenAPI / Swagger specs: one document per API call plus an overview)
   app/perf.py           Performance page: container, Ollama and host-agent samples (24 h in ask.db)
   app/mcp.py            MCP tools: client of the host agent's MCP bridge, tool policy, Run / Cancel approvals
   app/websearch.py      Web search: Ollama's web_search / web_fetch and Brave's brave_search as model tools
@@ -1479,6 +1656,13 @@ requirements.in/.txt    direct dependencies / hashed lock file
 
 | Date | Change |
 | --- | --- |
+| 2026-11-12 | Logs: the setup examples, the Logs page subtitle and the listener status show the real host port (`SYSLOG_PORT` from `.env`, passed in as `VCO_SYSLOG_HOST_PORT` by `docker-compose.yml`) instead of always 514, with a note when it is not 514. The PowerShell `Send-Syslog` example now has `-Server`, `-Port` and `-Protocol` (TCP by default, so a wrong port fails with an error instead of silently) |
+| 2026-11-12 | Log alerts: the master switch is now labelled **Check alert rules** and shows On or Off; saving Notifications with it off asks first; while it is off a banner on the Log alerts page says no rule fires or sends, with **Turn alert checking on**. Ask activity log: a tools-only question shows its sources as "none (tools only)" |
+| 2026-11-12 | Ask **activity log**: every prompt, the model's thinking, tool calls, data-question SQL and the answer (or error, or stop) are sent as syslog to the Logs module (app `vcommunity-ask`, message IDs `prompt`, `thinking`, `tool`, `data`, `answer`, `error`, `stopped`; TCP to `vco:5514`, long thinking in parts; never slows an answer). Ask Settings: **Activity log** card (on/off, log server, include thinking, include answer text, **Send a test message**, sent/dropped counts). Logs pages treat any sender as a **source**, not only hosts: **App** picker, **Quick** searches (Errors, Ask activity, prompts, thinking, tool calls), message ID under the app, long messages cut in the list, Sources list with each source's apps, "idle" instead of a quiet warning, setup examples for Ask and your own PowerShell and Python scripts. REST: `app=` filter, `GET /api/logs/apps` |
+| 2026-11-12 | New **Logs** module: a syslog server on port 514 (UDP and TCP, RFC 5424, RFC 3164, octet-counted TCP like ESXi) with its own database `data/syslog.db` (FTS5). **Logs** page (search language, severity and host pickers, chart by severity with click-to-zoom, row details, live tail, CSV export), **Log alerts** (rules defined in the page with search, severity, threshold, window and cooldown; test against current logs; fired-alert list with acknowledge and delete; email by SMTP and webhook, with test buttons), **Log settings** (keep logs 5 days and cap at 5 GB by default, both changeable; listener status; senders with quiet detection; ESXi, PowerCLI and vCenter setup). REST API `/api/logs/search`, `/summary`, `/hosts`, `/alerts`. The **Performance** dashboard (Ask) gets a Logs panel: logs per second, minute and hour, log disk space used and disk space available. Core: module **services** (always-running scripts, kept alive and stopped with the module or app pause, status on the Modules page) and module **web extensions** (`web: web.py`). `docker-compose.yml` maps host port 514 (`SYSLOG_PORT`) to 5514. `scripts/send_test_syslog.py` test sender |
+| 2026-11-12 | Ask: new **API specs (OpenAPI)** source plug-in (`openapi`): upload OpenAPI 3 / Swagger 2 specs (JSON or YAML, several at once, checked on upload) or read a folder; one markdown document per API call (request, parameters, body and response fields with `$ref` schemas expanded, JSON example, PowerShell `Invoke-RestMethod` call with the VCF Operations token step) plus an **API overview** per spec; options for areas (tags), deprecated calls and the example server; **API specs** group in the chat's Sources menu. Fixed: the Knowledge sources page failed to open (error 500) while a new source had no version yet |
+| 2026-11-11 | Docs: the MCP example now uses `MCP-Server-vCommunity-Ask.ps1` (the PowerShell MCP server made for Ask) instead of `MCP-Server-OpenAI.ps1` |
+| 2026-11-10 | Links between the two apps (Observability ↔ Ask, Performance) follow the address the browser used: when `VCO_ASK_URL` or Ask's **Observability URL** say `localhost` and you opened the page as `http://<host IP>:8080`, the link becomes `http://<host IP>:8081` (same port and path). A link with a real host name is kept as is (`core/links.py` = `ask/app/links.py`) |
 | 2026-11-10 | Ask **Reports** page: checkboxes to pick several reports (Shift-click for a range, header box for all), **Delete selected (n)** and **Delete all**, both confirmed first (`POST /ui/reports/delete`) |
 | 2026-11-10 | Collector errors in **plain English**: dashboards, the Modules page and scheduled exports show a one-line summary (DNS lookup failed, connection refused, login failed, untrusted certificate, timeout...) and what to do, with the raw traceback folded under **Details** (`core/errors.py`, `core/templates/_run_error.html`). Terminal colour codes from PowerShell errors are stripped before saving |
 | 2026-11-10 | Both apps, from a modern web guidance review: one themed **confirm / alert dialog** (`core/static/dialogs.js`, `vcoConfirm` / `vcoAlert` / `form[data-confirm]`) replaces the 11 browser `confirm()` / `alert()` popups; **reduced motion** respected (spinner, typing dots, sidebar slide, switch and tree arrows, chart animation, smooth scroll); on/off sliders are `role="switch"`; the export **folder picker** closes on a click outside it (`closedby="any"` + Safari fallback) |

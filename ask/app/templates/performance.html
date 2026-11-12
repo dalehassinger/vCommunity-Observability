@@ -31,6 +31,21 @@
   <div class="card" id="perf-power-card" hidden><div class="card-header">Host power and temperature</div><div class="card-block"><div class="perf-chart" data-chart="power"></div></div></div>
 </div>
 
+<div class="perf-grid" id="perf-logs-card" hidden>
+  <div class="card perf-wide">
+    <div class="card-header">Logs (syslog server in the Observability container)</div>
+    <div class="card-block">
+      <div class="perf-kpis" id="perf-logs-kpis"></div>
+      <div class="perf-grid perf-inner">
+        <div><div class="perf-chart" data-chart="logs-rate"></div></div>
+        <div><div class="perf-chart" data-chart="logs-disk"></div></div>
+      </div>
+      <p class="subtle perf-small">Per second = the last 10 seconds, per minute = the last 60 seconds, per hour = the last 60 minutes. Disk = the volume that holds <code>./data</code>.
+        Search, alerts and retention are on the Observability <span id="perf-logs-link">Logs pages</span>.</p>
+    </div>
+  </div>
+</div>
+
 <div class="perf-grid">
   <div class="card perf-wide" id="perf-web-card">
     <div class="card-header">Web search usage and cost this month (searches made by Ask)</div>

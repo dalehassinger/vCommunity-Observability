@@ -24,7 +24,7 @@
         <form method="post" action="/modules/{{ m.name }}/move?dir=down"><button class="icon-btn order" aria-label="Move {{ m.name }} down" {{ 'disabled' if loop.last }}>
           <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></form>
       </div>
-      {% if m.available %}<form method="post" action="/modules/{{ m.name }}/run"><button class="btn btn-outline">Run collectors now</button></form>{% endif %}
+      {% if m.available and m.collectors %}<form method="post" action="/modules/{{ m.name }}/run"><button class="btn btn-outline">Run collectors now</button></form>{% endif %}
       <form method="post" action="/modules/{{ m.name }}/toggle">
         <button class="switch {{ 'on' if m.enabled }}" role="switch" aria-checked="{{ 'true' if m.enabled else 'false' }}"
                 title="{{ 'Turn this module off' if m.enabled else 'Turn this module on' }}"><span></span>{{ 'On' if m.enabled else 'Off' }}</button>
@@ -34,6 +34,7 @@
   <div class="card-block">
     <p class="subtle">{{ m.description }}</p>
     {% for p in m.problems %}<div class="alert alert-danger">{{ p }}</div>{% endfor %}
+    {% if m.collectors %}
     <h3>Collectors</h3>
     <div class="table-wrap"><table class="datagrid">
       <thead><tr><th>Name</th><th>Script</th><th>Every</th><th>Last run (UTC)</th><th>Status</th><th>Rows</th><th>Message</th></tr></thead>
@@ -46,6 +47,21 @@
       {% endfor %}
       </tbody>
     </table></div>
+    {% endif %}
+    {% if m.services %}
+    <h3>Services (always running while the module is on)</h3>
+    <div class="table-wrap"><table class="datagrid">
+      <thead><tr><th>Name</th><th>Script</th><th>Status</th><th>Since (UTC)</th><th>Restarts</th><th>Last output</th></tr></thead>
+      <tbody>
+      {% for sv in m.services %}{% set st = services.get((m.name, sv.name)) %}
+        <tr><td>{{ sv.name }}</td><td><code>{{ sv.script.name }}</code></td>
+          <td>{% if st and st.running %}<span class="label label-ok">running</span>{% elif not m.available or not control.is_on('observability') %}<span class="label">stopped</span>{% else %}<span class="label label-crit">not running</span>{% endif %}</td>
+          <td>{{ st.since if st and st.since else '—' }}</td><td class="num">{{ st.restarts if st else 0 }}</td>
+          <td class="msg">{{ st.log[-1] if st and st.log else '' }}{% if st and st.last_exit is not none and not st.running %} (exit code {{ st.last_exit }}){% endif %}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    {% endif %}
     <h3>API endpoints for MP Builder</h3>
     <ul class="endpoints">
     {% for a in m.api %}<li><span class="method">GET</span><code>/api/{{ m.name }}{{ a.path }}</code><span class="subtle">{{ a.description }}</span></li>{% endfor %}

@@ -1,0 +1,51 @@
+# Knowledge source plug-in: OpenAPI / Swagger specifications (REST API references).
+#
+# Same contract as the other plug-ins (see sources/markdown-repo/source.yaml), plus
+# ASK_SOURCE_UPLOAD_DIR (the folder the Knowledge sources page saves uploads into).
+# Every API operation becomes one short markdown document: method and path, what it
+# does, parameters, request body and response fields (schemas expanded), the JSON
+# example from the spec and a PowerShell call. One overview document per spec lists
+# every area (tag) and its operations. Works offline; JSON and YAML, OpenAPI 3 and Swagger 2.
+name: openapi
+title: API specs (OpenAPI)
+description: Indexes OpenAPI or Swagger API specs (JSON or YAML), such as the VCF Operations, vCenter, SDDC Manager or NSX API. One document per API call, so answers find the exact endpoint, its parameters and fields.
+version: 0.1.0
+runtime: python
+entry: fetch_openapi.py
+timeout_seconds: 900
+options:
+  - key: location
+    label: Files from
+    type: select
+    choices: [upload, folder]
+    default: upload
+    hint: "upload = spec files you upload on this page. folder = a folder inside the container, such as /knowledge (compose mounts ./ask-knowledge there read-only)."
+  - key: path
+    label: Folder
+    default: /knowledge
+    hint: "Only for 'folder'."
+  - key: pattern
+    label: File names (globs)
+    type: list
+    default: ["**/*openapi*.json", "**/*swagger*.json", "**/*openapi*.yaml", "**/*openapi*.yml"]
+    hint: "Only for 'folder'. One pattern per line, relative to the folder."
+  - key: tags
+    label: Only these areas (tags)
+    type: list
+    default: []
+    hint: "Optional. One API tag per line, e.g. Alerts or Resources. Empty = every area."
+  - key: deprecated
+    label: Deprecated calls
+    type: select
+    choices: [skip, include]
+    default: skip
+  - key: base_url
+    label: Server for examples
+    default: ""
+    hint: "Optional, used only in the PowerShell examples, e.g. https://ops.lab.local. Empty = $server."
+  - key: uploads
+    label: When a file is uploaded again
+    type: select
+    choices: [keep, replace]
+    default: keep
+    hint: "Only for 'upload'. keep = every uploaded spec is indexed (a file with the same name is overwritten). replace = a new upload removes the earlier files."

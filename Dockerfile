@@ -23,7 +23,7 @@ COPY docs/screenshots ./docs/screenshots
 RUN chmod -R a+rX /app \
  && useradd --system --uid 10001 vco && mkdir -p /app/data /app/exports /modules && chown -R vco /app/data /app/exports /modules
 USER vco
-EXPOSE 8080
+EXPOSE 8080 5514/udp 5514/tcp
 VOLUME ["/app/data", "/app/exports", "/modules"]
 HEALTHCHECK --interval=30s --timeout=5s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/core/health')"
 CMD ["uvicorn", "core.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080"]

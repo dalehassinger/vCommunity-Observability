@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Log settings · vCommunity-Observability{% endblock %}
+{% block head %}{% include "logs/_head.html" %}{% endblock %}
+{% block body %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb"><a href="/overview">Dashboards</a> / logs</div>
+    <h1>Log settings</h1>
+    <p class="subtle">How long logs are kept, how much space they may use, who is sending, and how to point hosts, appliances and apps at this server.</p>
+  </div>
+  <div class="page-actions">{% include "logs/_token.html" %}</div>
+</div>
+
+<div class="lg-kpis" id="lg-kpis" data-page="settings"></div>
+
+<div class="lg-two">
+<section class="card lg-card" id="retention">
+  <div class="card-header">Retention and size</div>
+  <div class="card-block">
+    <form class="lg-form" id="st-form" autocomplete="off">
+      <label for="st-days">Keep logs for</label><span class="inline"><input type="number" id="st-days" name="retention_days" min="0.5" max="365" step="0.5"> days</span>
+      <label for="st-cap">Size cap</label><span class="inline"><input type="number" id="st-cap" name="max_size_gb" min="0.1" max="10000" step="0.1"> GB</span>
+      <span class="hint">When the logs reach the cap, the oldest are removed first, even if they are newer than the days above.</span>
+      <label for="st-quiet">Idle source after</label><span class="inline"><input type="number" id="st-quiet" name="silent_minutes" min="1" max="1440"> minutes without a message</span>
+      <span class="hint">Only a label in the Sources list. Apps such as vCommunity Ask send only when used, so idle is normal for them. To be told when a host stops sending, make a log alert.</span>
+    </form>
+    <div class="lg-form-actions"><button type="button" class="btn btn-primary" id="st-save">Save</button><span id="st-msg" class="lg-meta" role="status"></span></div>
+    <p class="lg-meta">Cleanup runs every 5 minutes. Logs are in <code>data/syslog.db</code>, separate from the dashboards' data.</p>
+  </div>
+</section>
+
+<section class="card lg-card" id="listener">
+  <div class="card-header">Syslog listener</div>
+  <div class="card-block" id="st-listener"><p class="lg-empty">Loading…</p></div>
+</section>
+</div>
+
+<section class="card lg-card" id="senders">
+  <div class="card-header"><span>Sources</span><span class="grow"></span><span class="lg-meta" id="st-senders-meta"></span></div>
+  <div class="card-block">
+    <div class="table-wrap"><table class="datagrid">
+      <thead><tr><th>Source</th><th>IP</th><th>Apps (24 h)</th><th>Last message</th><th>Messages (24 h)</th><th>Errors (24 h)</th><th>Status</th></tr></thead>
+      <tbody id="st-senders"></tbody>
+    </table></div>
+    <p class="lg-empty" id="st-senders-none" hidden>Nothing received yet.</p>
+  </div>
+</section>
+
+<section class="card lg-card" id="setup">
+  <div class="card-header">Send syslog here</div>
+  <div class="card-block">
+    <p class="lg-meta" id="st-port-note" hidden></p>
+    <p>Anything that speaks syslog can send here: ESXi hosts, vCenter, other appliances, switches, your own scripts and apps.
+      Use this computer's address, <b class="lg-addr">this-server</b>, port <b><span class="lg-port">514</span></b>. UDP is the usual choice; TCP does not lose messages when the network is busy.
+      Containers in the same docker compose project use <code>vco:5514</code> instead.</p>
+    <h3>vCommunity Ask (built in)</h3>
+    <p>Ask sends every prompt, the model's thinking, tool calls and a short answer summary as app <code>vcommunity-ask</code>.
+      Turn it on or off, and choose what is sent, on Ask's <b>Settings</b> page under <b>Activity log</b>.
+      <a href="/dash/logs/search?app=vcommunity-ask&amp;range=24h">See Ask activity</a></p>
+    <h3>One ESXi host (SSH or the ESXi Shell)</h3>
+    <pre class="lg-pre">esxcli system syslog config set --loghost='udp://<span class="lg-addr">this-server</span>:<span class="lg-port">514</span>'
+esxcli network firewall ruleset set --ruleset-id=syslog --enabled=true
+esxcli system syslog reload</pre>
+    <h3>Every host in vCenter (PowerCLI)</h3>
+    <pre class="lg-pre">Connect-VIServer -Server &lt;vcenter&gt;
+Get-VMHost | Get-AdvancedSetting -Name Syslog.global.logHost |
+    Set-AdvancedSetting -Value 'udp://<span class="lg-addr">this-server</span>:<span class="lg-port">514</span>' -Confirm:$false
+Get-VMHost | Get-VMHostFirewallException -Name 'syslog' | Set-VMHostFirewallException -Enabled:$true</pre>
+    <h3>vCenter</h3>
+    <p>VAMI (<code>https://&lt;vcenter&gt;:5480</code>) → <b>Syslog</b> → <b>Configure</b>: server <b class="lg-addr">this-server</b>, port <span class="lg-port">514</span>, protocol UDP or TCP.</p>
+    <h3>Test from Linux (util-linux logger)</h3>
+    <pre class="lg-pre">logger -n <span class="lg-addr">this-server</span> -P <span class="lg-port">514</span> -d "hello from $(hostname)"      # UDP
+logger -n <span class="lg-addr">this-server</span> -P <span class="lg-port">514</span> -T "hello over TCP"            # TCP</pre>
+    <h3>Your own script (PowerShell 7)</h3>
+    <pre class="lg-pre">function Send-Syslog {
+    param([Parameter(Mandatory)][string]$Message, [string]$App = 'my-script', [int]$Severity = 6,
+          [string]$Server = '<span class="lg-addr">this-server</span>', [int]$Port = <span class="lg-port">514</span>, [ValidateSet('tcp', 'udp')][string]$Protocol = 'tcp')
+    $ts    = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+    $raw   = "&lt;$(8 * 16 + $Severity)&gt;1 $ts $([Environment]::MachineName) $App $PID - - $Message"
+    $bytes = [Text.Encoding]::UTF8.GetBytes($raw)
+    if ($Protocol -eq 'udp') {
+        $udp = [System.Net.Sockets.UdpClient]::new(); [void]$udp.Send($bytes, $bytes.Length, $Server, $Port); $udp.Close(); return
+    }
+    $tcp = [System.Net.Sockets.TcpClient]::new($Server, $Port)     # fails loudly when nothing listens
+    $s   = $tcp.GetStream()
+    $len = [Text.Encoding]::ASCII.GetBytes("$($bytes.Length) ")    # octet counting (RFC 6587), like ESXi
+    $s.Write($len, 0, $len.Length); $s.Write($bytes, 0, $bytes.Length); $s.Flush(); $tcp.Close()
+}
+Send-Syslog 'Nightly report finished: 42 VMs checked'
+Send-Syslog 'Datastore DS01 is 91% full' -Severity 4               # warning</pre>
+    <p class="lg-meta">On the computer that runs the containers, use <code>-Server 127.0.0.1</code>.</p>
+    <h3>Your own script (Python)</h3>
+    <pre class="lg-pre">import logging, logging.handlers
+log = logging.getLogger("my-script")
+log.addHandler(logging.handlers.SysLogHandler(address=("<span class="lg-addr">this-server</span>", <span class="lg-port">514</span>)))
+log.setLevel(logging.INFO)
+log.warning("my-script: datastore DS01 is 91% full")</pre>
+  </div>
+</section>
+<script src="/ui/logs/static/logs.js?v={{ asset_v }}"></script>
+{% endblock %}

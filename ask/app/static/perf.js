@@ -267,8 +267,39 @@
     })));
   }
 
+  // -- Logs module (syslog server in the Observability container) -----------------------
+  function num(n) { return n == null ? '–' : Number(n).toLocaleString(undefined, { maximumFractionDigits: 1 }); }
+  function renderLogs() {
+    var l = (data.now.vco || {}).logs;
+    var card = document.getElementById('perf-logs-card');
+    card.hidden = !l;
+    if (!l) return;
+    var box = document.getElementById('perf-logs-kpis');
+    box.innerHTML = '';
+    var capPct = l.max_size_bytes ? l.used_bytes / l.max_size_bytes * 100 : null;
+    var diskPct = l.disk_total ? (l.disk_total - l.disk_free) / l.disk_total * 100 : null;
+    box.appendChild(kpi('Logs per second', num(l.per_second), 'last 10 seconds, average', l.dropped_hour ? 'warn' : 'ok'));
+    box.appendChild(kpi('Logs per minute', num(l.per_minute), 'the last 60 seconds'));
+    box.appendChild(kpi('Logs per hour', num(l.per_hour), l.dropped_hour ? num(l.dropped_hour) + ' dropped in the last hour' : 'the last 60 minutes', l.dropped_hour ? 'warn' : ''));
+    box.appendChild(kpi('Log disk space used', bytes(l.used_bytes), pct(capPct) + ' of the ' + bytes(l.max_size_bytes, 0) + ' cap',
+      level(capPct, 80, 95)));
+    box.appendChild(kpi('Disk space available', bytes(l.disk_free), 'free of ' + bytes(l.disk_total, 0) + ' (' + pct(diskPct) + ' used)', level(diskPct, 85, 95)));
+    var GB = 1073741824, b = base();
+    b.yAxis = [b._axis('per second', '{value}', { min: 0 }), b._axis('per minute', '{value}', { min: 0, splitLine: { show: false } })];
+    b.series = [line('Per second', series('l_ps'), 0, true), line('Per minute', series('l_pm'), 1)];
+    draw('logs-rate', b, hasData(['l_ps', 'l_pm']) ? null : 'Collecting…');
+    b = base();
+    b.yAxis = [b._axis('GB', '{value}', { min: 0 }), b._axis('GB', '{value}', { min: 0, splitLine: { show: false } })];
+    b.series = [line('Log disk space used', series('l_used', GB), 0, true), line('Disk space available', series('l_free', GB), 1)];
+    draw('logs-disk', b, hasData(['l_used', 'l_free']) ? null : 'Collecting…');
+    var link = document.getElementById('perf-logs-link');
+    if (data.observability_url && link.tagName !== 'A') {
+      var a = el('a', null, 'Logs pages'); a.href = data.observability_url.replace(/\/$/, '') + '/dash/logs/search'; link.replaceWith(a); a.id = 'perf-logs-link';
+    }
+  }
+
   function render() {
-    renderKpis(); renderAgentNote(); renderCharts(); renderOllama(); renderHost(); renderWeb();
+    renderKpis(); renderAgentNote(); renderCharts(); renderLogs(); renderOllama(); renderHost(); renderWeb();
     document.getElementById('perf-updated').textContent = 'Updated ' + ago(data.now.ts) + ' · every ' + data.sample_seconds + ' s';
   }
 

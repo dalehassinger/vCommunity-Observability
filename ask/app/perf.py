@@ -217,6 +217,12 @@ class Sampler:
             return {"running": False, "error": e.__class__.__name__}
         v = {**container_view(raw, self.vco_prev, t - self.vco_prev_t), "running": True,
              "uptime": raw.get("uptime"), "version": raw.get("version")}
+        # Logs module (syslog server) in the Observability container: message rates, log
+        # storage and the data volume's free space. Missing when the module is off.
+        if isinstance(raw.get("logs"), dict) and not raw["logs"].get("error"):
+            v["logs"] = {k: raw["logs"].get(k) for k in ("per_second", "per_minute", "per_hour", "dropped_hour", "used_bytes",
+                                                         "file_bytes", "max_size_bytes", "retention_days", "disk_total",
+                                                         "disk_used", "disk_free")}
         self.vco_prev, self.vco_prev_t = raw, t
         return v
 
@@ -235,6 +241,10 @@ class Sampler:
                         "v_cpu": (s.get("vco") or {}).get("cpu_pct"), "v_mem": (s.get("vco") or {}).get("mem"),
                         "v_rx": (s.get("vco") or {}).get("net_rx_bps"), "v_tx": (s.get("vco") or {}).get("net_tx_bps"),
                         "v_rd": (s.get("vco") or {}).get("io_read_bps"), "v_wr": (s.get("vco") or {}).get("io_write_bps"),
+                        "l_ps": ((s.get("vco") or {}).get("logs") or {}).get("per_second"),
+                        "l_pm": ((s.get("vco") or {}).get("logs") or {}).get("per_minute"),
+                        "l_used": ((s.get("vco") or {}).get("logs") or {}).get("used_bytes"),
+                        "l_free": ((s.get("vco") or {}).get("logs") or {}).get("disk_free"),
                         "h_cpu": (h.get("cpu") or {}).get("pct") if h.get("ok") else None,
                         "h_gpu": (h.get("gpu") or {}).get("pct") if h.get("ok") else None,
                         "h_mem": (h.get("memory") or {}).get("used") if h.get("ok") else None,

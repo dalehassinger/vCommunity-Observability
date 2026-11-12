@@ -38,6 +38,18 @@ class Collector:
 
 
 @dataclass
+class Service:
+    """A long-running script the core keeps alive while its module is on (a syslog
+    listener, a message-queue consumer...). Unlike a collector it is not scheduled: the
+    core starts it, restarts it when it exits, and stops it when the module is switched
+    off or vCommunity Observability is paused. .py or .ps1, like collectors."""
+    name: str
+    script: Path
+    language: str
+    restart_seconds: int = 5
+
+
+@dataclass
 class Module:
     name: str
     version: str
@@ -49,6 +61,10 @@ class Module:
     api: list[dict[str, Any]]
     dashboards: list[dict[str, Any]]
     exports: list["Export"] = field(default_factory=list)
+    services: list[Service] = field(default_factory=list)
+    # Optional Python file with register(app, ctx): extra pages and JSON routes for
+    # modules that need more than read-only queries (search, forms). See core/extensions.py.
+    web: Path | None = None
     enabled: bool = True
     settings: dict[str, Any] = field(default_factory=dict)
     problems: list[str] = field(default_factory=list)
@@ -59,7 +75,7 @@ class Module:
 
     @property
     def languages(self) -> list[str]:
-        return sorted({c.language for c in self.collectors})
+        return sorted({c.language for c in self.collectors} | {s.language for s in self.services})
 
 
 @dataclass
@@ -182,6 +198,23 @@ def parse_manifest(folder: Path) -> Module:
             params=[str(p) for p in e.get("params", [])],
         ))
 
+    services: list[Service] = []
+    for sv in data.get("services") or []:
+        if not IDENT.match(str(sv.get("name", ""))):
+            raise ManifestError(f"service '{sv.get('name')}' must be a lowercase identifier")
+        script = folder / str(sv.get("script", ""))
+        lang = INTERPRETERS.get(script.suffix.lower())
+        if lang is None or not script.is_file():
+            raise ManifestError(f"service {sv['name']}: script must be an existing .py or .ps1 file")
+        services.append(Service(name=sv["name"], script=script, language=lang,
+                                restart_seconds=max(1, int(sv.get("restart_seconds", 5)))))
+
+    web = None
+    if data.get("web"):
+        web = folder / str(data["web"])
+        if web.suffix != ".py" or not web.is_file():
+            raise ManifestError(f"web: {data['web']} must be an existing .py file")
+
     return Module(
         name=name,
         version=str(data.get("version", "0.0.0")),
@@ -193,6 +226,8 @@ def parse_manifest(folder: Path) -> Module:
         api=api,
         dashboards=dashboards,
         exports=exports,
+        services=services,
+        web=web,
         enabled=bool(data.get("enabled_by_default", True)),
     )
 

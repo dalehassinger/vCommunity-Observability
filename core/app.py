@@ -30,6 +30,7 @@ from . import control, perfstat
 from . import export_schedule as xs
 from .modules import Module, discover
 from .runner import run_collector, run_export
+from .services import ServiceManager
 from .storage import Storage, utcnow
 from .vcenters import mirror_primary, normalize_vcenter, valid_id
 
@@ -103,6 +104,10 @@ class Core:
         self.storage = Storage(cfg.data_dir)
         self.modules: dict[str, Module] = discover(cfg.modules_dirs, cfg.modules)
         self.scheduler = BackgroundScheduler(timezone="UTC")
+        self.services = ServiceManager(cfg, self.modules)
+        # Extra numbers for the Performance dashboard, added by module web extensions
+        # (ctx.add_perf): name -> function returning a dict.
+        self.perf_extras: dict[str, Any] = {}
         # Normalize vcenter to always expose instances[] (file may still be flat).
         if "vcenter" in cfg.connections:
             cfg.connections["vcenter"] = mirror_primary(normalize_vcenter(cfg.connections["vcenter"]))
@@ -169,6 +174,7 @@ class Core:
             if sched["enabled"]:
                 self.schedule_export(sched)
         self.scheduler.start()
+        self.services.start()
         # First collection right away, in the background, so startup stays fast.
         threading.Thread(target=self.run_all, daemon=True).start()
 
@@ -314,6 +320,7 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
         if start_scheduler:
             core.start()
         yield
+        core.services.stop()
         if core.scheduler.running:
             core.scheduler.shutdown(wait=False)
 
@@ -342,7 +349,18 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
 
     templates.env.filters["explain_error"] = explain_error
     # Sidebar link to the vCommunity Ask chat container (empty = no link).
-    templates.env.globals["ask_url"] = os.environ.get("VCO_ASK_URL", "")
+    templates.env.globals["ask_url_config"] = os.environ.get("VCO_ASK_URL", "")
+    # ask_url follows the host the browser used (see core/links.py), so the link to Ask
+    # also works from another computer when VCO_ASK_URL says localhost.
+    from jinja2 import pass_context
+    from .links import follow_host
+
+    @pass_context
+    def _ask_url(ctx) -> str:
+        req = ctx.get("request")
+        return follow_host(templates.env.globals["ask_url_config"], req.url.hostname if req else None)
+
+    templates.env.globals["ask_url_for"] = _ask_url
     # Apps on / off (shared with the Ask container through ./control/apps.json).
     templates.env.globals["control"] = control
     # Module templates are addressed as "<module>/<file>" and can extend base.html.
@@ -402,8 +420,9 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
     # There is one Performance dashboard for both containers, on vCommunity Ask (it also has
     # the host, Ollama and answer speed). /performance here just opens it.
     @app.get("/performance", include_in_schema=False)
-    def performance_page():
-        ask = templates.env.globals.get("ask_url") or ""
+    def performance_page(request: Request):
+        from .links import follow_host
+        ask = follow_host(templates.env.globals.get("ask_url_config") or "", request.url.hostname)
         if not ask:
             raise HTTPException(404, "The Performance dashboard is on vCommunity Ask; set VCO_ASK_URL")
         return RedirectResponse(f"{ask.rstrip('/')}/performance", status_code=302)
@@ -412,7 +431,16 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
     def perf_container() -> dict[str, Any]:
         # Raw cgroup counters of this container for Ask's Performance dashboard.
         # Numbers only (CPU time, memory, byte counts), so no token is needed.
-        return {**perfstat.container_raw(), "app": "observability", "version": CORE_VERSION}
+        out = {**perfstat.container_raw(), "app": "observability", "version": CORE_VERSION}
+        # Module extras, e.g. the Logs module's message rates and disk use ("logs": {...}).
+        for name, fn in core.perf_extras.items():
+            mod = core.modules.get(name)
+            if mod and mod.available:
+                try:
+                    out[name] = fn()
+                except Exception as exc:  # a module problem must not break the dashboard
+                    out[name] = {"error": str(exc)}
+        return out
 
     @app.get("/api/core/apps", tags=["core"], dependencies=[Depends(require_token)])
     def api_apps() -> dict[str, Any]:
@@ -596,7 +624,7 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
             mod_runs = [runs[(mod.name, c.name)] for c in mod.collectors if (mod.name, c.name) in runs]
             return templates.TemplateResponse(request, f"{mod.name}/{dash['template']}", {
                 "nav": nav(), "mod": mod, "dash": dash, "data": data, "query_errors": errors,
-                "q": dict(request.query_params), "mock": core.cfg.mock,
+                "q": dict(request.query_params), "mock": core.cfg.mock, "auth": bool(core.cfg.api_tokens),
                 "active": f"/dash/{mod.name}/{slug}",
                 "last_collected": max((r["finished_at"] for r in mod_runs if r["status"] == "ok"), default=None),
                 "run_errors": [r for r in mod_runs if r["status"] != "ok"],
@@ -1004,6 +1032,7 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
             "nav": nav(), "modules": list(core.modules.values()),
             "runs": core.storage.last_runs(), "mock": core.cfg.mock,
             "auth": bool(core.cfg.api_tokens), "active": "/modules",
+            "services": {(x["module"], x["name"]): x for x in core.services.statuses()},
         })
 
     @app.post("/modules/{module}/run", include_in_schema=False)
@@ -1031,5 +1060,15 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
             raise HTTPException(404, "Unknown module")
         core.set_enabled(mod, not mod.enabled)
         return RedirectResponse(f"/modules#{mod.name}", status_code=303)
+
+    # -- module web extensions (module.yaml `web:`) ------------------------------
+    # A module that needs more than read-only queries (search boxes, forms, live data)
+    # ships a Python file with register(app, ctx). ctx gives it the pieces of the core
+    # it needs; see core/extensions.py.
+    from .extensions import load_extension
+    for mod in core.modules.values():
+        if mod.web and not mod.problems:
+            load_extension(app, core, mod, templates=templates, nav=nav, require_token=require_token,
+                           admin_ok=admin_ok)
 
     return app

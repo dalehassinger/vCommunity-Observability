@@ -1,0 +1,86 @@
+/* Logs module pages (Logs, Log alerts, Log settings). Uses the core theme tokens in app.css. */
+.lg-kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.lg-kpis .kpi-value { font-size: 30px; }
+.lg-kpis .kpi-card .card-block { padding-top: 8px; }
+.lg-card { margin-bottom: 16px; }
+.lg-card .card-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.lg-card .card-header .grow { flex: 1; }
+.lg-search { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.lg-search input[type=search] { flex: 1 1 320px; min-width: 0; }
+.lg-input, .lg-search input, .lg-search select, .lg-form input, .lg-form select, .lg-token input {
+  font: inherit; font-size: 13px; height: 32px; padding: 0 9px; border: 1px solid var(--border); border-radius: 3px;
+  background: var(--surface); color: var(--text); box-sizing: border-box; max-width: 100%; }
+.lg-search input:focus, .lg-search select:focus, .lg-form input:focus, .lg-form select:focus, .lg-token input:focus {
+  outline: 2px solid var(--primary); outline-offset: -1px; }
+.lg-help { margin-top: 8px; font-size: 12px; color: var(--subtle); }
+.lg-help code { background: var(--surface-2); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; }
+.lg-help summary { cursor: pointer; width: max-content; }
+.lg-help dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 8px 0 0; }
+.lg-help dt { white-space: nowrap; }
+.lg-help dd { margin: 0; }
+.lg-meta { font-size: 12px; color: var(--subtle); }
+.lg-chart { height: 170px; }
+.lg-error { color: var(--crit); font-size: 13px; margin: 8px 0 0; }
+.lg-ok { color: var(--ok); font-size: 13px; }
+
+/* results */
+.lg-table td { vertical-align: top; }
+.lg-table td.t { font-variant-numeric: tabular-nums; color: var(--subtle); width: 1%; }
+.lg-table td.h { width: 1%; }
+.lg-table td.m { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; min-width: 260px;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.lg-table tbody tr.row { cursor: pointer; }
+.lg-table tbody tr.row.new td { background: var(--info-bg); }
+.lg-table tr.detail td { background: var(--surface-2); white-space: normal; }
+.lg-detail { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; font-size: 12px; }
+.lg-detail dt { color: var(--subtle); font-weight: 600; }
+.lg-detail dd { margin: 0; overflow-wrap: anywhere; }
+.lg-detail pre { margin: 0; white-space: pre-wrap; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.lg-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.lg-more { display: flex; justify-content: center; padding: 12px; }
+.sev { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 3px; text-transform: uppercase;
+  letter-spacing: .03em; background: var(--track); color: var(--subtle); white-space: nowrap; }
+.sev-0, .sev-1, .sev-2, .sev-3 { background: var(--crit-bg); color: var(--crit); }
+.sev-4 { background: var(--warn-bg); color: var(--warn); }
+.sev-5 { background: var(--info-bg); color: var(--primary); }
+.lg-mark { background: rgba(239, 176, 0, .35); color: inherit; border-radius: 2px; }
+.lg-live { display: inline-flex; align-items: center; gap: 6px; }
+.lg-live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--subtle); }
+.lg-live.on .dot { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-bg); }
+
+/* forms */
+.lg-form { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 10px 12px; align-items: center; max-width: 760px; }
+.lg-form > label { font-size: 13px; color: var(--subtle); font-weight: 600; }
+.lg-form .wide { width: 100%; }
+.lg-form .inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.lg-form .inline input[type=number] { width: 110px; }
+.lg-form .hint { grid-column: 2; font-size: 12px; color: var(--subtle); margin-top: -6px; }
+.lg-form-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+.lg-form fieldset { border: 0; padding: 0; margin: 0; display: contents; }
+.lg-token { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--subtle); }
+.lg-token input { width: 260px; }
+.lg-check { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
+.lg-editing { border: 1px solid var(--primary); }
+.lg-pre { margin: 6px 0 0; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 3px;
+  white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.lg-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; }
+.lg-empty { color: var(--subtle); font-style: italic; padding: 10px 0; }
+.lg-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.lg-sample { margin: 4px 0 0; padding-left: 16px; font-size: 12px; }
+.lg-sample li { overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+  .lg-form { grid-template-columns: 1fr; }
+  .lg-form .hint { grid-column: 1; margin-top: -8px; }
+  .lg-two { grid-template-columns: 1fr; }
+}
+
+/* quick searches */
+.lg-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+.lg-chip { font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 12px; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text); cursor: pointer; }
+.lg-chip:hover { border-color: var(--primary); color: var(--primary); }
+.lg-chip:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.lg-table td .lg-meta { font-size: 11px; }
+.lg-off { background: var(--warn-bg); border-color: var(--warn); display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 16px; }
+.lg-idle { background: var(--track); color: var(--subtle); }
+.lg-off[hidden] { display: none; }

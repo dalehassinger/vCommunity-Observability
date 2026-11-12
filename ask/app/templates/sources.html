@@ -40,6 +40,8 @@
         {% if s.options.repo_url %}<dt>Repository</dt><dd><a href="{{ s.options.repo_url }}" target="_blank" rel="noopener">{{ s.options.repo_url | replace('https://', '') }}</a> · {{ s.options.branch or 'main' }}</dd>
         {% elif s.plugin == 'spreadsheet' and s.options.location == 'upload' %}<dt>Files</dt><dd>uploaded on this page</dd>
         {% elif s.plugin == 'pdf' and (s.options.location or 'upload') == 'upload' %}<dt>Files</dt><dd>PDFs uploaded on this page · OCR {{ s.options.ocr or 'auto' }}</dd>
+        {% elif s.plugin == 'openapi' and (s.options.location or 'upload') == 'upload' %}<dt>Files</dt><dd>API specs uploaded on this page{% if s.options.tags %} · areas {{ s.options.tags | join(', ') }}{% endif %}</dd>
+        {% elif s.plugin == 'openapi' %}<dt>Folder</dt><dd><code>{{ s.options.path or '/knowledge' }}</code> · {{ (s.options.pattern or ['**/*openapi*.json']) | join(', ') }}</dd>
         {% elif s.plugin == 'pdf' %}<dt>Folder</dt><dd><code>{{ s.options.path or '/knowledge' }}</code> · {{ (s.options.pattern or ['**/*.pdf']) | join(', ') }} · OCR {{ s.options.ocr or 'auto' }}</dd>
         {% elif s.plugin == 'spreadsheet' %}<dt>Folder</dt><dd><code>{{ s.options.path or '/exports' }}</code> · {{ (s.options.pattern or ['*.xlsx']) | join(', ') }} · {{ s.options.pick or 'newest' }}</dd>
         {% elif s.options.path %}<dt>Folder</dt><dd><code>{{ s.options.path }}</code></dd>
@@ -48,15 +50,15 @@
         {% elif s.options.date_from or s.options.date_to %}<dt>Date range</dt><dd>{{ s.options.date_from or 'any' }} → {{ s.options.date_to or 'today' }}</dd>{% endif %}
         {% if s.tables %}<dt>Data tables</dt><dd title="{% for t in s.tables %}{{ t.table }} ({{ t.sheet }}): {{ t.rows }} rows&#10;{% endfor %}">{{ s.tables | length }} sheets, {{ s.tables | sum(attribute='rows') }} rows · data questions on</dd>{% endif %}
         {% if s.options.include %}<dt>Include</dt><dd><code>{{ s.options.include | join(', ') }}</code></dd>{% endif %}
-        <dt>Version</dt><dd><code>{{ (s.version[:12] if s.version|length == 40 else s.version) or '–' }}</code></dd>
+        <dt>Version</dt><dd><code>{{ (s.version[:12] if (s.version or '')|length == 40 else s.version) or '–' }}</code></dd>
         <dt>Last synced</dt><dd data-f="last_ok">{{ s.last_ok | ago }}</dd>
         <dt>Re-sync every</dt><dd>{% if s.interval_hours > 0 %}{{ s.interval_hours | round(2) | string | replace('.0', '') }} h{% else %}never (Sync now only){% endif %}</dd>
         <dt>Status</dt><dd data-f="progress">{{ s.progress or s.status }}</dd>
       </dl>
       {% if s.last_error %}<div class="alert alert-danger err-box" data-f="last_error">{{ s.last_error }}</div>{% endif %}
-      {% if (s.plugin == 'spreadsheet' and s.options.location == 'upload') or (s.plugin == 'pdf' and (s.options.location or 'upload') == 'upload') %}
+      {% if (s.plugin == 'spreadsheet' and s.options.location == 'upload') or (s.plugin in ('pdf', 'openapi') and (s.options.location or 'upload') == 'upload') %}
       <div class="upload-box" data-upload="{{ s.name }}">
-        <div class="upload-drop">Drop {{ 'PDF files' if s.plugin == 'pdf' else 'an <b>.xlsx</b> or <b>.csv</b> file' | safe }} here, or <label class="link-btn">choose {{ 'files' if s.plugin == 'pdf' else 'a file' }}<input type="file" accept="{{ s.upload_types }}" hidden data-file="{{ s.name }}" {{ 'multiple' if s.plugin == 'pdf' else '' }}></label>
+        <div class="upload-drop">Drop {{ {'pdf': 'PDF files', 'openapi': 'API spec files (<b>.json</b>, <b>.yaml</b>)'}.get(s.plugin, 'an <b>.xlsx</b> or <b>.csv</b> file') | safe }} here, or <label class="link-btn">choose {{ 'files' if s.plugin in ('pdf', 'openapi') else 'a file' }}<input type="file" accept="{{ s.upload_types }}" hidden data-file="{{ s.name }}" {{ 'multiple' if s.plugin in ('pdf', 'openapi') else '' }}></label>
           <span class="subtle">{{ 'A new upload replaces the earlier file.' if s.upload_mode == 'replace' else 'Uploads are kept side by side.' }}</span></div>
         {% if s.uploads %}<ul class="upload-list">{% for f in s.uploads %}<li><code>{{ f.name }}</code> <span class="subtle">{{ f.size_mb }} MB · {{ f.uploaded }}</span> <button class="link-btn" type="button" data-unload="{{ s.name }}" data-fname="{{ f.name }}">Remove</button></li>{% endfor %}</ul>
         {% else %}<div class="subtle">No file uploaded yet.</div>{% endif %}

@@ -22,7 +22,7 @@ import time
 from typing import Any, Iterator
 from urllib.parse import quote
 
-from . import data, mcp, overview, websearch
+from . import data, mcp, overview, syslog_out, websearch
 from . import reports as reports_mod
 from .db import DB
 from .indexer import embed_prefixes
@@ -316,6 +316,9 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
     db.add_message(chat_id, "user", question)
     content, thinking, cards, stats = "", "", [], {}
     model = cfg["chat_model"]
+    finished = False
+    # Activity log (Logs module): the prompt now, then tool calls, the thinking and the answer.
+    syslog_out.prompt(cfg, chat_id, question, sources, tools, interactive)
     try:
         mcp_tools: list[dict[str, Any]] = []
         mcp_index: dict[str, Any] = {}
@@ -366,6 +369,7 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
                     res["chart"] = res.get("chart") or data.auto_chart(res["columns"], res["rows"])
             if not res.get("error"):
                 res["report"] = rkind
+            syslog_out.data_query(cfg, chat_id, res)
             if res.get("error"):
                 stats["data_error"] = res["error"]
                 res = None
@@ -429,6 +433,7 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
                 card = {"kind": "tool", "n": len(cards) + 1, "status": "running"}
                 cards.append(card)
                 yield from run_tool(cfg, chat_id, c, card, mcp_index, interactive)
+                syslog_out.tool(cfg, chat_id, card)
                 msgs.append({"role": "tool", "tool_name": card["tool"], "content": card.pop("_for_model")})
             stats["tool_calls"] = sum(1 for k in cards if k.get("kind") == "tool")
         page = reports_mod.page_in_answer(content) if REPORTS is not None and not (res and res.get("report")) else None
@@ -457,6 +462,7 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
             except Exception as e:  # a failed report must not lose the answer
                 log.exception("report failed")
                 stats["report_error"] = str(e)
+        finished = True
         yield sse("done", {"stats": stats, "model": model})
     except OllamaError as e:
         content = content or ""
@@ -467,6 +473,7 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
         if content or stats.get("error"):
             db.add_message(chat_id, "assistant", content or f"_{stats.get('error')}_", thinking=thinking,
                            sources=cards, model=model, stats=stats)
+        syslog_out.finish(cfg, chat_id, model, thinking, content, stats, finished)
 
 
 def run_tool(cfg: dict[str, Any], chat_id: str, call: dict[str, Any], card: dict[str, Any],

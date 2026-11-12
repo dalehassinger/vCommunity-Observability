@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Logs · vCommunity-Observability{% endblock %}
+{% block head %}{% include "logs/_head.html" %}{% endblock %}
+{% block body %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb"><a href="/overview">Dashboards</a> / logs</div>
+    <h1>Logs</h1>
+    <p class="subtle" id="lg-sub">Syslog sent to this server on port <span class="lg-port">514</span> (UDP and TCP).</p>
+  </div>
+  <div class="page-actions">
+    <button type="button" class="btn btn-outline lg-live" id="lg-live" aria-pressed="false"><span class="dot"></span><span>Live tail</span></button>
+    <a class="btn btn-outline" id="lg-csv" href="/ui/logs/export.csv">Export CSV</a>
+  </div>
+</div>
+
+<div class="lg-kpis" id="lg-kpis" data-page="logs"></div>
+
+<section class="card lg-card">
+  <div class="card-block">
+    <form class="lg-search" id="lg-form" role="search">
+      <input type="search" id="lg-q" name="q" placeholder='Search: error  "lost access"  host:esx9-01*  app:vpxa  msgid:prompt  sev:err  -debug' aria-label="Search the logs" autocomplete="off">
+      <select id="lg-range" name="range" aria-label="Time range">
+        <option value="15m">Last 15 minutes</option><option value="1h" selected>Last hour</option><option value="6h">Last 6 hours</option>
+        <option value="24h">Last 24 hours</option><option value="3d">Last 3 days</option><option value="7d">Last 7 days</option><option value="all">All kept</option>
+        <option value="custom" hidden>Zoomed in</option>
+      </select>
+      <select id="lg-sev" name="sev" aria-label="Severity">
+        <option value="">Any severity</option><option value="crit">Critical or worse</option><option value="err">Error or worse</option>
+        <option value="warning">Warning or worse</option><option value="notice">Notice or worse</option><option value="info">Info or worse</option>
+      </select>
+      <select id="lg-host" name="host" aria-label="Source"><option value="">All sources</option></select>
+      <select id="lg-app" name="app" aria-label="App"><option value="">All apps</option></select>
+      <button class="btn btn-primary" type="submit">Search</button>
+    </form>
+    <div class="lg-chips" id="lg-chips" aria-label="Quick searches">
+      <span class="lg-meta">Quick:</span>
+      <button type="button" class="lg-chip" data-q="sev:err">Errors</button>
+      <button type="button" class="lg-chip" data-app="vcommunity-ask" data-q="">vCommunity Ask activity</button>
+      <button type="button" class="lg-chip" data-app="vcommunity-ask" data-q="msgid:prompt">Ask prompts</button>
+      <button type="button" class="lg-chip" data-app="vcommunity-ask" data-q="msgid:thinking">Ask thinking</button>
+      <button type="button" class="lg-chip" data-app="vcommunity-ask" data-q="msgid:tool">Ask tool calls</button>
+      <button type="button" class="lg-chip" data-q="" data-app="" data-host="">Clear</button>
+    </div>
+    <details class="lg-help">
+      <summary>How to search</summary>
+      <dl>
+        <dt><code>error disk</code></dt><dd>both words, in the message, app or source name</dd>
+        <dt><code>"lost access"</code></dt><dd>the exact phrase</dd>
+        <dt><code>vmk*</code></dt><dd>words starting with vmk</dd>
+        <dt><code>-debug</code></dt><dd>leave out messages with this word (works on fields too: <code>-host:esx9-04*</code>)</dd>
+        <dt><code>host:esx9-0*</code> <code>ip:192.168.1.*</code></dt><dd>source name (the HOSTNAME field: a host, an appliance or an app's container) or sender IP; <code>*</code> matches any text</dd>
+        <dt><code>app:vpxa</code> <code>procid:1234</code> <code>msgid:x</code></dt><dd>syslog fields. vCommunity Ask sends <code>app:vcommunity-ask</code> with <code>msgid:</code> prompt, thinking, tool, answer or error; <code>chat:&lt;id&gt;</code> is not a field, search the chat id as a word</dd>
+        <dt><code>sev:err</code></dt><dd>this severity or worse: emerg, alert, crit, err, warning, notice, info, debug</dd>
+        <dt><code>facility:local4</code></dt><dd>syslog facility</dd>
+      </dl>
+    </details>
+    <p class="lg-error" id="lg-err" hidden></p>
+  </div>
+</section>
+
+<section class="card lg-card">
+  <div class="card-header"><span>Messages over time</span><span class="grow"></span><span class="lg-meta">Click a bar to zoom in</span>
+    <button type="button" class="btn btn-outline" id="lg-unzoom" hidden>Reset zoom</button></div>
+  <div class="card-block"><div class="lg-chart" id="lg-chart" role="img" aria-label="Messages over time by severity"></div></div>
+</section>
+
+<section class="card lg-card">
+  <div class="card-header"><span id="lg-count">Messages</span><span class="grow"></span><span class="lg-meta" id="lg-took"></span></div>
+  <div class="card-block">
+    <div class="table-wrap"><table class="datagrid lg-table">
+      <thead><tr><th>Time</th><th>Source</th><th>Severity</th><th>App</th><th>Message</th></tr></thead>
+      <tbody id="lg-rows"></tbody>
+    </table></div>
+    <p class="lg-empty" id="lg-none" hidden>No messages match. Point a host, appliance or app at this server (see <a href="/dash/logs/settings#setup">Log settings</a>), or widen the time range.</p>
+    <div class="lg-more"><button type="button" class="btn btn-outline" id="lg-more" hidden>Load older messages</button></div>
+  </div>
+</section>
+<script src="/static/vendor/echarts/echarts.min.js?v={{ asset_v }}"></script>
+<script src="/ui/logs/static/logs.js?v={{ asset_v }}"></script>
+{% endblock %}

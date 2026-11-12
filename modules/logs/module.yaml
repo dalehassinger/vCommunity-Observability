@@ -1,0 +1,36 @@
+# Logs: a built-in syslog server with search, live tail and alerts.
+#
+# The syslog listener is a core *service* (always running while the module is on, see
+# README "Module services"). It writes to data/syslog.db, its own SQLite file, so log
+# traffic never slows the other dashboards. The pages use the module's web extension
+# (web.py) for search, settings and alert rules.
+#
+# Ports: the listener uses 5514 UDP and TCP inside the container (no root needed);
+# docker-compose.yml maps the host's port 514 to it. Change with VCO_SYSLOG_UDP_PORT /
+# VCO_SYSLOG_TCP_PORT. Retention (default 5 days), the size cap (default 5 GB) and alert
+# notifications are set in the UI (Log settings, Log alerts).
+name: logs
+version: 0.1.0
+core_api: 1
+description: Syslog server (UDP/TCP 514) with full-text search, live tail, senders, alerts by email or webhook, and retention by days and size.
+
+services:
+  - name: syslog
+    script: syslog_service.py
+    restart_seconds: 5
+
+web: web.py
+
+dashboards:
+  - slug: search
+    title: Logs
+    description: Search the syslog messages sent to this server.
+    template: logs.html
+  - slug: alerts
+    title: Log alerts
+    description: Alert rules on the syslog messages, and the alerts they fired.
+    template: alerts.html
+  - slug: settings
+    title: Log settings
+    description: Retention, size cap, senders and the syslog listener.
+    template: settings.html

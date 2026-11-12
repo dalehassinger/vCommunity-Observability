@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Log alerts · vCommunity-Observability{% endblock %}
+{% block head %}{% include "logs/_head.html" %}{% endblock %}
+{% block body %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb"><a href="/overview">Dashboards</a> / logs</div>
+    <h1>Log alerts</h1>
+    <p class="subtle">An alert fires when its search finds enough messages in its time window. Checked every 30 seconds. Fired alerts show here and can also go out by email or webhook.</p>
+  </div>
+  <div class="page-actions">{% include "logs/_token.html" %}</div>
+</div>
+
+<div class="lg-kpis" id="lg-kpis" data-page="alerts"></div>
+
+<div class="alert lg-off" id="al-off" role="alert" hidden>
+  <span><b>Alert checking is off.</b> No rule fires and no email or webhook is sent until it is turned on.</span>
+  <button type="button" class="btn btn-primary" id="al-turn-on">Turn alert checking on</button>
+</div>
+
+<section class="card lg-card" id="rules">
+  <div class="card-header"><span>Alert rules</span><span class="grow"></span>
+    <button type="button" class="btn btn-primary" id="al-new">New alert</button></div>
+  <div class="card-block">
+    <div id="al-editor" hidden>
+      <form class="lg-form" id="al-form" autocomplete="off">
+        <input type="hidden" name="id">
+        <label for="al-name">Name</label><input class="wide" id="al-name" name="name" required maxlength="120" placeholder="e.g. ESXi storage path lost">
+        <label for="al-query">Search</label><input class="wide" id="al-query" name="query" placeholder='e.g. "lost access" host:esx9-*   (same as the Logs search box)'>
+        <span class="hint">Empty = every message (then pick a severity).</span>
+        <label for="al-sev">Severity</label>
+        <select id="al-sev" name="min_severity">
+          <option value="">Any</option><option value="0">emerg</option><option value="1">alert or worse</option><option value="2">crit or worse</option>
+          <option value="3">err or worse</option><option value="4">warning or worse</option><option value="5">notice or worse</option><option value="6">info or worse</option>
+        </select>
+        <label>Fire when</label>
+        <span class="inline"><input type="number" name="threshold" min="1" value="1" aria-label="Message count"> or more messages in
+          <input type="number" name="window_minutes" min="1" max="10080" value="5" aria-label="Window in minutes"> minutes</span>
+        <label for="al-cool">Then wait</label>
+        <span class="inline"><input type="number" id="al-cool" name="cooldown_minutes" min="0" max="10080" value="30"> minutes before it can fire again</span>
+        <label>Notify</label>
+        <span class="inline"><label class="lg-check"><input type="checkbox" name="notify_email"> Email</label>
+          <label class="lg-check"><input type="checkbox" name="notify_webhook"> Webhook</label>
+          <span class="lg-meta">Always shown on this page. Set up email and webhook under Notifications.</span></span>
+        <label>On</label>
+        <span class="inline"><label class="switch" style="font-weight:400"><input type="checkbox" role="switch" name="enabled" checked><span></span></label></span>
+      </form>
+      <div class="lg-form-actions">
+        <button type="button" class="btn btn-primary" id="al-save">Save alert</button>
+        <button type="button" class="btn btn-outline" id="al-preview">Test against current logs</button>
+        <button type="button" class="btn btn-outline" id="al-cancel">Cancel</button>
+        <span id="al-msg" class="lg-meta" role="status"></span>
+      </div>
+      <div id="al-preview-out"></div>
+      <hr style="border:0;border-top:1px solid var(--border);margin:16px 0">
+    </div>
+    <div class="table-wrap"><table class="datagrid">
+      <thead><tr><th>On</th><th>Name</th><th>Search</th><th>Severity</th><th>Fires when</th><th>Notify</th><th>Last fired</th><th></th></tr></thead>
+      <tbody id="al-rules"></tbody>
+    </table></div>
+    <p class="lg-empty" id="al-rules-none" hidden>No alert rules yet. Press <b>New alert</b>.</p>
+  </div>
+</section>
+
+<section class="card lg-card" id="fired">
+  <div class="card-header"><span>Fired alerts</span><span class="grow"></span>
+    <button type="button" class="btn btn-outline" id="ev-ack" disabled>Acknowledge selected</button>
+    <button type="button" class="btn btn-outline" id="ev-ack-all">Acknowledge all</button>
+    <button type="button" class="btn btn-outline" id="ev-del" disabled>Delete selected</button></div>
+  <div class="card-block">
+    <div class="table-wrap"><table class="datagrid">
+      <thead><tr><th><input type="checkbox" id="ev-all" aria-label="Select all"></th><th>Fired</th><th>Alert</th><th>Messages</th><th>Notified</th><th>Status</th><th></th></tr></thead>
+      <tbody id="al-events"></tbody>
+    </table></div>
+    <p class="lg-empty" id="al-events-none" hidden>No alerts have fired.</p>
+  </div>
+</section>
+
+<section class="card lg-card" id="notifications">
+  <div class="card-header">Notifications</div>
+  <div class="card-block">
+    <form class="lg-form" id="nt-form" autocomplete="off">
+      <label for="nt-enabled">Check alert rules</label>
+      <span class="inline"><label class="switch" style="font-weight:400"><input type="checkbox" role="switch" id="nt-enabled" name="alerts_enabled"><span></span><b id="nt-enabled-text">On</b></label>
+        <span class="lg-meta">The master switch for every rule. Off: nothing fires and nothing is sent (the rules are kept).</span></span>
+      <label for="nt-host">SMTP server</label><span class="inline"><input id="nt-host" name="smtp_host" placeholder="smtp.lab.local" style="flex:1">
+        <input type="number" name="smtp_port" min="1" max="65535" aria-label="SMTP port" style="width:90px">
+        <select name="smtp_security" aria-label="SMTP security"><option value="none">No TLS</option><option value="starttls">STARTTLS</option><option value="ssl">SSL/TLS</option></select></span>
+      <label for="nt-user">SMTP user</label><input class="wide" id="nt-user" name="smtp_user" placeholder="optional">
+      <label for="nt-pass">SMTP password</label><input class="wide" id="nt-pass" type="password" name="smtp_password" placeholder="leave blank to keep">
+      <label for="nt-from">From</label><input class="wide" id="nt-from" name="smtp_from" placeholder="vco-logs@lab.local">
+      <label for="nt-to">To</label><input class="wide" id="nt-to" name="smtp_to" placeholder="ops@lab.local, me@lab.local">
+      <label for="nt-hook">Webhook URL</label><input class="wide" id="nt-hook" name="webhook_url" placeholder="https://chat.lab.local/hooks/...">
+      <span class="hint">POSTs JSON with a <code>text</code> field (Slack, Mattermost, Rocket.Chat style) plus the alert details.</span>
+    </form>
+    <div class="lg-form-actions">
+      <button type="button" class="btn btn-primary" id="nt-save">Save</button>
+      <button type="button" class="btn btn-outline" id="nt-test-email">Send test email</button>
+      <button type="button" class="btn btn-outline" id="nt-test-hook">Send test webhook</button>
+      <span id="nt-msg" class="lg-meta" role="status"></span>
+    </div>
+    <p class="lg-meta">The SMTP password is stored in <code>data/syslog.db</code> (like the vCenter passwords in <code>_core.db</code>).</p>
+  </div>
+</section>
+<script src="/ui/logs/static/logs.js?v={{ asset_v }}"></script>
+{% endblock %}

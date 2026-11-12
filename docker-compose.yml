@@ -12,6 +12,11 @@ services:
     container_name: vco
     ports:
       - "8080:8080"
+      # Syslog server (Logs module). Hosts send to this computer on port 514; inside the
+      # container the listener uses 5514, so it needs no root. Set SYSLOG_PORT in .env to use
+      # another host port (e.g. 1514 if your container runtime can't open ports below 1024).
+      - "${SYSLOG_PORT:-514}:5514/udp"
+      - "${SYSLOG_PORT:-514}:5514/tcp"
     env_file: .env
     volumes:
       - ./data:/app/data                                  # SQLite files survive upgrades
@@ -23,6 +28,7 @@ services:
       VCO_CONFIG: /app/config/config.yaml
       VCO_EXPORT_DIR: /app/exports
       VCO_ASK_URL: ${VCO_ASK_URL:-http://localhost:8081}   # sidebar link to vCommunity Ask (empty = hide)
+      VCO_SYSLOG_HOST_PORT: ${SYSLOG_PORT:-514}             # shown in the Logs setup examples
       # TZ: America/New_York                              # default time zone offered for scheduled exports
     restart: unless-stopped
     init: true               # tiny init (tini) reaps finished collector subprocesses and passes stop signals

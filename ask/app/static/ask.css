@@ -198,6 +198,8 @@ a.cite:hover { background: var(--primary); color: #fff; text-decoration: none; }
 .field select { max-width: 100%; width: 100%; padding: 6px 8px; }
 .field input:focus, .field textarea:focus, .field select:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
 .hint { font-size: 12px; color: var(--subtle); margin-top: 3px; }
+.inline-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.inline-row input[type=text] { flex: 1 1 220px; width: auto; min-width: 0; }
 .override { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 3px; background: var(--info-bg); color: var(--primary); margin-left: 6px; }
 .token-bar { display: flex; gap: 10px; align-items: center; padding: 10px 14px; margin-bottom: 16px; background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--warn-fill); border-radius: 4px; }
 .token-bar label { font-size: 13px; font-weight: 600; color: var(--subtle); white-space: nowrap; }
@@ -376,6 +378,8 @@ body.chart-open { overflow: hidden; }
 .perf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 16px; margin-bottom: 16px; align-items: start; }
 .perf-grid .card-block { overflow-x: auto; }
 .perf-wide { grid-column: 1 / -1; }
+.perf-inner { margin: 12px 0 4px; }
+.perf-inner .perf-chart { min-width: 0; }
 .price-row { display: flex; flex-wrap: wrap; gap: 8px 18px; }
 .price-row label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 .price-row input { width: 90px; }

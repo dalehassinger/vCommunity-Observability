@@ -57,8 +57,8 @@
       <a class="nav-link sub {{ 'active' if active == href else '' }}" href="{{ href }}">{{ n.title }}</a>
     {% endfor %}
     <div class="nav-section">Administration</div>
-    {% if ask_url %}
-    <a class="nav-link" href="{{ ask_url }}/performance" title="One dashboard for both containers, on vCommunity Ask">
+    {% if ask_url_config %}
+    <a class="nav-link" href="{{ ask_url_for() }}/performance" title="One dashboard for both containers, on vCommunity Ask">
       <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 13h4l3-8 4 14 3-6h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Performance
     </a>
@@ -71,8 +71,8 @@
       <svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
       Settings
     </a>
-    {% if ask_url and control.is_on('ask') %}
-    <a class="nav-link" href="{{ ask_url }}">
+    {% if ask_url_config and control.is_on('ask') %}
+    <a class="nav-link" href="{{ ask_url_for() }}">
       <svg viewBox="0 0 24 24" width="18" height="18"><path d="M5 6h14a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 17h-7l-4.5 3.5V17H5a1.5 1.5 0 0 1-1.5-1.5v-8A1.5 1.5 0 0 1 5 6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
       Ask (AI chat)
     </a>

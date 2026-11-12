@@ -119,6 +119,29 @@
     </div>
   </div>
 
+  <div class="card span-all" id="activity-log">
+    <div class="card-header">Activity log</div>
+    <div class="card-block">
+      <div class="field"><label for="s-activity_log">Send activity to the log server{% if 'activity_log' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><label class="switch"><input type="checkbox" role="switch" id="s-activity_log" data-key="activity_log" {{ 'checked' if settings.activity_log else '' }}><span></span>On</label>
+          <div class="hint">Every prompt, tool call and answer is sent as syslog (app <code>vcommunity-ask</code>, message IDs prompt, thinking, tool, data, answer, error, stopped) to the
+            Observability <b>Logs</b> module, so you can see what Ask is being used for.{% if observability_url %}
+            <a href="{{ observability_url }}/dash/logs/search?app=vcommunity-ask&amp;range=24h" target="_blank" rel="noopener">Open Ask activity on the Logs page</a>{% endif %}</div></div></div>
+      <div class="field"><label for="s-activity_log_url">Log server{% if 'activity_log_url' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><span class="inline-row"><input type="text" id="s-activity_log_url" data-key="activity_log_url" value="{{ settings.activity_log_url }}" placeholder="tcp://vco:5514">
+            <button class="btn btn-outline" type="button" id="test-activity">Send a test message</button></span>
+          <div class="hint"><code>tcp://vco:5514</code> is the vco container on the docker compose network (TCP does not lose long messages).
+            Any syslog server works: <code>udp://10.0.0.5:514</code> or <code>tcp://syslog.lab.local:514</code>.</div>
+          <div class="hint" id="activity-status" role="status">{% if activity.enabled %}{{ activity.sent }} sent{% if activity.dropped %}, {{ activity.dropped }} dropped{% endif %} since Ask started.{% if activity.last_error %} Last problem: {{ activity.last_error }}{% endif %}{% else %}Off.{% endif %}</div></div></div>
+      <div class="field"><label for="s-activity_log_thinking">Include the model's thinking{% if 'activity_log_thinking' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><label class="switch"><input type="checkbox" role="switch" id="s-activity_log_thinking" data-key="activity_log_thinking" {{ 'checked' if settings.activity_log_thinking else '' }}><span></span>On</label>
+          <div class="hint">Sent when the answer ends, cut into parts of about 6,000 characters (part n/m). There is thinking only when <b>Show model thinking</b> is on and the model supports it.</div></div></div>
+      <div class="field"><label for="s-activity_log_answers">Include the answer text{% if 'activity_log_answers' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><label class="switch"><input type="checkbox" role="switch" id="s-activity_log_answers" data-key="activity_log_answers" {{ 'checked' if settings.activity_log_answers else '' }}><span></span>On</label>
+          <div class="hint">Off sends only the answer's length, time and token counts.</div></div></div>
+    </div>
+  </div>
+
   <div class="card span-all">
     <div class="card-header">System prompt{% if 'system_prompt' in overridden %}<span class="override">saved</span>{% endif %}</div>
     <div class="card-block">
@@ -203,6 +226,14 @@
     } catch (e) { setStatus(false, e.message); }
   }
   document.getElementById('test-ollama').onclick = test;
+  document.getElementById('test-activity').onclick = async function () {
+    var st = document.getElementById('activity-status');
+    st.textContent = 'Sending…';
+    try {
+      var r = await AskAdmin.post('/ui/activity-log/test', { url: document.getElementById('s-activity_log_url').value });
+      st.textContent = r.message; st.style.color = r.ok ? 'var(--ok)' : 'var(--crit)';
+    } catch (e) { st.textContent = e.message; st.style.color = 'var(--crit)'; }
+  };
   document.getElementById('reset-prompt').onclick = function () { document.getElementById('s-system_prompt').value = DEFAULT_PROMPT; };
   document.getElementById('reset-plain-prompt').onclick = function () { document.getElementById('s-plain_system_prompt').value = {{ defaults.plain_system_prompt | tojson }}; };
   document.getElementById('save').onclick = async function () {
