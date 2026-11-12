@@ -38,6 +38,7 @@
           <input type="number" name="window_minutes" min="1" max="10080" value="5" aria-label="Window in minutes"> minutes</span>
         <label for="al-cool">Then wait</label>
         <span class="inline"><input type="number" id="al-cool" name="cooldown_minutes" min="0" max="10080" value="30"> minutes before it can fire again</span>
+        <span class="hint">A message fires a rule only once, so 0 is safe: every new match is sent right away. With a wait, a rule that fires on 1 message sends the matches from the wait together when it is over.</span>
         <label>Notify</label>
         <span class="inline"><label class="lg-check"><input type="checkbox" name="notify_email"> Email</label>
           <label class="lg-check"><input type="checkbox" name="notify_webhook"> Webhook</label>

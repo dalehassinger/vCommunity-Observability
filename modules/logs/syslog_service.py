@@ -149,8 +149,15 @@ class Server:
             if rule["last_fired"] and now - rule["last_fired"] < rule["cooldown_minutes"] * 60:
                 continue
             try:
-                where, params = logstore.build_where(rule["query"], since=now - rule["window_minutes"] * 60,
-                                                     min_severity=rule["min_severity"])
+                since = now - rule["window_minutes"] * 60
+                if rule["threshold"] <= 1 and rule["last_fired"]:
+                    # "Any match" rules miss nothing: matches that came during the wait are sent
+                    # together when it is over, even if they are older than the window by then.
+                    since = min(since, rule["last_fired"])
+                where, params = logstore.build_where(rule["query"], since=since, min_severity=rule["min_severity"])
+                # Only messages not alerted on yet: a message fires a rule once, even with no wait.
+                where += " AND id > ?"
+                params = params + [rule.get("last_id") or 0]
                 count = con.execute(f"SELECT COUNT(*) FROM logs WHERE {where}", params).fetchone()[0]
             except (ValueError, sqlite3.Error) as exc:
                 self.note(f"alert '{rule['name']}': {exc}")
@@ -170,7 +177,9 @@ class Server:
                                   " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                                   (rule["id"], rule["name"], now, count, rule["window_minutes"], rule["query"],
                                    json.dumps(sample), "" if (rule["notify_email"] or rule["notify_webhook"]) else "shown on the Log alerts page"))
-                con.execute("UPDATE alert_rules SET last_fired = ?, last_count = ? WHERE id = ?", (now, count, rule["id"]))
+                newest = con.execute(f"SELECT MAX(id) FROM logs WHERE {where}", params).fetchone()[0] or 0
+                con.execute("UPDATE alert_rules SET last_fired = ?, last_count = ?, last_id = ? WHERE id = ?",
+                            (now, count, newest, rule["id"]))
             event["id"] = cur.lastrowid
             log(f"alert '{rule['name']}' fired: {count} message(s) in {rule['window_minutes']} min")
             if rule["notify_email"] or rule["notify_webhook"]:

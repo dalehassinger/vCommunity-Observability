@@ -74,7 +74,8 @@ CREATE TABLE IF NOT EXISTS alert_rules (
   threshold INTEGER NOT NULL DEFAULT 1, window_minutes INTEGER NOT NULL DEFAULT 5,
   cooldown_minutes INTEGER NOT NULL DEFAULT 30,
   notify_email INTEGER NOT NULL DEFAULT 0, notify_webhook INTEGER NOT NULL DEFAULT 0,
-  created REAL, updated REAL, last_fired REAL, last_count INTEGER
+  created REAL, updated REAL, last_fired REAL, last_count INTEGER,
+  last_id INTEGER NOT NULL DEFAULT 0     -- newest message already alerted on: never alert twice on one message
 );
 CREATE TABLE IF NOT EXISTS alert_events (
   id INTEGER PRIMARY KEY, rule_id INTEGER, rule_name TEXT, fired_at REAL NOT NULL,
@@ -103,8 +104,19 @@ def connect(data_dir: str | Path, readonly: bool = False) -> sqlite3.Connection:
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA synchronous=NORMAL")
         con.executescript(SCHEMA)
+        _migrate(con)
     con.row_factory = sqlite3.Row
     return con
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    """Columns added after the first release (CREATE TABLE IF NOT EXISTS keeps old tables as they were)."""
+    cols = {r[1] for r in con.execute("PRAGMA table_info(alert_rules)")}
+    if "last_id" not in cols:
+        con.execute("ALTER TABLE alert_rules ADD COLUMN last_id INTEGER NOT NULL DEFAULT 0")
+        # Existing rules: start after what is already stored, so an upgrade sends no burst of old alerts.
+        con.execute("UPDATE alert_rules SET last_id = COALESCE((SELECT MAX(id) FROM logs), 0)")
+        con.commit()
 
 
 # -- settings ------------------------------------------------------------------------
