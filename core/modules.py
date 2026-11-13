@@ -128,7 +128,15 @@ def parse_manifest(folder: Path) -> Module:
         mode = tdef.get("mode", "snapshot")
         if mode not in {"snapshot", "append"}:
             raise ManifestError(f"table {tname}: mode must be snapshot or append")
-        tables[tname] = {**tdef, "mode": mode, "columns": cols}
+        indexes = []
+        for ix in tdef.get("indexes") or []:
+            ix = [ix] if isinstance(ix, str) else list(ix)
+            for cname in ix:
+                if cname not in cols and cname != "collected_at":
+                    raise ManifestError(f"table {tname}: index column {cname} is not a column")
+            if ix:
+                indexes.append(ix)
+        tables[tname] = {**tdef, "mode": mode, "columns": cols, "indexes": indexes}
 
     collectors: list[Collector] = []
     for c in data.get("collectors") or []:

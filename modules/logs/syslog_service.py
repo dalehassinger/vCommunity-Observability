@@ -133,8 +133,10 @@ class Server:
                 capped += con.execute("DELETE FROM logs WHERE id IN (SELECT id FROM logs ORDER BY id LIMIT ?)", (n,)).rowcount
         if removed or capped:
             con.execute("PRAGMA incremental_vacuum").fetchall()
-            con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             log(f"housekeeping: removed {removed} older than {days:g} days, {capped} for the {cap / 1024 ** 3:g} GB cap")
+        # Checkpoint: PASSIVE during the day (copies what it can, never waits for readers or
+        # blocks the writer); TRUNCATE (also shrinks the -wal file to 0) only on the size-cap pass.
+        con.execute(f"PRAGMA wal_checkpoint({'TRUNCATE' if capped else 'PASSIVE'})").fetchall()
         self.last_housekeeping = time.time()
 
     def evaluate_alerts(self) -> list[tuple[dict, dict]]:

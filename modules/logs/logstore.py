@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS logs (
 CREATE INDEX IF NOT EXISTS logs_ts ON logs(ts);
 CREATE INDEX IF NOT EXISTS logs_host_ts ON logs(host, ts);
 CREATE INDEX IF NOT EXISTS logs_sev_ts ON logs(severity, ts);
+CREATE INDEX IF NOT EXISTS logs_app_ts ON logs(app COLLATE NOCASE, ts);   -- the App picker and app: searches
 CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(
   message, app, host, content='logs', content_rowid='id', tokenize='unicode61 remove_diacritics 2');
 CREATE TRIGGER IF NOT EXISTS logs_ai AFTER INSERT ON logs BEGIN

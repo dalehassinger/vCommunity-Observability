@@ -57,6 +57,8 @@ tables:
       kind: text
       total: text
   vinfo:
+    indexes:
+    - - powerstate
     columns:
       vm: text
       powerstate: text
@@ -160,6 +162,8 @@ tables:
       annotation: text
       vi_sdk_server: text
   vpartition:
+    indexes:
+    - - free_pct
     columns:
       vm: text
       powerstate: text
@@ -332,6 +336,8 @@ tables:
       memory_active_mib: real
       vi_sdk_server: text
   vdatastore:
+    indexes:
+    - - free_pct
     columns:
       name: text
       type: text

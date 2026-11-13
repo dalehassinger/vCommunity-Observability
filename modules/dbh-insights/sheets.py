@@ -1106,12 +1106,18 @@ def all_columns(s: dict[str, Any]) -> list[tuple[str, str, str]]:
     return [*s["columns"], text_col(VI_SDK_SERVER)]
 
 
+# Columns the API and dashboards filter or sort on (big inventories have thousands of rows).
+INDEXES = {"vinfo": [["powerstate"]], "vdatastore": [["free_pct"]], "vpartition": [["free_pct"]]}
+
+
 def manifest_tables() -> dict[str, dict[str, Any]]:
     """The `tables:` section of module.yaml, generated from the sheet definitions."""
     kinds = {"text": "text", "number": "real", "bool": "integer"}
     out = {}
     for s in SHEETS:
-        out[table_name(s["name"])] = {"columns": {column_name(lbl): kinds[k] for lbl, k, _ in all_columns(s)}}
+        tname = table_name(s["name"])
+        out[tname] = ({"indexes": INDEXES[tname]} if tname in INDEXES else {}) | \
+            {"columns": {column_name(lbl): kinds[k] for lbl, k, _ in all_columns(s)}}
     return out
 
 

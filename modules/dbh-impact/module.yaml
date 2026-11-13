@@ -59,6 +59,7 @@ tables:
   fabric_vm_datastores:
     columns: {vcenter: text, vm_moref: text, datastore_moref: text}
   impact:
+    indexes: [[kind, severity_rank]]   # the dashboards list hosts and datastores by severity
     columns:
       vcenter: text
       target: text            # "host:host-11" or "datastore:datastore-21" (morefs prefixed with id: when multi)

@@ -267,6 +267,10 @@ def main() -> None:
     tmp = work / "tables.db.part"
     tmp.unlink(missing_ok=True)
     tdb = sqlite3.connect(tmp)
+    # The part file is swapped in only after commit, so a crash just leaves a stale part file:
+    # no fsync needed while building it.
+    tdb.execute("PRAGMA synchronous=OFF")
+    tdb.execute("PRAGMA journal_mode=MEMORY")
     tables: dict[str, dict[str, Any]] = {}
     documents: list[dict[str, Any]] = []
     seen_ids: set[str] = set()

@@ -108,6 +108,7 @@ import sheets as dbh_sheets  # noqa: E402
 mod = core.modules["dbh-insights"]
 for tname, tdef in dbh_sheets.manifest_tables().items():
     assert mod.tables[tname]["columns"] == tdef["columns"], f"module.yaml tables out of date for {tname}: run python sheets.py --tables"
+    assert mod.tables[tname]["indexes"] == tdef.get("indexes", []), f"module.yaml indexes out of date for {tname}: run python sheets.py --tables"
 status = core.storage.query("dbh-insights", "SELECT sheet, row_count, error FROM sheets")
 assert len(status) == 28 and not [s for s in status if s["error"]], status
 r = client.get("/export/dbh-insights/xlsx")

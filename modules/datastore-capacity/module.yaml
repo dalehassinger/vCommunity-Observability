@@ -15,6 +15,7 @@ collectors:
 tables:
   datastores:            # current state, replaced on every run
     mode: snapshot
+    indexes: [[used_pct]]  # the critical list and the chart filter and sort on it
     columns: &ds_columns
       vcenter: text          # connection id; distinguishes same names across vCenters
       name: text
@@ -31,6 +32,7 @@ tables:
   datastore_history:     # every sample kept for 90 days, used for runway
     mode: append
     retention_days: 90
+    indexes: [[vcenter, name, collected_at]]   # the runway query looks up each datastore's samples
     columns: *ds_columns
 
 api:

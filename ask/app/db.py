@@ -1,12 +1,21 @@
 """SQLite storage: one file (data/ask.db) holds settings, sources, documents,
 chunks, the FTS5 keyword index, the sqlite-vec vector index and chat history.
 
-Connections are short-lived (one per call) and WAL mode lets the indexer write
-while the chat reads."""
+Each thread keeps one connection (sqlite-vec loaded once), so SQLite's page cache
+stays warm across the many small reads of one question. WAL mode lets the indexer
+write while the chat reads; synchronous=NORMAL is durable enough for an index that
+can be rebuilt.
+
+Tuning (environment): ASK_SQLITE_CACHE_MB page cache per connection (default 64),
+ASK_SQLITE_MMAP_MB memory-mapped I/O (default 0 = off; try it on a Linux volume,
+measure it on a Docker Desktop for Mac file share before keeping it)."""
 
 from __future__ import annotations
 
 import json
+import logging
+import os
+import re
 import sqlite3
 import struct
 import threading
@@ -61,31 +70,77 @@ class IndexReset(RuntimeError):
     belong to the old index, so the sync stops and runs again."""
 
 
+def _env_mb(name: str, default: int) -> int:
+    try:
+        return max(0, int(float(os.environ.get(name, default))))
+    except ValueError:
+        return default
+
+
+CACHE_MB = _env_mb("ASK_SQLITE_CACHE_MB", 64)
+MMAP_MB = _env_mb("ASK_SQLITE_MMAP_MB", 0)
+VEC_PARTITION = "source text partition key"
+
+
 class DB:
     def __init__(self, path: Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._write_lock = threading.Lock()
+        self._local = threading.local()
         # Goes up by one at every reset_index(). A sync notes it when it starts and may
         # only write vectors while it is unchanged (see save_document).
         self.generation = 0
+        # The vector table's size (dimensions), remembered so a search needs no schema read.
+        # None = not read yet; 0 = no vector table.
+        self._dim: int | None = None
         with self.conn() as c:
-            c.executescript(SCHEMA)
             c.execute("PRAGMA journal_mode=WAL")
+            c.executescript(SCHEMA)
+        self._migrate_vec_partition()
 
-    @contextmanager
-    def conn(self) -> Iterator[sqlite3.Connection]:
+    def _open(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.path, timeout=30)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA foreign_keys=ON")
+        c.execute("PRAGMA synchronous=NORMAL")
+        c.execute(f"PRAGMA cache_size=-{CACHE_MB * 1024}")
+        if MMAP_MB:
+            c.execute(f"PRAGMA mmap_size={MMAP_MB * 1024 * 1024}")
         c.enable_load_extension(True)
         sqlite_vec.load(c)
         c.enable_load_extension(False)
+        return c
+
+    @contextmanager
+    def conn(self) -> Iterator[sqlite3.Connection]:
+        """This thread's connection. The outermost `with` commits on success and rolls back
+        on an error, so a nested call (one DB method used inside another) joins the same
+        transaction instead of committing half of it."""
+        local = self._local
+        c = getattr(local, "conn", None)
+        if c is None:
+            c = local.conn = self._open()
+            local.depth = 0
+        local.depth += 1
         try:
             yield c
-            c.commit()
+        except BaseException:
+            if local.depth == 1 and c.in_transaction:
+                c.rollback()
+            raise
+        else:
+            if local.depth == 1:
+                c.commit()
         finally:
+            local.depth -= 1
+
+    def close(self) -> None:
+        """Close this thread's connection (tests; threads that end close theirs when collected)."""
+        c = getattr(self._local, "conn", None)
+        if c is not None:
             c.close()
+            self._local.conn = None
 
     # -- settings -------------------------------------------------------------
     def get_settings(self) -> dict[str, Any]:
@@ -170,17 +225,47 @@ class DB:
 
     # -- vectors --------------------------------------------------------------
     @staticmethod
-    def _vec_dim(c: sqlite3.Connection) -> int | None:
+    def _vec_sql(c: sqlite3.Connection) -> str:
         r = c.execute("SELECT sql FROM sqlite_master WHERE name='chunks_vec'").fetchone()
-        if not r:
-            return None
-        import re
-        m = re.search(r"float\[(\d+)\]", r[0])
-        return int(m.group(1)) if m else None
+        return r[0] if r else ""
+
+    def _vec_dim(self, c: sqlite3.Connection) -> int | None:
+        m = re.search(r"float\[(\d+)\]", self._vec_sql(c))
+        self._dim = int(m.group(1)) if m else 0
+        return self._dim or None
 
     def vec_dim(self) -> int | None:
-        with self.conn() as c:
-            return self._vec_dim(c)
+        if self._dim is None:
+            with self.conn() as c:
+                return self._vec_dim(c)
+        return self._dim or None
+
+    @staticmethod
+    def _create_vec(c: sqlite3.Connection, dim: int, name: str = "chunks_vec") -> None:
+        # The source is a partition key: a search of one source scans only that source's
+        # vectors, with the same exact (brute-force) KNN as the whole table.
+        c.execute(f"CREATE VIRTUAL TABLE {name} USING vec0({VEC_PARTITION}, embedding float[{dim}] distance_metric=cosine)")
+
+    def _migrate_vec_partition(self) -> None:
+        """Older indexes have no source partition key. Copy the vectors into a new table with
+        one (no re-embedding: the stored vectors are reused), in one transaction."""
+        with self._write_lock, self.conn() as c:
+            sql = self._vec_sql(c)
+            dim = self._vec_dim(c)
+            if not sql or "partition key" in sql or not dim:
+                return
+            t0 = time.time()
+            c.execute("DROP TABLE IF EXISTS temp.vec_copy")
+            c.execute("""CREATE TEMP TABLE vec_copy AS
+                         SELECT v.rowid AS id, k.source AS source, v.embedding AS embedding
+                         FROM chunks_vec v JOIN chunks k ON k.id = v.rowid""")
+            c.execute("DROP TABLE chunks_vec")
+            self._create_vec(c, dim)
+            c.execute("INSERT INTO chunks_vec(rowid, source, embedding) SELECT id, source, embedding FROM temp.vec_copy ORDER BY id")
+            n = c.execute("SELECT COUNT(*) FROM temp.vec_copy").fetchone()[0]
+            c.execute("DROP TABLE temp.vec_copy")
+            logging.getLogger("ask.db").info("vector index: added the source partition key (%d vectors copied in %.1f s)",
+                                             n, time.time() - t0)
 
     def _check_generation(self, generation: int | None) -> None:
         if generation is not None and generation != self.generation:
@@ -195,7 +280,8 @@ class DB:
         if current is not None:
             c.execute("DROP TABLE chunks_vec")
             c.execute("UPDATE documents SET hash='' ")  # force re-embedding on next sync
-        c.execute(f"CREATE VIRTUAL TABLE chunks_vec USING vec0(embedding float[{dim}] distance_metric=cosine)")
+        self._create_vec(c, dim)
+        self._dim = dim
 
     def ensure_vec(self, dim: int, generation: int | None = None) -> None:
         """Create the vector table for this embedding size. A different size means a
@@ -211,6 +297,7 @@ class DB:
             self.generation += 1
             c.execute("DELETE FROM chunks_fts")
             c.execute("DROP TABLE IF EXISTS chunks_vec")
+            self._dim = 0
             c.execute("DELETE FROM chunks")
             c.execute("DELETE FROM documents")
             c.execute("UPDATE source_state SET version='', state='{}'")
@@ -234,30 +321,47 @@ class DB:
 
     def save_document(self, source: str, doc: dict[str, Any], chunks: list[dict[str, Any]],
                       vectors: list[list[float]], generation: int | None = None) -> None:
-        """generation: the value of self.generation when the sync started; a reset since
-        then raises IndexReset instead of mixing old-model vectors into the new index."""
+        self.save_documents(source, [(doc, chunks, vectors)], generation)
+
+    def save_documents(self, source: str, items: list[tuple[dict[str, Any], list[dict[str, Any]], list[list[float]]]],
+                       generation: int | None = None) -> None:
+        """Save several embedded documents in ONE transaction (the indexer batches a few dozen,
+        so a sync commits far less often). Chunks go in with executemany.
+
+        generation: the value of self.generation when the sync started; a reset since then
+        raises IndexReset instead of mixing old-model vectors into the new index."""
+        if not items:
+            return
         with self._write_lock, self.conn() as c:
             self._check_generation(generation)
-            if vectors:
-                self._ensure_vec(c, len(vectors[0]))
-            old = c.execute("SELECT id FROM documents WHERE source=? AND doc_id=?", (source, doc["id"])).fetchone()
-            if old:
-                ids = [r[0] for r in c.execute("SELECT id FROM chunks WHERE document=?", (old["id"],))]
-                self._delete_chunk_index(c, ids)
-                c.execute("DELETE FROM documents WHERE id=?", (old["id"],))
-            cur = c.execute("""INSERT INTO documents(source, doc_id, title, path, url, status, meta, links, images, text, hash, updated)
-                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
-                            (source, doc["id"], doc.get("title") or doc["id"], doc.get("path", ""), doc.get("url", ""),
-                             str(doc.get("status") or ""), json.dumps(doc.get("meta") or {}),
-                             json.dumps(doc.get("links") or {}), json.dumps(doc.get("images") or []),
-                             doc.get("text", ""), doc["hash"], time.time()))
-            doc_row = cur.lastrowid
-            for ch, vec in zip(chunks, vectors):
-                k = c.execute("INSERT INTO chunks(document, source, ord, heading, text) VALUES(?,?,?,?,?)",
-                              (doc_row, source, ch["ord"], ch["heading"], ch["text"])).lastrowid
-                c.execute("INSERT INTO chunks_fts(rowid, title, heading, text) VALUES(?,?,?,?)",
-                          (k, doc.get("title") or doc["id"], ch["heading"], ch["text"]))
-                c.execute("INSERT INTO chunks_vec(rowid, embedding) VALUES(?, ?)", (k, pack(vec)))
+            for doc, chunks, vectors in items:
+                if vectors:
+                    self._ensure_vec(c, len(vectors[0]))
+                old = c.execute("SELECT id FROM documents WHERE source=? AND doc_id=?", (source, doc["id"])).fetchone()
+                if old:
+                    ids = [r[0] for r in c.execute("SELECT id FROM chunks WHERE document=?", (old["id"],))]
+                    self._delete_chunk_index(c, ids)
+                    c.execute("DELETE FROM documents WHERE id=?", (old["id"],))
+                cur = c.execute("""INSERT INTO documents(source, doc_id, title, path, url, status, meta, links, images, text, hash, updated)
+                                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                (source, doc["id"], doc.get("title") or doc["id"], doc.get("path", ""), doc.get("url", ""),
+                                 str(doc.get("status") or ""), json.dumps(doc.get("meta") or {}),
+                                 json.dumps(doc.get("links") or {}), json.dumps(doc.get("images") or []),
+                                 doc.get("text", ""), doc["hash"], time.time()))
+                doc_row = cur.lastrowid
+                pairs = list(zip(chunks, vectors))
+                if not pairs:
+                    continue
+                # Chunk ids are given, so the three tables can be filled with executemany.
+                first = c.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM chunks").fetchone()[0]
+                ids = range(first, first + len(pairs))
+                title = doc.get("title") or doc["id"]
+                c.executemany("INSERT INTO chunks(id, document, source, ord, heading, text) VALUES(?,?,?,?,?,?)",
+                              [(k, doc_row, source, ch["ord"], ch["heading"], ch["text"]) for k, (ch, _) in zip(ids, pairs)])
+                c.executemany("INSERT INTO chunks_fts(rowid, title, heading, text) VALUES(?,?,?,?)",
+                              [(k, title, ch["heading"], ch["text"]) for k, (ch, _) in zip(ids, pairs)])
+                c.executemany("INSERT INTO chunks_vec(rowid, source, embedding) VALUES(?, ?, ?)",
+                              [(k, source, pack(vec)) for k, (_, vec) in zip(ids, pairs)])
 
     def delete_documents(self, source: str, doc_ids: list[str]) -> None:
         if not doc_ids:
@@ -297,24 +401,23 @@ class DB:
 
     # -- search ---------------------------------------------------------------
     def vector_search(self, vec: list[float], k: int, sources: list[str] | None) -> list[tuple[int, float]]:
+        """The k nearest chunks (cosine distance). With sources, each source is searched in its
+        own partition (exact KNN over only that source's vectors) and the results merged, which
+        is the true top k over those sources. `source IN (...)` is not used: sqlite-vec returns
+        partitions one after another, not one merged ranking."""
         if self.vec_dim() != len(vec):
             return []
+        blob = pack(vec)
         with self.conn() as c:
-            # Fast path: the nearest k*4 overall, then keep the picked sources.
-            want = k * 4 if sources else k
-            rows = c.execute("SELECT rowid, distance FROM chunks_vec WHERE embedding MATCH ? AND k = ? ORDER BY distance",
-                             (pack(vec), want)).fetchall()
-            if sources:
-                allowed = _chunk_sources(c, [r[0] for r in rows])
-                rows = [r for r in rows if allowed.get(r[0]) in sources]
-                if len(rows) < k:
-                    # A bigger source crowded the picked ones out of the nearest k*4 (or they are
-                    # small): rank only the picked sources' chunks, exactly. Same cosine distance.
-                    marks = ",".join("?" * len(sources))
-                    rows = c.execute(f"""SELECT v.rowid, vec_distance_cosine(v.embedding, ?) AS distance
-                                         FROM chunks_vec v
-                                         WHERE v.rowid IN (SELECT id FROM chunks WHERE source IN ({marks}))
-                                         ORDER BY distance LIMIT ?""", (pack(vec), *sources, k)).fetchall()
+            if not sources:
+                rows = c.execute("SELECT rowid, distance FROM chunks_vec WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+                                 (blob, k)).fetchall()
+            else:
+                rows = []
+                for src in dict.fromkeys(sources):
+                    rows += c.execute("SELECT rowid, distance FROM chunks_vec WHERE embedding MATCH ? AND k = ? AND source = ?",
+                                      (blob, k, src)).fetchall()
+                rows.sort(key=lambda r: r[1])
         return [(r[0], r[1]) for r in rows[:k]]
 
     def vector_distances(self, vec: list[float], ids: list[int]) -> dict[int, float]:
@@ -439,13 +542,6 @@ class DB:
             d["stats"] = json.loads(d["stats"] or "{}")
             out.append(d)
         return out
-
-
-def _chunk_sources(c: sqlite3.Connection, ids: list[int]) -> dict[int, str]:
-    if not ids:
-        return {}
-    marks = ",".join("?" * len(ids))
-    return {r[0]: r[1] for r in c.execute(f"SELECT id, source FROM chunks WHERE id IN ({marks})", ids)}
 
 
 def _doc(r: sqlite3.Row) -> dict[str, Any]:

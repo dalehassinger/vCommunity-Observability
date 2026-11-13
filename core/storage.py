@@ -1,6 +1,10 @@
 """SQLite storage. Each module gets its own database file, so modules are
 isolated from each other and can be removed by deleting one file. The core
-keeps its own run history in _core.db."""
+keeps its own run history in _core.db.
+
+Every file is in WAL mode with synchronous=NORMAL: a dashboard keeps reading the
+previous snapshot while a collector writes the next one, instead of waiting for it.
+The data can be collected again, so NORMAL (no fsync on every commit) is durable enough."""
 
 from __future__ import annotations
 
@@ -13,6 +17,20 @@ from typing import Any
 from .modules import COLUMN_TYPES, Module
 
 _lock = threading.Lock()
+BUSY_TIMEOUT_S = 15   # how long a reader or writer waits for a lock before "database is locked"
+
+
+def connect(path: Path | str, **kw: Any) -> sqlite3.Connection:
+    """A read-write connection with the busy timeout and synchronous=NORMAL."""
+    db = sqlite3.connect(path, timeout=BUSY_TIMEOUT_S, **kw)
+    db.execute("PRAGMA synchronous=NORMAL")
+    return db
+
+
+def use_wal(db: sqlite3.Connection) -> None:
+    """WAL is stored in the file, so this is a one-time switch (a no-op afterwards)."""
+    if db.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
+        db.execute("PRAGMA journal_mode=WAL")
 
 
 def utcnow() -> str:
@@ -25,6 +43,7 @@ class Storage:
         self.data_dir = data_dir
         self.data_dir.mkdir(parents=True, exist_ok=True)
         with self._core() as db:
+            use_wal(db)
             db.execute(
                 """CREATE TABLE IF NOT EXISTS runs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,7 +72,7 @@ class Storage:
 
     # -- connections -------------------------------------------------------
     def _core(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.data_dir / "_core.db")
+        return connect(self.data_dir / "_core.db")
 
     def module_db_path(self, module: str) -> Path:
         return self.data_dir / f"{module}.db"
@@ -63,13 +82,14 @@ class Storage:
         path = self.module_db_path(module)
         if not path.exists():
             sqlite3.connect(path).close()
-        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=BUSY_TIMEOUT_S)
         db.row_factory = sqlite3.Row
         return db
 
     # -- schema ------------------------------------------------------------
     def ensure_schema(self, mod: Module) -> None:
-        with sqlite3.connect(self.module_db_path(mod.name)) as db:
+        with connect(self.module_db_path(mod.name)) as db:
+            use_wal(db)
             for tname, tdef in mod.tables.items():
                 # Identifiers are quoted so a column may be named after an SQL
                 # keyword (limit, order, key...) without breaking the schema.
@@ -82,6 +102,11 @@ class Storage:
                 for c, t in tdef["columns"].items():
                     if c not in existing:
                         db.execute(f'ALTER TABLE "{tname}" ADD COLUMN "{c}" {COLUMN_TYPES[t]}')
+                # Indexes the manifest asks for (columns that dashboards filter or sort on).
+                for cols in tdef.get("indexes") or []:
+                    iname = "ix_" + tname + "_" + "_".join(cols)
+                    quoted = ", ".join('"' + c + '"' for c in cols)
+                    db.execute(f'CREATE INDEX IF NOT EXISTS "{iname}" ON "{tname}" ({quoted})')
 
     # -- writes ------------------------------------------------------------
     def write_tables(self, mod: Module, tables: dict[str, list[dict[str, Any]]]) -> dict[str, int]:
@@ -92,7 +117,7 @@ class Storage:
         stamp = utcnow()
         counts: dict[str, int] = {}
         with _lock:
-            db = sqlite3.connect(self.module_db_path(mod.name), isolation_level=None)
+            db = connect(self.module_db_path(mod.name), isolation_level=None)
             try:
                 db.execute("BEGIN IMMEDIATE")
                 for table, rows in tables.items():

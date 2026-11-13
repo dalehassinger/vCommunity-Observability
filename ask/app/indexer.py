@@ -30,6 +30,7 @@ log = logging.getLogger("ask.indexer")
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 MAX_CHUNK_CHARS = 3500
 EMBED_BATCH = 16
+SAVE_BATCH = 25     # embedded documents saved per transaction
 
 
 @dataclass
@@ -278,21 +279,43 @@ class Indexer:
         log.info("sync %s: %d documents, %d changed, %d removed", name, len(docs), len(changed), len(gone))
 
         self.db.delete_documents(name, gone)
-        for i, doc in enumerate(changed, 1):
-            self.db.set_state(name, progress=f"embedding {i}/{len(changed)}")
-            chunks = chunk_markdown(doc.get("text", ""))
-            if not chunks:
-                continue
-            vectors: list[list[float]] = []
-            texts = [embed_text(doc, c, doc_prefix) for c in chunks]
-            for b in range(0, len(texts), EMBED_BATCH):
-                try:
-                    vectors += ollama.embed(model, texts[b:b + EMBED_BATCH], keep_alive=cfg["keep_alive"])
-                except OllamaError as e:
-                    raise RuntimeError(f"embedding with '{model}' failed: {e}") from e
-            # The vector table is checked (and created) inside save_document, under the write
+        # Embedded documents are saved SAVE_BATCH at a time, in one transaction each, so a sync
+        # commits a few dozen times instead of once per file. No transaction is open while
+        # Ollama embeds, so chat writes never wait on it. A failure saves what was embedded.
+        pending: list[tuple[dict[str, Any], list[dict[str, Any]], list[list[float]]]] = []
+
+        def flush() -> None:
+            # The vector table is checked (and created) inside save_documents, under the write
             # lock; a reset of the index since this sync started raises IndexReset there.
-            self.db.save_document(name, doc, chunks, vectors, generation=generation)
+            if pending:
+                self.db.save_documents(name, pending, generation=generation)
+                pending.clear()
+
+        try:
+            for i, doc in enumerate(changed, 1):
+                self.db.set_state(name, progress=f"embedding {i}/{len(changed)}")
+                chunks = chunk_markdown(doc.get("text", ""))
+                if not chunks:
+                    continue
+                vectors: list[list[float]] = []
+                texts = [embed_text(doc, c, doc_prefix) for c in chunks]
+                for b in range(0, len(texts), EMBED_BATCH):
+                    try:
+                        vectors += ollama.embed(model, texts[b:b + EMBED_BATCH], keep_alive=cfg["keep_alive"])
+                    except OllamaError as e:
+                        raise RuntimeError(f"embedding with '{model}' failed: {e}") from e
+                pending.append((doc, chunks, vectors))
+                if len(pending) >= SAVE_BATCH:
+                    flush()
+        except IndexReset:
+            raise
+        except BaseException:
+            try:
+                flush()                 # keep the documents already embedded
+            except Exception:
+                log.exception("sync %s: could not save the last embedded documents", name)
+            raise
+        flush()
         self.db.set_state(name, progress=f"{len(changed)} updated, {len(gone)} removed",
                           version=str(out.get("version", "")), root=str(out.get("root", "")), state=state)
 
