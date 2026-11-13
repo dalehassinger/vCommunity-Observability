@@ -34,6 +34,7 @@ from .ollama import Ollama, OllamaError
 from . import control, mcp, rag, syslog_out, websearch, webusage
 from .reports import Reports
 from .perf import SAMPLE_SECONDS, Sampler
+from .evalrun import MAX_PROMPTS, EvalRunner
 
 HERE = Path(__file__).resolve().parent
 def asset_version(*folders: Path) -> str:
@@ -228,14 +229,14 @@ def create_app() -> FastAPI:
             "auth": bool(cfg.api_tokens), "settings": s, **ctx})
 
     def scope_list(scope: Any) -> list[str] | None:
-        """Source names a question may use. "All sources" leaves spreadsheet sources out: they
-        are used (search and data questions) only when picked by name."""
+        """Source names a question may use. "All sources" leaves spreadsheet sources and
+        disabled sources out: those are used only when picked by name."""
         srcs = db.list_sources()
         if isinstance(scope, str):          # "isvara" or "isvara,vcrocs" (saved chats, /api/search)
             scope = [n.strip() for n in scope.split(",") if n.strip()]
         if not scope or "all" in scope:
             # "-" matches no source, so with only spreadsheet sources "All" searches nothing.
-            return [s["name"] for s in srcs if s["plugin"] != "spreadsheet"] or ["-"]
+            return [s["name"] for s in srcs if s["plugin"] != "spreadsheet" and s.get("enabled", True)] or ["-"]
         names = [str(n) for n in scope]
         known = {s["name"] for s in srcs}
         return [n for n in names if n in known] or scope_list("all")
@@ -254,6 +255,9 @@ def create_app() -> FastAPI:
         if tools and not rest:
             return [], tools
         return scope_list(rest or "all"), tools
+
+    # Answer quality test: replays saved prompts with the current settings (Settings page button).
+    evaluator = EvalRunner(db, settings, scope_list)
 
     # -- pages ----------------------------------------------------------------
     @app.get("/", include_in_schema=False)
@@ -492,7 +496,76 @@ def create_app() -> FastAPI:
         overridden = set(db.get_settings())
         return page(request, "settings.html", "/settings", spec=SETTINGS, overridden=overridden,
                     defaults=cfg.defaults, config_path=str(cfg.path), web_key_set=bool(websearch.api_key()), brave_key_set=bool(websearch.brave_key()),
-                    apps=control.status(), activity=syslog_out.status(settings()))
+                    apps=control.status(), activity=syslog_out.status(settings()),
+                    eval_runs=evaluator.runs(5), eval_running=evaluator.running,
+                    eval_available=len(evaluator.candidates(MAX_PROMPTS)), eval_max=MAX_PROMPTS)
+
+    # -- answer quality test ----------------------------------------------------
+    @app.get("/eval/{rid}", response_class=HTMLResponse, include_in_schema=False)
+    def eval_page(request: Request, rid: int, vs: int | None = None):
+        run = evaluator.run(rid, vs)
+        if not run:
+            raise HTTPException(404, "Unknown test run")
+        return page(request, "eval.html", "/settings", run=run, running=evaluator.running,
+                    all_runs=[r for r in evaluator.runs(50) if r["id"] != rid and r["done"]])
+
+    @app.get("/ui/eval/{rid}", include_in_schema=False)
+    def ui_eval(rid: int):
+        run = evaluator.run(rid)
+        if not run:
+            raise HTTPException(404, "Unknown test run")
+        return {"id": rid, "status": run["status"], "done": run["done"], "total": run["total"]}
+
+    @app.post("/ui/eval/run", include_in_schema=False, dependencies=[Depends(require_admin)])
+    def ui_eval_run(body: dict = Body(default={})):
+        return _start_eval(body)
+
+    @app.post("/ui/eval/stop", include_in_schema=False, dependencies=[Depends(require_admin)])
+    def ui_eval_stop():
+        evaluator.stop()
+        return {"ok": True}
+
+    @app.post("/ui/eval/{rid}/delete", include_in_schema=False, dependencies=[Depends(require_admin)])
+    def ui_eval_delete(rid: int):
+        evaluator.delete(rid)
+        return {"ok": True}
+
+    def _start_eval(body: dict) -> dict:
+        if not control.is_on("ask"):
+            raise HTTPException(503, "Ask is switched off (Settings, Apps on / off).")
+        try:
+            count = int(body.get("count") or 10)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "count must be a number")
+        try:
+            rid = evaluator.start(count, bool(body.get("judge", True)), str(body.get("model") or ""),
+                                  str(body.get("judge_model") or ""))
+        except (RuntimeError, ValueError) as e:
+            raise HTTPException(409, str(e))
+        return {"ok": True, "id": rid, "url": f"/eval/{rid}"}
+
+    @app.get("/api/eval/runs", tags=["answer quality test"], dependencies=[Depends(require_token)])
+    def api_eval_runs(limit: int = 20):
+        """Answer quality test runs, newest first, with their summaries."""
+        return evaluator.runs(limit)
+
+    @app.get("/api/eval/runs/{rid}", tags=["answer quality test"], dependencies=[Depends(require_token)])
+    def api_eval_run(rid: int, vs: int | None = None):
+        """One run: settings, summary, the previous run it is compared with, and every prompt
+        (saved answer vs replay: speed, documents used, judge verdict, both answers). `vs`: the run
+        to compare with (default: the previous finished run)."""
+        run = evaluator.run(rid, vs)
+        if not run:
+            raise HTTPException(404, "Unknown test run")
+        return run
+
+    @app.post("/api/eval/runs", tags=["answer quality test"], dependencies=[Depends(require_token)])
+    def api_eval_start(body: dict = Body(default={})):
+        """Start a run: {"count": 10, "judge": true, "model": "gemma3:27b", "judge_model": "qwen3.8:27b-mlx"}.
+        model / judge_model are optional (default: the saved Chat model; the judge defaults to the
+        answering model; use one fixed judge to compare models). Replays the most recent saved prompts that
+        were answered from knowledge sources, one at a time, in the background."""
+        return _start_eval(body)
 
     @app.get("/ui/activity-log", include_in_schema=False)
     def ui_activity_status():
@@ -602,7 +675,7 @@ def create_app() -> FastAPI:
             except (TypeError, ValueError):
                 errors[key] = "not a valid value"
                 continue
-            if key in ("top_k", "history_turns") and not (0 <= v <= 50):
+            if key in ("top_k", "history_turns", "source_min_chunks") and not (0 <= v <= 50):
                 errors[key] = "use 0 to 50"
                 continue
             if key == "activity_log_url" and v:
@@ -781,10 +854,12 @@ def create_app() -> FastAPI:
         """Retrieval only, no model answer: shows which chunks a question would get.
         `sources`: "all" (every source except spreadsheets), a name, or names separated by commas."""
         try:
-            items = rag.retrieve(db, settings(), q, scope_list(sources))
+            info: dict[str, Any] = {}
+            items = rag.retrieve(db, settings(), q, scope_list(sources), info)
         except OllamaError as e:
             raise HTTPException(502, str(e))
-        return {"query": q, "fts": rag.fts_query(q), "results": rag.source_cards(items)}
+        return {"query": q, "fts": rag.fts_query(q), "results": rag.source_cards(items),
+                "retrieval": info.get("retrieval")}
 
     @app.get("/api/chats", tags=["chat"], dependencies=[Depends(require_token)])
     def api_chats(limit: int = 50):

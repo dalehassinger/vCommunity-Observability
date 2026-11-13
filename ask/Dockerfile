@@ -35,6 +35,8 @@ COPY README.md ./README.md
 COPY docs/screenshots ./docs/screenshots
 COPY ask/app ./app
 COPY ask/sources ./sources
+# Retrieval tests (no Ollama needed): docker compose exec vco-ask python -m unittest discover -s tests -v
+COPY ask/tests ./tests
 COPY ask/config/ask.example.yaml ./config/ask.yaml
 
 RUN chmod -R a+rX /app \

@@ -52,6 +52,8 @@ SETTINGS: dict[str, dict[str, Any]] = {
     "temperature":      {"default": 0.2, "type": "float"},
     "num_ctx":          {"default": 16384, "type": "int"},
     "top_k":            {"default": 8, "type": "int"},
+    # Several sources picked: each source that matches gets at least this many sections (0 = off).
+    "source_min_chunks": {"default": 2, "type": "int"},
     "context_chars":    {"default": 24000, "type": "int"},
     "expand_links":     {"default": True, "type": "bool"},
     "data_questions":   {"default": True, "type": "bool"},

@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block title %}Answer quality test #{{ run.id }} · vCommunity Ask{% endblock %}
+{% macro delta(old, new, lower_better=True, unit='') -%}
+  {%- if old is not none and new is not none and old != 0 -%}
+    {%- set pct = ((new - old) / old * 100) | round(0) | int -%}
+    {%- set good = (pct < 0) if lower_better else (pct > 0) -%}
+    <span class="eval-delta {{ 'good' if good and pct != 0 else ('bad' if pct != 0 else '') }}">{{ '+' if pct > 0 else '' }}{{ pct }}%</span>
+  {%- endif -%}
+{%- endmacro %}
+{% macro pair(old, new, unit='') -%}
+  {{ old if old is not none else '–' }}{{ unit }} <span class="subtle">→</span> <b>{{ new if new is not none else '–' }}{{ unit }}</b>
+{%- endmacro %}
+{% block body %}
+{% set sm = run.summary %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb"><a href="/settings">Settings</a> › Answer quality test</div>
+    <h1>Test run #{{ run.id }}</h1>
+    <p class="subtle">Started {{ run.started | ago }} · {{ run.done }} of {{ run.total }} questions ·
+      <span class="badge {{ 'badge-success' if run.status == 'done' else ('badge-info' if run.status == 'running' else 'badge-warn') }}" style="margin:0" id="eval-status">{{ run.status }}</span>
+      · answered by <b>{{ run.settings.chat_model }}</b>{% if run.judge %} · judged by <b>{{ run.settings.judge_model or run.settings.chat_model }}</b>{% endif %}
+      {% if run.error %}<br><span style="color:var(--crit)">{{ run.error }}</span>{% endif %}</p>
+  </div>
+  <div class="eval-actions">
+    {% if run.status == 'running' %}<button class="btn btn-outline" type="button" id="eval-stop">Stop</button>
+    {% else %}<button class="btn btn-outline" type="button" id="eval-delete">Delete run</button>{% endif %}
+  </div>
+</div>
+{% include "_token.html" %}
+
+<p class="subtle">Each question was asked again with the settings below and compared with its <b>saved answer</b> (left of the arrow).
+  Medians over the questions that finished. Saved answers may have used other settings or models, so also check the
+  comparison with the previous test run.</p>
+
+<div class="eval-kpis">
+  <div class="card kpi-card"><div class="card-header">Seconds per answer (median)</div><div class="card-block">
+    <div class="eval-pair">{{ pair(sm.old_seconds, sm.new_seconds, ' s') }} {{ delta(sm.old_seconds, sm.new_seconds) }}</div>
+    <div class="subtle">first words after {{ sm.new_first_token_s if sm.new_first_token_s is not none else '–' }} s</div></div></div>
+  <div class="card kpi-card"><div class="card-header">Tokens per second</div><div class="card-block">
+    <div class="eval-pair">{{ pair(sm.old_tok_per_s, sm.new_tok_per_s) }} {{ delta(sm.old_tok_per_s, sm.new_tok_per_s, False) }}</div></div></div>
+  <div class="card kpi-card"><div class="card-header">Prompt tokens</div><div class="card-block">
+    <div class="eval-pair">{{ pair(sm.old_prompt_tokens, sm.new_prompt_tokens) }} {{ delta(sm.old_prompt_tokens, sm.new_prompt_tokens) }}</div></div></div>
+  <div class="card kpi-card"><div class="card-header">Retrieval</div><div class="card-block">
+    <div class="eval-pair">{{ pair(sm.old_retrieval_ms, sm.new_retrieval_ms, ' ms') }}</div>
+    <div class="subtle">{{ sm.reserved }} section{{ '' if sm.reserved == 1 else 's' }} reserved by balancing</div></div></div>
+  <div class="card kpi-card {{ 'ok' if sm.judged and sm.new_better > sm.old_better else ('crit' if sm.judged and sm.old_better > sm.new_better else '') }}">
+    <div class="card-header">Judge: which answer is better</div><div class="card-block">
+    {% if sm.judged %}
+      <div class="eval-pair"><b>{{ sm.new_better }}</b> now · {{ sm.old_better }} saved · {{ sm.same }} same</div>
+      <div class="subtle">score 1–5: {{ sm.old_score if sm.old_score is not none else '–' }} → <b>{{ sm.new_score if sm.new_score is not none else '–' }}</b></div>
+    {% else %}<div class="subtle">{{ 'Not judged' if not run.judge else 'No verdicts yet' }}</div>{% endif %}</div></div>
+  <div class="card kpi-card {{ 'ok' if sm.new_not_found < sm.old_not_found else ('crit' if sm.new_not_found > sm.old_not_found else '') }}">
+    <div class="card-header">"Not found" answers</div><div class="card-block">
+    <div class="eval-pair">{{ pair(sm.old_not_found, sm.new_not_found) }}</div>
+    <div class="subtle">documents in common: {{ (sm.overlap * 100) | round | int if sm.overlap is not none else '–' }}%</div></div></div>
+</div>
+
+<div class="eval-grid">
+  <div class="card">
+    <div class="card-header">Settings used</div>
+    <table class="datagrid"><tbody>
+      {% for k, v in run.settings.items() %}
+        <tr{% if run.changed and k in run.changed %} class="eval-changed"{% endif %}><td>{{ k }}</td><td>{{ v }}{% if run.changed and k in run.changed %} <span class="subtle">(was {{ run.changed[k][0] }})</span>{% endif %}</td></tr>
+      {% endfor %}
+    </tbody></table>
+  </div>
+  <div class="card">
+    <div class="card-header">Compared with another test run</div>
+    <div class="card-block">
+    {% if all_runs %}
+      <div class="eval-vs"><label for="eval-vs">Compare with</label>
+        <select id="eval-vs">{% for r in all_runs %}<option value="{{ r.id }}" {{ 'selected' if run.previous and run.previous.id == r.id else '' }}>#{{ r.id }} · {{ r.settings.chat_model }}{% if r.settings.judge_model %} (judge {{ r.settings.judge_model }}){% endif %} · {{ r.started | ago }}</option>{% endfor %}</select></div>
+    {% endif %}
+    {% if run.previous %}{% set pv = run.previous.summary %}
+      <p><a href="/eval/{{ run.previous.id }}">Run #{{ run.previous.id }}</a>, {{ run.previous.started | ago }},
+        {{ run.previous.done }} questions, {{ run.same_questions or 0 }} the same as this run{% if run.changed %}; settings changed: <b>{{ run.changed | join(', ') }}</b>{% else %}; same settings{% endif %}.</p>
+      {% if run.changed and 'judge_model' in run.changed %}<div class="alert alert-warning">The two runs used different judges, so their judge scores are not on the same scale.</div>{% endif %}
+      <table class="datagrid"><thead><tr><th></th><th class="num">#{{ run.previous.id }} · {{ run.previous.settings.chat_model }}</th><th class="num">This run · {{ run.settings.chat_model }}</th><th class="num">Change</th></tr></thead><tbody>
+        <tr><td>Seconds (median)</td><td class="num">{{ pv.new_seconds }}</td><td class="num">{{ sm.new_seconds }}</td><td class="num">{{ delta(pv.new_seconds, sm.new_seconds) }}</td></tr>
+        <tr><td>Tokens/s</td><td class="num">{{ pv.new_tok_per_s }}</td><td class="num">{{ sm.new_tok_per_s }}</td><td class="num">{{ delta(pv.new_tok_per_s, sm.new_tok_per_s, False) }}</td></tr>
+        <tr><td>Prompt tokens</td><td class="num">{{ pv.new_prompt_tokens }}</td><td class="num">{{ sm.new_prompt_tokens }}</td><td class="num">{{ delta(pv.new_prompt_tokens, sm.new_prompt_tokens) }}</td></tr>
+        <tr><td>Retrieval ms</td><td class="num">{{ pv.new_retrieval_ms }}</td><td class="num">{{ sm.new_retrieval_ms }}</td><td class="num">{{ delta(pv.new_retrieval_ms, sm.new_retrieval_ms) }}</td></tr>
+        <tr><td>Judge: better than saved</td><td class="num">{{ pv.new_better if pv.judged else '–' }}{% if pv.judged %} / {{ pv.judged }}{% endif %}</td><td class="num">{{ sm.new_better if sm.judged else '–' }}{% if sm.judged %} / {{ sm.judged }}{% endif %}</td><td></td></tr>
+        <tr><td>Judge score (1–5)</td><td class="num">{{ pv.new_score if pv.new_score is not none else '–' }}</td><td class="num">{{ sm.new_score if sm.new_score is not none else '–' }}</td><td></td></tr>
+        <tr><td>"Not found" answers</td><td class="num">{{ pv.new_not_found }}</td><td class="num">{{ sm.new_not_found }}</td><td></td></tr>
+      </tbody></table>
+      <div class="hint">Each run replays the most recent saved questions, so the questions can differ if you chatted in between; questions in both runs show the other run's numbers too.</div>
+    {% else %}
+      <p class="subtle" style="margin:0">No other finished run yet. Change a setting or pick another model in <b>Answer with</b>, then run the test again to compare.</p>
+    {% endif %}
+    </div>
+  </div>
+</div>
+
+<h2 class="eval-h2">Questions</h2>
+<div class="eval-items">
+{% for i in run['items'] %}
+  {% set v = i.verdict %}
+  <details class="card eval-item eval-{{ i.status }}">
+    <summary>
+      <span class="eval-q">{{ i.question | truncate(160) }}</span>
+      <span class="eval-meta">
+        {% if i.status == 'done' %}
+          <span>{{ pair(i.old_stats.seconds, i.new_stats.seconds, ' s') }}</span>
+          {% if i.other %}<span title="Run #{{ run.previous.id }} ({{ i.other.model }})">#{{ run.previous.id }}: {{ i.other.seconds }} s{% if i.other.score %}, score {{ i.other.score }}{% endif %}</span>{% endif %}
+          {% if v.new_score %}<span title="Judge score for this run's answer">score {{ v.new_score }}</span>{% endif %}
+          {% if i.overlap is not none %}<span title="Documents in common">docs {{ (i.overlap * 100) | round | int }}%</span>{% endif %}
+          {% if (i.new_stats.retrieval or {}).reserved %}<span class="badge" style="margin:0">{{ i.new_stats.retrieval.reserved }} reserved</span>{% endif %}
+          {% if i.new_not_found and not i.old_not_found %}<span class="badge badge-danger" style="margin:0">now not found</span>{% endif %}
+          {% if i.old_not_found and not i.new_not_found %}<span class="badge badge-success" style="margin:0">now found</span>{% endif %}
+          {% if v.better == 'new' %}<span class="badge badge-success" style="margin:0">now better</span>
+          {% elif v.better == 'old' %}<span class="badge badge-danger" style="margin:0">saved better</span>
+          {% elif v.better == 0 %}<span class="badge" style="margin:0">same</span>
+          {% elif v.error %}<span class="badge badge-warn" style="margin:0" title="{{ v.error }}">judge failed</span>{% endif %}
+        {% elif i.status == 'error' %}<span class="badge badge-danger" style="margin:0" title="{{ i.error }}">error</span>
+        {% else %}<span class="subtle">{{ i.status }}…</span>{% endif %}
+      </span>
+    </summary>
+    <div class="card-block">
+      {% if i.error %}<div class="alert alert-danger">{{ i.error }}</div>{% endif %}
+      {% if v.reason %}<p><b>Judge:</b> {{ v.reason }} <span class="subtle">(score saved {{ v.old_score or '–' }}, now {{ v.new_score or '–' }})</span></p>{% endif %}
+      <p class="subtle" style="margin-top:0">Sources: {{ i.scope or 'all' }} · <a href="/chat/{{ i.chat }}">original chat</a>
+        {% if i.docs_added %} · <b>new documents:</b> {{ i.docs_added | join(', ') }}{% endif %}
+        {% if i.docs_dropped %} · <b>no longer used:</b> {{ i.docs_dropped | join(', ') }}{% endif %}</p>
+      <div class="eval-answers">
+        <div><div class="eval-col-head">Saved answer · {{ i.old_model or '?' }} · {{ i.old_stats.seconds or '–' }} s · {{ i.old_stats.tok_per_s or '–' }} tok/s · {{ i.old_stats.prompt_tokens or '–' }} prompt tokens</div>
+          <div class="md eval-md" data-md="{{ i.old_answer }}"></div></div>
+        <div><div class="eval-col-head">Now · {{ i.new_stats.model or '–' }} · {{ i.new_stats.seconds or '–' }} s · {{ i.new_stats.tok_per_s or '–' }} tok/s · {{ i.new_stats.prompt_tokens or '–' }} prompt tokens · retrieval {{ i.new_stats.retrieval_ms or '–' }} ms</div>
+          <div class="md eval-md" data-md="{{ i.new_answer }}"></div></div>
+      </div>
+      {% if i.other %}
+      <details class="eval-other"><summary>Run #{{ run.previous.id }}'s answer · {{ i.other.model }} · {{ i.other.seconds }} s · {{ i.other.tok_per_s or '–' }} tok/s{% if i.other.score %} · judge score {{ i.other.score }}{% endif %}</summary>
+        <div class="md eval-md" data-md="{{ i.other.answer }}"></div></details>
+      {% endif %}
+    </div>
+  </details>
+{% endfor %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/shared/vendor/marked/marked.umd.js?v={{ asset_v }}"></script>
+<script src="/shared/vendor/dompurify/purify.min.js?v={{ asset_v }}"></script>
+<script src="/static/admin.js?v={{ asset_v }}"></script>
+<script>
+(function () {
+  // Answers render as markdown when a question is opened.
+  document.querySelectorAll('.eval-item').forEach(function (d) {
+    d.addEventListener('toggle', function () {
+      if (!d.open) return;
+      d.querySelectorAll('[data-md]').forEach(function (el) {
+        if (el.dataset.done) return;
+        el.innerHTML = DOMPurify.sanitize(marked.parse(el.dataset.md || '_(no answer)_'));
+        el.dataset.done = '1';
+      });
+    });
+  });
+  var rid = {{ run.id }}, status = {{ run.status | tojson }}, done = {{ run.done }};
+  if (status === 'running') {
+    // Reload when another question finishes, or the run ends.
+    setInterval(async function () {
+      try {
+        var r = await (await fetch('/ui/eval/' + rid)).json();
+        if (r.status !== status || r.done !== done) location.reload();
+      } catch (e) {}
+    }, 3000);
+  }
+  var vs = document.getElementById('eval-vs');
+  if (vs) vs.onchange = function () { location.href = '/eval/' + rid + '?vs=' + vs.value; };
+  document.querySelectorAll('.eval-other').forEach(function (d) {
+    d.addEventListener('toggle', function () {
+      d.querySelectorAll('[data-md]').forEach(function (el) {
+        if (d.open && !el.dataset.done) { el.innerHTML = DOMPurify.sanitize(marked.parse(el.dataset.md || '')); el.dataset.done = '1'; }
+      });
+    });
+  });
+  var stop = document.getElementById('eval-stop');
+  if (stop) stop.onclick = async function () {
+    stop.disabled = true;
+    try { await AskAdmin.post('/ui/eval/stop'); } catch (e) { stop.disabled = false; vcoAlert(e.message); }
+  };
+  var del = document.getElementById('eval-delete');
+  if (del) del.onclick = async function () {
+    if (!(await vcoConfirm('Delete test run #' + rid + '? Your chats are not touched.', { ok: 'Delete', danger: true }))) return;
+    try { await AskAdmin.post('/ui/eval/' + rid + '/delete'); location.href = '/settings#eval'; } catch (e) { vcoAlert(e.message); }
+  };
+})();
+</script>
+{% endblock %}

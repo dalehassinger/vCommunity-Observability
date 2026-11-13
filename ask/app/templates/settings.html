@@ -32,6 +32,47 @@
   </div>
 </div>
 
+<div class="card" id="eval" style="margin-bottom:16px">
+  <div class="card-header">Answer quality test</div>
+  <div class="card-block">
+    <p class="subtle" style="margin-top:0">Asks your most recent saved questions again with the current code and settings, then compares them with the
+      saved answers: speed (seconds, tokens/s, prompt size), which documents were used, "not found" answers, and optionally a verdict from the
+      chat model on which answer is better. Run it before and after a change. Nothing is added to your chats.
+      {{ eval_available }} saved question{{ '' if eval_available == 1 else 's' }} can be replayed (answers from knowledge sources only).</p>
+    <div class="eval-form">
+      <label for="eval-count">Questions</label>
+      <input type="number" id="eval-count" min="1" max="{{ eval_max }}" value="{{ [10, eval_available or 1] | min }}" style="width:80px">
+      <label for="eval-model">Answer with</label>
+      <select id="eval-model" data-current="{{ settings.chat_model }}"><option value="">{{ settings.chat_model }} (Chat model)</option></select>
+      <label class="switch"><input type="checkbox" role="switch" id="eval-judge" checked><span></span>Judge with</label>
+      <select id="eval-judge-model"><option value="">the answering model</option></select>
+      <button class="btn btn-primary" type="button" id="eval-run" {{ 'disabled' if eval_running or not eval_available else '' }}>{{ 'Test running…' if eval_running else 'Run test' }}</button>
+      <span class="form-msg" id="eval-msg"></span>
+    </div>
+    <div class="hint"><b>Comparing models:</b> pick a model in <b>Answer with</b> (your saved Chat model is not changed), and keep the same
+      <b>Judge with</b> model for every run, ideally your strongest one, so the scores are on the same scale. Then open a run and pick the other run under <b>Compare with</b>.</div>
+    <div class="hint">One question at a time, with the same Sources pick and earlier chat turns as the original. It uses Ollama like a normal answer, so 10 questions take about as long as asking 10 questions (twice that with the judge).</div>
+    {% if eval_runs %}
+    <div class="eval-table-wrap"><table class="datagrid">
+      <thead><tr><th>Run</th><th>Started</th><th>Status</th><th>Model</th><th>Judge</th><th class="num">Questions</th><th class="num">Median s</th><th class="num">Tokens/s</th><th class="num">Judge score</th><th class="num" title="Judge verdicts against the saved answers">vs saved: better / worse / same</th><th></th></tr></thead>
+      <tbody>
+      {% for r in eval_runs %}{% set sm = r.summary %}
+        <tr><td>#{{ r.id }}</td><td>{{ r.started | ago }}</td>
+          <td><span class="badge {{ 'badge-success' if r.status == 'done' else ('badge-info' if r.status == 'running' else 'badge-warn') }}" style="margin:0">{{ r.status }}</span></td>
+          <td>{{ r.settings.chat_model }}</td><td>{{ r.settings.judge_model or '–' }}</td>
+          <td class="num">{{ r.done }} / {{ r.total }}</td>
+          <td class="num">{{ sm.new_seconds if sm.new_seconds is not none else '–' }}</td>
+          <td class="num">{{ sm.new_tok_per_s if sm.new_tok_per_s is not none else '–' }}</td>
+          <td class="num">{{ sm.new_score if sm.new_score is not none else '–' }}</td>
+          <td class="num">{% if sm.judged %}{{ sm.new_better }} / {{ sm.old_better }} / {{ sm.same }}{% else %}–{% endif %}</td>
+          <td><a class="link-btn" href="/eval/{{ r.id }}">Open</a></td></tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    {% endif %}
+  </div>
+</div>
+
 <div class="form-grid">
   <div class="card">
     <div class="card-header">Ollama</div>
@@ -62,6 +103,7 @@
     <div class="card-block">
       {% for key, label, hint in [
         ('top_k', 'Chunks to retrieve', 'Best-matching sections sent to the model (linked files come on top).'),
+        ('source_min_chunks', 'Sections per source', 'With several sources picked, each source that matches the question gets at least this many of the chunks above, so one big source cannot take them all. 0 = off (one shared ranking).'),
         ('context_chars', 'Context budget (chars)', 'Upper limit for all sources together. About 4 characters per token.'),
         ('num_ctx', 'Model context (tokens)', 'Ollama num_ctx. Must hold the sources, the chat history and the answer.'),
         ('temperature', 'Temperature', 'Low (0.1-0.3) keeps answers close to the sources.'),
@@ -185,6 +227,39 @@
       }
     };
   });
+})();
+(function () {
+  // Answer quality test: start a run and open its page.
+  var btn = document.getElementById('eval-run'), msg = document.getElementById('eval-msg');
+  if (!btn) return;
+  var modelSel = document.getElementById('eval-model'), judgeSel = document.getElementById('eval-judge-model');
+  var judgeOn = document.getElementById('eval-judge');
+  judgeOn.onchange = function () { judgeSel.disabled = !judgeOn.checked; };
+  // Installed chat models for both pickers; the last picks are remembered in this browser.
+  fetch('/ui/ollama').then(function (r) { return r.json(); }).then(function (d) {
+    var chat = (d.models || []).filter(function (m) { return m.kind === 'chat'; });
+    var saved = {};
+    try { saved = { model: localStorage.getItem('ask.eval.model') || '', judge: localStorage.getItem('ask.eval.judge') || '' }; } catch (e) {}
+    [modelSel, judgeSel].forEach(function (sel) {
+      chat.forEach(function (m) {
+        var o = document.createElement('option'); o.value = m.name;
+        o.textContent = m.name + (m.parameter_size ? ' (' + m.parameter_size + ')' : '');
+        sel.appendChild(o);
+      });
+    });
+    if (saved.model && chat.some(function (m) { return m.name === saved.model; })) modelSel.value = saved.model;
+    if (saved.judge && chat.some(function (m) { return m.name === saved.judge; })) judgeSel.value = saved.judge;
+  }).catch(function () {});
+  btn.onclick = async function () {
+    btn.disabled = true; msg.textContent = 'Starting…'; msg.className = 'form-msg';
+    try {
+      try { localStorage.setItem('ask.eval.judge', judgeSel.value); localStorage.setItem('ask.eval.model', modelSel.value); } catch (e) {}
+      var r = await AskAdmin.post('/ui/eval/run', { count: +document.getElementById('eval-count').value || 10,
+                                                   judge: document.getElementById('eval-judge').checked,
+                                                   model: modelSel.value, judge_model: judgeSel.value });
+      location.href = r.url;
+    } catch (e) { btn.disabled = false; msg.textContent = e.message; msg.className = 'form-msg bad'; }
+  };
 })();
 (function () {
   var DEFAULT_PROMPT = {{ defaults.system_prompt | tojson }};

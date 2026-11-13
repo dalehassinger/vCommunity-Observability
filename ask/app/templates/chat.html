@@ -37,56 +37,84 @@
     <div class="composer-box">
       <textarea id="question" rows="1" placeholder="Ask a question about your knowledge sources…" aria-label="Question" required></textarea>
       <div class="composer-bar">
-        {# Sources: tick one or more; none ticked = every source except spreadsheets. #}
-        {% set sel = chat.scope.split(',') if chat and chat.scope and chat.scope != 'all' else [] %}
-        {% set enabled = sources | selectattr('enabled') | list %}
-        {% set groups = [('web-site', 'Blogs and web sites'), ('markdown-repo', 'Markdown repositories'), ('pdf', 'PDF documents'), ('openapi', 'API specs'), ('spreadsheet', 'Spreadsheets')] %}
-        <div class="scope">
-          <span>Sources</span>
-          <details class="scope-pick" id="scope-pick">
-            <summary class="scope-btn" id="scope-label" aria-label="Which sources to search">All sources (not spreadsheets)</summary>
-            <div class="scope-menu" role="group" aria-label="Sources to search">
-              <button type="button" class="link-btn scope-all" data-scope-all>All sources (not spreadsheets)</button>
-              <label class="scope-item scope-none" title="No search: the model works only with what you type or paste (rephrase, grammar, summarize, translate)"><input type="checkbox" value="none" data-plugin="none" {{ 'checked' if 'none' in sel else '' }}><span>No sources (just the model)</span></label>
-              {% for plugin, label in groups %}
-              {% set items = enabled | selectattr('plugin', 'equalto', plugin) | list %}
-              {% if items %}
-              <div class="scope-group"><span>{{ label }}</span>{% if items | length > 1 %}<button type="button" class="link-btn" data-scope-only="{{ plugin }}">only these</button>{% endif %}</div>
-              {% for s in items %}
-              <label class="scope-item"><input type="checkbox" value="{{ s.name }}" data-plugin="{{ s.plugin }}" {{ 'checked' if s.name in sel else '' }}><span>{{ s.title }}</span></label>
-              {% endfor %}
-              {% endif %}
-              {% endfor %}
-              {% set others = enabled | rejectattr('plugin', 'in', ['web-site', 'markdown-repo', 'pdf', 'openapi', 'spreadsheet']) | list %}
-              {% if others %}
-              <div class="scope-group"><span>Other sources</span></div>
-              {% for s in others %}
-              <label class="scope-item"><input type="checkbox" value="{{ s.name }}" data-plugin="{{ s.plugin }}" {{ 'checked' if s.name in sel else '' }}><span>{{ s.title }}</span></label>
-              {% endfor %}
-              {% endif %}
-              {% set web_on = (web_search and web_search.available) or (brave_search and brave_search.available) %}
-              {% if web_on %}
-              <div class="scope-group"><span>Web</span></div>
-              {% if web_search and web_search.available %}
-              <label class="scope-item" title="The model may search the web (Ollama web search) when the sources don't answer"><input type="checkbox" value="web:ollama" data-plugin="web" {{ 'checked' if 'web:ollama' in sel else '' }}><span>Web search (Ollama)</span></label>
-              {% endif %}
-              {% if brave_search and brave_search.available %}
-              <label class="scope-item" title="The model may search the web (Brave Search) when the sources don't answer"><input type="checkbox" value="web:brave" data-plugin="web" {{ 'checked' if 'web:brave' in sel else '' }}><span>Web search (Brave)</span></label>
-              {% endif %}
-              {% endif %}
-              {% if mcp_servers %}
-              <div class="scope-group"><span>Tools (MCP)</span><a class="link-btn" href="/tools">manage</a></div>
-              {% for m in mcp_servers %}
-              <label class="scope-item" title="{{ m.tools | length }} tools{{ ' (starting)' if m.starting else '' }}{{ ': ' ~ m.error if m.error else '' }}"><input type="checkbox" value="mcp:{{ m.name }}" data-plugin="mcp" {{ 'checked' if ('mcp:' ~ m.name) in sel else '' }}><span>Tools: {{ m.name }}</span></label>
-              {% endfor %}
-              {% endif %}
-              <p class="scope-foot">Tick one or more. Nothing ticked searches every source except spreadsheets{{ ' and tools' if mcp_servers or web_on else '' }}.</p>
-            </div>
-          </details>
-        </div>
+      <details class="model-menu composer-model" id="model-menu" data-current="{{ settings.chat_model }}">
+        <summary class="model-btn" title="Chat model (for every chat): click to change it" aria-haspopup="menu">
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span class="model-current">{{ settings.chat_model }}</span>
+          <svg class="model-caret" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </summary>
+        <div class="model-list" role="menu" aria-label="Chat model"></div>
+      </details>
         <span class="composer-hint">Enter to send · Shift+Enter for a new line</span>
         <button class="btn btn-primary" id="send" type="submit">Send</button>
         <button class="btn btn-outline" id="stop" type="button" hidden>Stop</button>
+      </div>
+    </div>
+    {# Sources: buttons under the prompt, grouped by kind. Nothing picked = every source except spreadsheets. #}
+    {% set sel = chat.scope.split(',') if chat and chat.scope and chat.scope != 'all' else [] %}
+    {% set enabled = sources | selectattr('enabled') | list %}
+    {% set groups = [('web-site', 'Blogs and web sites'), ('markdown-repo', 'Markdown repositories'), ('pdf', 'PDF documents'), ('openapi', 'API specs'), ('spreadsheet', 'Spreadsheets')] %}
+    {% set web_on = (web_search and web_search.available) or (brave_search and brave_search.available) %}
+    <div class="scope-panel" id="scope-pick" role="group" aria-label="Sources to search">
+      <div class="scope-head">
+        <span class="scope-title">Sources</span>
+        <span class="scope-summary" id="scope-label" aria-live="polite">All sources (not spreadsheets)</span>
+        <span class="scope-quick">
+          <button type="button" class="scope-chip-btn" data-scope-all aria-pressed="false" title="Every source except spreadsheets">All sources</button>
+          <label class="scope-chip" title="No search: the model works only with what you type or paste (rephrase, grammar, summarize, translate)"><input type="checkbox" value="none" data-plugin="none" {{ 'checked' if 'none' in sel else '' }}><span>No sources (just the model)</span></label>
+        </span>
+        <button type="button" class="link-btn scope-fold" id="scope-fold" aria-expanded="true" aria-controls="scope-groups">Hide list</button>
+      </div>
+      <div class="scope-groups" id="scope-groups">
+        {% for plugin, label in groups %}
+        {% set items = enabled | selectattr('plugin', 'equalto', plugin) | list %}
+        {% if items %}
+        <div class="scope-row">
+          <span class="scope-gname">{{ label }}</span>
+          <span class="scope-chips">
+            {% for s in items %}
+            <label class="scope-chip"><input type="checkbox" value="{{ s.name }}" data-plugin="{{ s.plugin }}" {{ 'checked' if s.name in sel else '' }}><span>{{ s.title }}</span></label>
+            {% endfor %}
+            {% if items | length > 1 %}<button type="button" class="link-btn scope-only" data-scope-only="{{ plugin }}" title="Pick every source in this group and nothing else">only these</button>{% endif %}
+          </span>
+        </div>
+        {% endif %}
+        {% endfor %}
+        {% set others = enabled | rejectattr('plugin', 'in', ['web-site', 'markdown-repo', 'pdf', 'openapi', 'spreadsheet']) | list %}
+        {% if others %}
+        <div class="scope-row">
+          <span class="scope-gname">Other sources</span>
+          <span class="scope-chips">
+            {% for s in others %}
+            <label class="scope-chip"><input type="checkbox" value="{{ s.name }}" data-plugin="{{ s.plugin }}" {{ 'checked' if s.name in sel else '' }}><span>{{ s.title }}</span></label>
+            {% endfor %}
+          </span>
+        </div>
+        {% endif %}
+        {% if web_on %}
+        <div class="scope-row">
+          <span class="scope-gname">Web</span>
+          <span class="scope-chips">
+            {% if web_search and web_search.available %}
+            <label class="scope-chip" title="The model may search the web (Ollama web search) when the sources don't answer"><input type="checkbox" value="web:ollama" data-plugin="web" {{ 'checked' if 'web:ollama' in sel else '' }}><span>Web search (Ollama)</span></label>
+            {% endif %}
+            {% if brave_search and brave_search.available %}
+            <label class="scope-chip" title="The model may search the web (Brave Search) when the sources don't answer"><input type="checkbox" value="web:brave" data-plugin="web" {{ 'checked' if 'web:brave' in sel else '' }}><span>Web search (Brave)</span></label>
+            {% endif %}
+          </span>
+        </div>
+        {% endif %}
+        {% if mcp_servers %}
+        <div class="scope-row">
+          <span class="scope-gname">Tools (MCP) <a class="link-btn" href="/tools">manage</a></span>
+          <span class="scope-chips">
+            {% for m in mcp_servers %}
+            <label class="scope-chip" title="{{ m.tools | length }} tools{{ ' (starting)' if m.starting else '' }}{{ ': ' ~ m.error if m.error else '' }}"><input type="checkbox" value="mcp:{{ m.name }}" data-plugin="mcp" {{ 'checked' if ('mcp:' ~ m.name) in sel else '' }}><span>{{ m.name }}</span></label>
+            {% endfor %}
+          </span>
+        </div>
+        {% endif %}
+        <p class="scope-foot">Click to pick one or more. Nothing picked searches every source except spreadsheets{{ ' and tools' if mcp_servers or web_on else '' }}. Spreadsheets are used only when picked.</p>
       </div>
     </div>
   </form>

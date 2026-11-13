@@ -7,8 +7,9 @@
   var thread = document.getElementById('thread');
   var form = document.getElementById('composer');
   var input = document.getElementById('question');
-  // Sources picker: check boxes in a small menu. Nothing ticked = "all" (every source except
-  // spreadsheets). A new chat starts with the last selection (kept in this browser only).
+  // Sources picker: buttons under the prompt, grouped by kind (each is a check box styled as a
+  // button). Nothing picked = "all" (every source except spreadsheets). A new chat starts with
+  // the last selection, and the list can be folded (both kept in this browser only).
   var scopePick = document.getElementById('scope-pick');
   var scopeLabel = document.getElementById('scope-label');
   var scopeBoxes = scopePick ? Array.prototype.slice.call(scopePick.querySelectorAll('input[type=checkbox]')) : [];
@@ -20,8 +21,10 @@
   function scopeRefresh(save) {
     if (!scopeLabel) return;
     var on = scopeTicked(), names = on.map(function (b) { return b.parentNode.textContent.trim(); });
-    scopeLabel.textContent = !on.length ? 'All sources (not spreadsheets)' : on.length === 1 ? names[0] : on.length + ' sources';
+    scopeLabel.textContent = !on.length ? 'All sources (not spreadsheets)' : on.length <= 3 ? names.join(', ') : on.length + ' picked: ' + names.slice(0, 2).join(', ') + '…';
     scopeLabel.title = on.length ? names.join(', ') : 'Every source except spreadsheets';
+    var allBtn = scopePick.querySelector('[data-scope-all]');
+    if (allBtn) allBtn.setAttribute('aria-pressed', on.length ? 'false' : 'true');
     if (save) { try { localStorage.setItem('ask.scope', JSON.stringify(on.map(function (b) { return b.value; }))); } catch (e) { /* private window */ } }
   }
   if (scopePick) {
@@ -49,8 +52,23 @@
       scopeBoxes.forEach(function (b) { b.checked = !!only && b.getAttribute('data-plugin') === only; });
       scopeRefresh(true);
     });
-    document.addEventListener('click', function (e) { if (scopePick.open && !scopePick.contains(e.target)) scopePick.open = false; });
-    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && scopePick.open) { scopePick.open = false; scopeLabel.focus(); } });
+    var fold = document.getElementById('scope-fold');
+    if (fold) {
+      var setFold = function (folded, save) {
+        scopePick.classList.toggle('folded', folded);
+        fold.setAttribute('aria-expanded', folded ? 'false' : 'true');
+        fold.textContent = folded ? 'Show list' : 'Hide list';
+        if (save) { try { localStorage.setItem('ask.scope.folded', folded ? '1' : '0'); } catch (e) { /* private window */ } }
+      };
+      // Folded on a phone unless the reader chose otherwise: the list would cover the chat.
+      var folded0 = window.matchMedia('(max-width: 600px)').matches;
+      try { var f = localStorage.getItem('ask.scope.folded'); if (f !== null) folded0 = f === '1'; } catch (e) { /* private window */ }
+      setFold(folded0, false);
+      fold.addEventListener('click', function () { setFold(!scopePick.classList.contains('folded'), true); });
+      // A click in the question box folds the list (not saved: Show list opens it again).
+      var q = document.getElementById('question');
+      if (q) q.addEventListener('pointerdown', function () { if (!scopePick.classList.contains('folded')) setFold(true, false); });
+    }
   }
   var sendBtn = document.getElementById('send');
   var stopBtn = document.getElementById('stop');
@@ -494,6 +512,11 @@
       var sb = statusBadge(s.status);
       if (sb) meta.appendChild(sb);
       if (s.date) { var db_ = el('span', 'badge', s.date); db_.title = 'Published'; meta.appendChild(db_); }
+      if (s.reserved) {
+        var rb = el('span', 'badge', 'reserved');
+        rb.title = 'Balanced retrieval kept this slot for its source (Sections per source)';
+        meta.appendChild(rb);
+      }
       if (s.kind === 'linked') {
         var lb = el('span', 'badge', 'linked · ' + s.via.replace('_', ' '));
         lb.title = 'Added because ' + s.from_doc + ' links to it (' + s.via + ')';
@@ -599,6 +622,12 @@
     var st = m.stats || {};
     if (st.seconds != null) parts.push(st.seconds + ' s');
     if (st.tok_per_s) parts.push(st.tok_per_s + ' tokens/s');
+    var rt = st.retrieval;
+    if (rt && rt.reserved) {
+      // Balanced retrieval note: sections kept for sources the shared ranking left short.
+      var by = Object.keys(rt.sources || {}).map(function (k) { return k + ' ' + rt.sources[k]; });
+      parts.push(rt.reserved + (rt.reserved === 1 ? ' section' : ' sections') + ' reserved (' + by.join(', ') + ')');
+    }
     container.appendChild(el('span', null, parts.join(' · ')));
     var copy = el('button', 'link-btn', 'Copy answer');
     copy.type = 'button';

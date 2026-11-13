@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import json
+import math
 import posixpath
 import re
 import time
@@ -32,6 +33,12 @@ REPORTS = None   # app.reports.Reports, set by create_app; makes HTML reports fo
 from .ollama import Ollama, OllamaError
 
 RRF_K = 60
+# Balanced retrieval: a source's best section counts as a match (and gets a guaranteed slot)
+# when its keyword search found it, or its vector distance is within this much of the best
+# distance over all picked sources. Keeps a source that has nothing to say out of the answer.
+BALANCE_MARGIN = 0.10      # vector: within this cosine distance of the best section overall
+BALANCE_BM25_RATIO = 0.5   # keyword: BM25 at least half as strong as the best real keyword hit overall
+BALANCE_TERM_SHARE = 0.5   # keyword: a real hit has at least half the question's search words (and 2+)
 LINK_ORDER = ("same_name", "internal_derive", "same_meaning", "related")
 STOP = set("""a an and are as at be but by can do does for from how i if in into is it its me my of on or our
 should so that the their them then there these this to was what when where which who why will with you your
@@ -52,32 +59,85 @@ def file_url(source: str, path: str) -> str:
     return f"/files/{quote(source)}/{quote(path)}"
 
 
-def retrieve(db: DB, cfg: dict[str, Any], question: str, sources: list[str] | None) -> list[dict[str, Any]]:
+def retrieve(db: DB, cfg: dict[str, Any], question: str, sources: list[str] | None,
+             info: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """The sections sent to the model. `info`, when given, gets the retrieval note
+    (info["retrieval"]: how many sections were reserved, and from which sources)."""
     model = cfg["embed_model"]
     _, qprefix = embed_prefixes(model)
     ollama = Ollama(cfg["ollama_url"])
     qvec = ollama.embed(model, [qprefix + question], keep_alive=cfg["keep_alive"])[0]
     pool = max(30, cfg["top_k"] * 4)
+    match = fts_query(question)
     vec = db.vector_search(qvec, pool, sources)
-    kw = db.keyword_search(fts_query(question), pool, sources)
+    kw = db.keyword_search(match, pool, sources)
 
     score: dict[int, float] = {}
     for hits in (vec, kw):
         for rank, (cid, _) in enumerate(hits):
             score[cid] = score.get(cid, 0.0) + 1.0 / (RRF_K + rank + 1)
     ranked = sorted(score, key=score.get, reverse=True)
-    chunks = db.get_chunks(ranked[: pool])
+
+    # Balanced retrieval: with 2 or more sources picked, a source that the shared ranking leaves
+    # with fewer than "Sections per source" sections gets its own best matching sections reserved,
+    # so one big source (a blog with hundreds of posts) can't take every slot. Only those
+    # sources are searched again; the other slots go to the best sections overall, as before.
+    top_k = int(cfg["top_k"])
+    per_source = int(cfg.get("source_min_chunks") or 0)
+    chunks = db.get_chunks(ranked[:pool])
+    reserve: dict[str, list[int]] = {}
+    spare: dict[str, list[int]] = {}
+    base: set[int] = set()
+    short: list[str] = []
+    if per_source > 0 and sources and len(sources) > 1:
+        base = set(cap_per_doc(ranked, chunks, top_k))
+        have: dict[str, int] = {}
+        for cid in base:
+            have[chunks[cid]["source"]] = have.get(chunks[cid]["source"], 0) + 1
+        short = [src for src in sources if have.get(src, 0) < per_source]
+        if short:
+            reserve, spare, extra = balanced_picks(db, qvec, match, short, have, per_source, top_k,
+                                                   vec[0][1] if vec else None, kw, score)
+            chunks.update(extra)
 
     picked: list[dict[str, Any]] = []
     per_doc: dict[int, int] = {}
-    for cid in ranked:
+    seen: set[int] = set()
+
+    def take(cid: int, balanced: bool) -> bool:
         ch = chunks.get(cid)
-        if not ch or per_doc.get(ch["doc_row"], 0) >= 2:
-            continue
+        if cid in seen or not ch or per_doc.get(ch["doc_row"], 0) >= 2:
+            return False
+        seen.add(cid)
         per_doc[ch["doc_row"]] = per_doc.get(ch["doc_row"], 0) + 1
-        picked.append({**ch, "kind": "hit", "score": round(score[cid], 4)})
-        if len(picked) >= cfg["top_k"]:
+        item = {**ch, "kind": "hit", "score": round(score.get(cid, 0.0), 4)}
+        if balanced:
+            item["balanced"] = True
+            if cid not in base:
+                item["reserved"] = True      # it is here only because of the reservation
+        picked.append(item)
+        return True
+
+    def next_spare(src: str, fits=lambda ch: True) -> int | None:
+        for cid in spare.get(src, []):
+            ch = chunks.get(cid)
+            if cid not in seen and ch and per_doc.get(ch["doc_row"], 0) < 2 and fits(ch):
+                return cid
+        return None
+
+    # Reserved sections first. One that can't be used (its document already has two sections)
+    # is replaced by the next match from the same source, so the slot stays with that source.
+    for src, ids in reserve.items():
+        for cid in ids:
+            while cid is not None and len(picked) < top_k and not take(cid, True):
+                cid = next_spare(src)
+    for cid in ranked:
+        if len(picked) >= top_k:
             break
+        take(cid, False)
+    # Best first in the prompt and the cards (the guaranteed ones were taken first only so
+    # that they are sure to get a slot).
+    picked.sort(key=lambda it: -it["score"])
 
     linked: list[dict[str, Any]] = []
     if cfg["expand_links"] and picked:
@@ -96,17 +156,128 @@ def retrieve(db: DB, cfg: dict[str, Any], question: str, sources: list[str] | No
         linked = linked[: max(4, cfg["top_k"])]
 
     # Fit to the context budget: direct hits first, then linked files.
+    # Balanced picks are fitted first so a small source's reserved section isn't the one cut; if
+    # one is too big, the next match from the same source that fits takes its place. The order
+    # sent to the model stays best first.
     budget = cfg["context_chars"]
-    out: list[dict[str, Any]] = []
-    for item in picked + linked:
+    kept_hits: list[dict[str, Any]] = []
+    kept_linked: list[dict[str, Any]] = []
+    for item in sorted(picked, key=lambda it: not it.get("balanced")) + linked:
         size = len(item["text"]) + 200
-        if out and budget - size < 0:
-            continue
+        if budget - size < 0:
+            alt = None
+            if item.get("balanced"):
+                per_doc[item["doc_row"]] -= 1          # dropped: its document has room again
+                alt = next_spare(item["source"], lambda ch: len(ch["text"]) + 200 <= budget)
+                if alt is not None and take(alt, True):
+                    new = picked[-1]
+                    budget -= len(new["text"]) + 200
+                    kept_hits.append(new)
+                    continue
+                per_doc[item["doc_row"]] += 1
+            if kept_hits or kept_linked:
+                continue                                # no room (the first section is always kept)
         budget -= size
-        out.append(item)
+        (kept_linked if item.get("kind") == "linked" else kept_hits).append(item)
+    out = sorted(kept_hits, key=lambda it: -it["score"]) + kept_linked
+    if info is not None and base:
+        reserved: dict[str, int] = {}
+        for item in out:
+            if item.get("reserved"):
+                reserved[item["source"]] = reserved.get(item["source"], 0) + 1
+        info["retrieval"] = {"reserved": sum(reserved.values()), "sources": reserved, "searched": short}
     for n, item in enumerate(out, 1):
         item["n"] = n
     return out
+
+
+def cap_per_doc(ids: list[int], chunks: dict[int, dict[str, Any]], limit: int, per_doc: int = 2) -> list[int]:
+    """The first `limit` ids, at most `per_doc` from one document (the same rule as the final pick)."""
+    out: list[int] = []
+    count: dict[int, int] = {}
+    for cid in ids:
+        ch = chunks.get(cid)
+        if not ch or count.get(ch["doc_row"], 0) >= per_doc:
+            continue
+        count[ch["doc_row"]] = count.get(ch["doc_row"], 0) + 1
+        out.append(cid)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def balanced_picks(db: DB, qvec: list[float], match: str, short: list[str], have: dict[str, int],
+                   per_source: int, top_k: int, best_distance: float | None, kw: list[tuple[int, float]],
+                   score: dict[int, float]) -> tuple[dict[str, list[int]], dict[str, list[int]], dict[int, dict[str, Any]]]:
+    """Reserved sections for the sources the shared ranking left short.
+
+    A section qualifies only when
+      - its vector distance is within BALANCE_MARGIN of the best section overall, or
+      - it is a real keyword hit: it holds at least BALANCE_TERM_SHARE of the question's search
+        words (never fewer than 2), and its BM25 score is at least BALANCE_BM25_RATIO of the best
+        real keyword hit overall.
+    A plain OR hit (one or two shared words, even rare ones) is not relevance.
+
+    Each source's pick follows the two-sections-per-document rule. Sources are ranked by their
+    own match quality: a source with nothing in the shared top first, then the closest best
+    section (vector distance), then the source's own fusion score. With more short sources than
+    slots, each gets fewer (at least 1) and the lowest ranked ones get none; at most top_k in all.
+
+    Returns (reserved ids per source in rank order, spare matches per source for refills,
+    the chunks looked up)."""
+    max_dist = best_distance + BALANCE_MARGIN if best_distance is not None else None
+    terms = re.findall(r'"([^"]+)"', match or "")
+    need = min(len(terms), max(2, math.ceil(len(terms) * BALANCE_TERM_SHARE))) if terms else 0
+
+    def covered(ids: list[int]) -> set[int]:
+        counts = db.term_hits(terms, ids) if need else {}
+        return {cid for cid, n in counts.items() if n >= need}
+
+    # The bar for BM25 comes from the best global keyword hit that is itself a real match.
+    top_kw = kw[:20]
+    ok_global = covered([cid for cid, _ in top_kw])
+    best_bm25 = next((sc for cid, sc in top_kw if cid in ok_global), None)
+    # bm25() is negative, lower is better: a strong hit is at or below this.
+    min_bm25 = best_bm25 * BALANCE_BM25_RATIO if best_bm25 is not None and best_bm25 < 0 else None
+    looked: dict[int, dict[str, Any]] = {}
+    found: list[tuple[tuple, str, list[int]]] = []
+    for src in short:
+        want = per_source * 4          # extra candidates for the per-document cap and refills
+        v = db.vector_search(qvec, want, [src])
+        k = db.keyword_search(match, want, [src]) if match else []
+        dist = dict(v)
+        missing = [cid for cid, _ in k if cid not in dist]
+        if missing:
+            dist.update(db.vector_distances(qvec, missing))   # keyword-only hits: check them by meaning too
+        strong_kw = covered([cid for cid, sc in k if min_bm25 is not None and sc <= min_bm25])
+        local: dict[int, float] = {}
+        for hits in (v, k):
+            for rank, (cid, _) in enumerate(hits):
+                local[cid] = local.get(cid, 0.0) + 1.0 / (RRF_K + rank + 1)
+        good = [cid for cid in sorted(local, key=local.get, reverse=True)
+                if (max_dist is not None and cid in dist and dist[cid] <= max_dist) or cid in strong_kw]
+        if not good:
+            continue
+        looked.update(db.get_chunks(good))
+        ordered = cap_per_doc(good, looked, len(good))
+        if not ordered:
+            continue
+        for cid in ordered:
+            score.setdefault(cid, local[cid] / 2)   # prompt order only: below the shared top
+        quality = (have.get(src, 0) > 0, min(dist.get(c, 2.0) for c in ordered[:per_source]), -local[ordered[0]])
+        found.append((quality, src, ordered))
+    found.sort(key=lambda f: f[0])
+    each = max(1, min(per_source, top_k // max(1, len(found)))) if found else 0
+    reserve: dict[str, list[int]] = {}
+    spare: dict[str, list[int]] = {}
+    total = 0
+    for _, src, ordered in found:
+        n = min(each, top_k - total)
+        if n > 0:
+            reserve[src] = ordered[:n]
+            total += n
+        spare[src] = ordered[n:] if n > 0 else ordered
+    return reserve, spare, looked
 
 
 def source_cards(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -123,6 +294,7 @@ def source_cards(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         cards.append({"n": it["n"], "source": it["source"], "doc_id": it["doc_id"], "doc_row": it["doc_row"],
                       "title": it["title"], "heading": it["heading"], "url": it["url"], "status": it["status"],
                       "date": str((it.get("meta") or {}).get("published") or ""),
+                      "reserved": bool(it.get("reserved")),
                       "kind": it["kind"], "via": it.get("via", ""), "from_doc": it.get("from_doc", ""),
                       "snippet": _snippet(it["text"]), "images": images[:3]})
     return cards
@@ -381,7 +553,7 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
             msgs = plain_messages(cfg, question, history)
         elif tools:
             # Tools picked: the usual search over the picked sources (if any), plus the tools.
-            items = retrieve(db, cfg, question, sources) if sources else []
+            items = retrieve(db, cfg, question, sources, stats) if sources else []
             cards = source_cards(items)
             yield sse("meta", {"chat_id": chat_id, "sources": cards, "model": model, "tools": len(mcp_tools),
                                "retrieval_ms": int((time.time() - t0) * 1000)})
@@ -394,11 +566,12 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
                                "retrieval_ms": int((time.time() - t0) * 1000)})
             msgs = build_data_messages(cfg, res, question, history)
         else:
-            items = retrieve(db, cfg, question, sources)
+            items = retrieve(db, cfg, question, sources, stats)
             cards = source_cards(items)
             yield sse("meta", {"chat_id": chat_id, "sources": cards, "model": model,
                                "retrieval_ms": int((time.time() - t0) * 1000)})
             msgs = build_messages(cfg, items, question, history)
+        stats.setdefault("retrieval_ms", int((time.time() - t0) * 1000))   # saved, for the answer quality test
         options = {"temperature": cfg["temperature"], "num_ctx": cfg["num_ctx"]}
         olla = Ollama(cfg["ollama_url"])
         rounds = max(1, int(cfg.get("mcp_max_rounds") or 6)) if mcp_tools else 0

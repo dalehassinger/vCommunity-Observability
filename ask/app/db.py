@@ -317,6 +317,33 @@ class DB:
                                          ORDER BY distance LIMIT ?""", (pack(vec), *sources, k)).fetchall()
         return [(r[0], r[1]) for r in rows[:k]]
 
+    def vector_distances(self, vec: list[float], ids: list[int]) -> dict[int, float]:
+        """Cosine distance from vec for these chunks (same measure as vector_search)."""
+        if not ids or self.vec_dim() != len(vec):
+            return {}
+        marks = ",".join("?" * len(ids))
+        with self.conn() as c:
+            rows = c.execute(f"SELECT rowid, vec_distance_cosine(embedding, ?) FROM chunks_vec WHERE rowid IN ({marks})",
+                             (pack(vec), *ids)).fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    def term_hits(self, terms: list[str], ids: list[int]) -> dict[int, int]:
+        """How many of these search words each chunk holds (same FTS tokenizer and stemming)."""
+        out = {cid: 0 for cid in ids}
+        if not ids or not terms:
+            return out
+        marks = ",".join("?" * len(ids))
+        with self.conn() as c:
+            for term in terms:
+                try:
+                    rows = c.execute(f"SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? AND rowid IN ({marks})",
+                                     ('"' + term.replace('"', '') + '"', *ids)).fetchall()
+                except sqlite3.OperationalError:
+                    continue
+                for r in rows:
+                    out[r[0]] += 1
+        return out
+
     def keyword_search(self, match: str, k: int, sources: list[str] | None) -> list[tuple[int, float]]:
         if not match:
             return []

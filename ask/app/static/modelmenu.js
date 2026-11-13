@@ -1,4 +1,4 @@
-/* vCommunity Ask header: the chat model pill is a menu. Opening it lists the chat models
+/* vCommunity Ask chat page: the chat model button under the prompt is a menu. Opening it lists the chat models
    installed in Ollama (GET /ui/ollama); picking one saves the Chat model setting
    (POST /ui/settings, same as the Settings page) and applies from the next question.
    With ASK_API_TOKEN set, the token entered on Settings or Sources (kept in this

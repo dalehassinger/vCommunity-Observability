@@ -87,6 +87,20 @@ class H(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body_out)
             return
+        if self.path == "/api/chat" and body["messages"][0]["content"].startswith("You grade answers"):
+            # Answer quality test judge: prefers the longer answer (good enough to exercise the page).
+            text = body["messages"][1]["content"]
+            a1 = text.split("Answer 1:", 1)[-1].split("=====", 1)[0]
+            a2 = text.split("Answer 2:", 1)[-1]
+            better = 0 if abs(len(a1) - len(a2)) < 20 else (1 if len(a1) > len(a2) else 2)
+            verdict = {"better": better, "score1": 4 if better == 1 else 3, "score2": 4 if better == 2 else 3,
+                       "reason": "Fake judge: the longer answer covers more."}
+            msg = {"model": body.get("model"), "message": {"role": "assistant", "content": json.dumps(verdict)}, "done": True}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            self.wfile.write((json.dumps(msg) + "\n").encode())
+            return
         if self.path == "/api/chat" and body["messages"][0]["content"].startswith("You write ONE SQLite SELECT"):
             # Data questions: a canned query, chosen by a word in the question.
             q = body["messages"][1]["content"].rsplit("Question:", 1)[-1].lower()
