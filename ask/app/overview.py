@@ -85,6 +85,8 @@ def _line(d: dict[str, Any], level: int) -> str:
     s = f"- {d['date'] or 'undated'} | {d['title']}"
     if level >= 2 and d["heads"]:
         s += " — " + "; ".join(h[:60] for h in d["heads"][:5])
+    if d.get("url"):
+        s += f" | {d['url']}"
     return s
 
 
@@ -160,9 +162,9 @@ def block(c: dict[str, Any], n: int) -> str:
     if c["words"]:
         lines.append("- Most frequent title words (number of post titles containing them): "
                      + ", ".join(f"{w} ({k})" for w, k in c["words"]))
-    head = "Every post, newest first (date | title" + (" — section headings" if c["level"] >= 2 else "") + "):"
+    head = "Every post, newest first (date | title" + (" — section headings" if c["level"] >= 2 else "") + " | url):"
     if c["shown"] < len(c["posts"]):
-        head = f"The newest {c['shown']} of {len(c['posts'])} posts (the rest did not fit), newest first:"
+        head = f"The newest {c['shown']} of {len(c['posts'])} posts (the rest did not fit), newest first (date | title | url):"
     lines.append(head)
     lines += [_line(d, c["level"]) for d in c["posts"][: c["shown"]]]
     return "\n".join(lines)

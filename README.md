@@ -759,7 +759,7 @@ Ask calls Ollama's native REST API with `requests` (no SDK), by default at `http
 
 1. The **system prompt**: answer only from the numbered sources, cite every fact as `[n]`, say so plainly when the sources don't cover the question, keep VM, host and cluster metrics apart, quote thresholds only when a source states them, flag `status: draft` sources, and follow diagnosis steps in order. It can be edited on the Settings page.
 2. Up to `history_turns` earlier questions and answers from this chat, as plain text (their old sources are not resent).
-3. One user message with the numbered sources, then the question.
+3. One user message with the numbered sources, then the question. Each source header shows its number, document id, title and section, and the page's full `url` when the source has one (web-site pages always do). When any source has a url, a short note tells the model to copy links exactly as shown and never make one up, so "include the URL" prompts get the full address.
 
 Ollama options sent with every question: `temperature`, `num_ctx`, `think` and `keep_alive`. `keep_alive` (default `10m`) keeps the model loaded after a question so follow-ups don't wait for a 27B model to load again.
 
@@ -855,6 +855,7 @@ A normal answer only sees the best few matching chunks (**Chunks to retrieve**, 
   - the source's **Date from / Date to** setting, so the model can say that older posts are not indexed;
   - every post, newest first: date, title and its section headings.
 - **Size.** The catalog may use most of the context window (about `Model context (tokens)` x 2.5 characters, never less than **Context budget**). If the headings don't fit, only dates and titles are sent; if even those don't fit (several large blogs at once), the newest posts are kept and the rest are named as left out. 200 posts with headings fit in the default 16384-token context; raise **Model context (tokens)** to 32768 for several blogs at once.
+- **Links.** Each catalog line is `date | title | url` (plus headings when they fit), so the model can list posts with their full links.
 - **Excerpts.** When room is left, up to 6 of the best matching chunks follow the catalog, so the model can also quote post text.
 - **In the chat.** The sources show an **All posts** card per source: posts, first and latest date, a bar per year, the frequent title words, and the full list of posts (**All 203 posts**, each opening the indexed post, with a link to the original). The answer's stats show `overview`.
 - Turn **Whole-source questions** off on the Settings page to send these questions through the normal search.
@@ -1356,6 +1357,8 @@ Two image targets from one `Dockerfile`:
 
 - Runs as a non-root user (`vco`, uid 10001), listens on port 8080 (web and API) and 5514 UDP and TCP (the Logs module's syslog server; compose maps the host's port 514 to it), with a health check on `/api/core/health`.
 - The right PowerShell build (arm64 or x64) is picked automatically. Pin PowerCLI with the `POWERCLI_VERSION` build argument.
+- **Fast rebuilds.** PowerShell and PowerCLI are installed in their own build stage (`pwsh`) that holds no app code, and the app files are copied on top last. A code or module change rebuilds only those last small layers (about 2 seconds); PowerShell and PowerCLI come from Docker's build cache. They are installed again only when `PWSH_VERSION`, `POWERCLI_VERSION` or `vendor/pwsh/` change (a patched Python package reuses them too), or when you build with `--no-cache` or clear the build cache.
+- **Local copy of PowerShell and PowerCLI (optional).** Run `./scripts/Save-PwshVendor.ps1` once (PowerShell 7). It saves the PowerShell for Linux tarball (checked against the release's `hashes.sha256`) and PowerCLI with its modules into `vendor/pwsh/`, which git ignores. The build then uses that copy instead of GitHub and the PowerShell Gallery, so even a `--no-cache` build is quick and works without internet. The build log says `PowerShell: using local vendor/pwsh/...` and `PowerCLI: using local vendor/pwsh/Modules`. Options: `-PwshVersion` (default `PWSH_VERSION` from `.env`, else 7.6.9), `-PowerCLIVersion` (default newest; set `POWERCLI_VERSION` to the same value when you pin it), `-Arch auto|arm64|x64|both`. When the tarball for the version and CPU is missing, or `POWERCLI_VERSION` names a version that isn't saved, the build downloads as before. Run the script again to update the copy, then rebuild.
 - Compose volumes: `./data` → `/app/data` (SQLite, survives upgrades), `./exports` → `/app/exports` (scheduled exports), `./extra-modules` → `/modules` (new or patched modules), `./config/config.yaml` read-only, `./control` → `/app/control` (Apps on / off, shared with Ask; `VCO_CONTROL_FILE` overrides the file path).
 - `init: true` adds a tiny init process that reaps finished collector processes and passes stop signals to the app.
 - `restart: unless-stopped`.
@@ -1365,7 +1368,7 @@ Common commands:
 ```bash
 docker compose up -d --build                 # build and start (after any code or module change)
 docker compose logs -f                       # follow the logs
-docker compose build --no-cache              # full rebuild, for example after changing PWSH_VERSION
+docker compose build --no-cache              # full rebuild (not needed after changing PWSH_VERSION; slow unless vendor/pwsh is filled)
 docker compose down                          # stop (data, exports and settings stay on disk)
 ```
 
@@ -1529,7 +1532,7 @@ The core (`core/services.py`) starts every service of an available module with t
 
 - `requirements.in` lists direct dependencies. `requirements.txt` is the lock file with hashes. To patch one package: `uv pip compile --generate-hashes --upgrade-package fastapi requirements.in -o requirements.txt` (or the same flags with `pip-compile`), rebuild, and release a new image tag.
 - The Docker build uses `--require-hashes`, so only the exact locked packages install.
-- Layer order (OS → Python deps → PowerShell → app code) keeps rebuilds fast; patching a Python package doesn't re-download PowerShell.
+- Build stages (OS → PowerShell and PowerCLI → Python deps → app code) keep rebuilds fast: a code change or a patched Python package reuses the cached PowerShell stage. Fill `vendor/pwsh/` with `Save-PwshVendor.ps1` to make a full `--no-cache` build quick too.
 - PowerShell is pinned with `PWSH_VERSION`, PowerCLI optionally with `POWERCLI_VERSION`.
 - A single module is patched by dropping its folder into `/modules` (see above).
 - SQLite data lives on the `/app/data` volume and survives image upgrades.
@@ -1657,7 +1660,8 @@ modules/                built-in modules (one folder each)
   logs/                 syslog server: syslog_service.py (listener, retention, alerts), logstore.py (database, search, parser),
                         notify.py (email, webhook), web.py (search, alerts and settings routes, REST API), templates/, static/
 config/                 config.example.yaml
-scripts/                smoke_test.py, New-OfflineBundle.ps1, send_test_syslog.py (test syslog messages)
+scripts/                smoke_test.py, New-OfflineBundle.ps1, send_test_syslog.py (test syslog messages), Save-PwshVendor.ps1 (local PowerShell + PowerCLI copy)
+vendor/pwsh/            optional local PowerShell tarball and PowerCLI modules for the core-pwsh build (git-ignored except its README)
 docs/screenshots/       screenshots used in this README
 ask/                    vCommunity Ask (second container)
   app/main.py           routes: chat, sources, settings, document view, REST API
@@ -1688,7 +1692,7 @@ ask/                    vCommunity Ask (second container)
   scripts/make_sample_rvtools.py  made-up RVTools-style workbook, for tests
   Dockerfile            vcommunity-ask image (build from the repo root)
   requirements.in/.txt  direct dependencies / hashed lock file
-Dockerfile              core and core-pwsh image targets
+Dockerfile              base, pwsh (cached PowerShell + PowerCLI), core and core-pwsh stages
 docker-compose.yml      vco (dashboards) and vco-ask (chat) services
 .dockerignore           keeps data, .env and docs out of both images
 requirements.in/.txt    direct dependencies / hashed lock file
@@ -1709,6 +1713,8 @@ requirements.in/.txt    direct dependencies / hashed lock file
 
 | Date | Change |
 | --- | --- |
+| 2026-11-13 | Faster `core-pwsh` rebuilds. The Dockerfile installs PowerShell and PowerCLI in their own `pwsh` stage with no app code, and copies the app on top last, so a code change no longer reinstalls PowerCLI (rebuild about 2 s instead of minutes). Optional local copy: `scripts/Save-PwshVendor.ps1` saves the PowerShell tarball (SHA256-checked) and PowerCLI into git-ignored `vendor/pwsh/`, which the build uses instead of GitHub and the PowerShell Gallery |
+| 2026-11-13 | Ask shows the model each page's full URL. Source headers get `| url: …` and the whole-source catalog lines end with the post's URL, plus a note to copy links exactly and never invent them. Before this the URL and path were saved by every web-site sync but never sent to the model, so prompts asking for links got none. No re-index needed |
 | 2026-11-13 | SQLite performance. **Ask:** one connection per thread (sqlite-vec loaded once, 64 MB page cache `ASK_SQLITE_CACHE_MB`, optional `ASK_SQLITE_MMAP_MB`), the vector size is remembered, and `synchronous=NORMAL`. `chunks_vec` has a `source` partition key, so per-source searches scan only that source (one source about 250 ms → 4 ms, All sources with balancing about 2.1 s → 0.22 s on a 28k-chunk index, same results). An older index is migrated on first start by copying the vectors, with no re-embedding. Syncs save 25 documents per transaction with `executemany`, and the spreadsheet part file is built with `synchronous=OFF`. **Dashboards:** module databases and `_core.db` use WAL with `synchronous=NORMAL` and a 15 s busy timeout, so dashboards read the last snapshot while a collector writes. Tables can declare `indexes:` in `module.yaml` (added for used_pct, free_pct, powerstate, datastore history and impact). **Logs:** PASSIVE checkpoints during housekeeping, TRUNCATE only on the size-cap pass, plus an index on `app`. The SQLite library itself is unchanged. New `ask/tests/test_db.py` |
 | 2026-11-13 | Answer quality test compares chat models. **Answer with** runs the test on any installed chat model without changing the saved Chat model, and **Judge with** picks one fixed judging model (both remembered in the browser; `model` / `judge_model` in `POST /api/eval/runs`). The run page has **Compare with** to pick any other run (`?vs=`), shows the other run's time, score and answer per question, and warns when the judges differ. The Settings card's runs table shows model, judge, seconds, tokens/s and judge score |
 | 2026-11-13 | Ask **Answer quality test**: a **Run test** button on the Settings page replays the most recent saved questions (from knowledge sources) with the current code and settings. A test page compares each with its saved answer (seconds, first words, tokens/s, prompt tokens, retrieval ms, documents used, "not found" answers) and, optionally, has the chat model judge which answer is better (random order, 1–5 scores). It also compares with the previous run and highlights changed settings. Nothing is added to chats. New `ask/app/evalrun.py`, `templates/eval.html`, `POST/GET /api/eval/runs`, tables `eval_runs`/`eval_items`, `ask/tests/test_eval.py`. Answers now save `retrieval_ms`. The fake Ollama answers the judge prompt |

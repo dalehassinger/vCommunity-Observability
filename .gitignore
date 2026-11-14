@@ -15,3 +15,6 @@ ask/config/ask.yaml
 *.db-wal
 *.db-shm
 control/
+# Local PowerShell + PowerCLI copy for faster / offline builds (scripts/Save-PwshVendor.ps1)
+vendor/pwsh/*
+!vendor/pwsh/README.md

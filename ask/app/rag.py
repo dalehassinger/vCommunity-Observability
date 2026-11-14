@@ -308,6 +308,11 @@ def _snippet(text: str, limit: int = 280) -> str:
     return s[:limit] + ("…" if len(s) > limit else "")
 
 
+URL_NOTE = ("Each source header and catalog line shows the page's full url. When the question asks for "
+            "links or URLs, copy them exactly as shown (full address, starting with http). Never shorten, "
+            "guess or make up a url; if a page has none, say so.")
+
+
 def build_messages(cfg: dict[str, Any], items: list[dict[str, Any]], question: str,
                    history: list[dict[str, Any]], lead: list[str] | None = None,
                    note: str = "") -> list[dict[str, str]]:
@@ -322,10 +327,14 @@ def build_messages(cfg: dict[str, Any], items: list[dict[str, Any]], question: s
             head += f" | status: {it['status']}"
         if (it.get("meta") or {}).get("published"):
             head += f" | published: {it['meta']['published']}"
+        if it.get("url"):
+            head += f" | url: {it['url']}"
         if it["kind"] == "linked":
             head += f" | linked ({it['via']}) from {it['from_doc']}"
         blocks.append(f"{head}\n{it['text']}")
     context = "\n\n---\n\n".join(blocks) if blocks else "(no sources found)"
+    if any(it.get("url") for it in items) or any(" | http" in b for b in lead or []):
+        note = (note + "\n\n" if note else "") + URL_NOTE
     msgs = [{"role": "system", "content": cfg["system_prompt"]}]
     turns = max(0, int(cfg["history_turns"]))
     if turns:
