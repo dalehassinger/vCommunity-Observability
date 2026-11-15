@@ -1,0 +1,53 @@
+{# The Sources rows (grouped chips), shared by the chat and Scheduled prompts.
+   Needs: sources, sel (picked values), mcp_servers, web_search, brave_search. #}
+{% set enabled = sources | selectattr('enabled') | list %}
+{% set groups = [('web-site', 'Blogs and web sites'), ('markdown-repo', 'Markdown repositories'), ('pdf', 'PDF documents'), ('openapi', 'API specs'), ('x-posts', 'X posts'), ('spreadsheet', 'Spreadsheets')] %}
+{% set web_on = (web_search and web_search.available) or (brave_search and brave_search.available) %}
+        {% for plugin, label in groups %}
+        {% set items = enabled | selectattr('plugin', 'equalto', plugin) | list %}
+        {% if items %}
+        <div class="scope-row">
+          <span class="scope-gname">{{ label }}</span>
+          <span class="scope-chips">
+            {% for s in items %}
+            <label class="scope-chip"><input type="checkbox" value="{{ s.name }}" data-plugin="{{ s.plugin }}" {{ 'checked' if s.name in sel else '' }}><span>{{ s.title }}</span></label>
+            {% endfor %}
+            {% if items | length > 1 %}<button type="button" class="link-btn scope-only" data-scope-only="{{ plugin }}" title="Pick every source in this group and nothing else">only these</button>{% endif %}
+          </span>
+        </div>
+        {% endif %}
+        {% endfor %}
+        {% set others = enabled | rejectattr('plugin', 'in', ['web-site', 'markdown-repo', 'pdf', 'openapi', 'x-posts', 'spreadsheet']) | list %}
+        {% if others %}
+        <div class="scope-row">
+          <span class="scope-gname">Other sources</span>
+          <span class="scope-chips">
+            {% for s in others %}
+            <label class="scope-chip"><input type="checkbox" value="{{ s.name }}" data-plugin="{{ s.plugin }}" {{ 'checked' if s.name in sel else '' }}><span>{{ s.title }}</span></label>
+            {% endfor %}
+          </span>
+        </div>
+        {% endif %}
+        {% if web_on %}
+        <div class="scope-row">
+          <span class="scope-gname">Web</span>
+          <span class="scope-chips">
+            {% if web_search and web_search.available %}
+            <label class="scope-chip" title="The model may search the web (Ollama web search) when the sources don't answer"><input type="checkbox" value="web:ollama" data-plugin="web" {{ 'checked' if 'web:ollama' in sel else '' }}><span>Web search (Ollama)</span></label>
+            {% endif %}
+            {% if brave_search and brave_search.available %}
+            <label class="scope-chip" title="The model may search the web (Brave Search) when the sources don't answer"><input type="checkbox" value="web:brave" data-plugin="web" {{ 'checked' if 'web:brave' in sel else '' }}><span>Web search (Brave)</span></label>
+            {% endif %}
+          </span>
+        </div>
+        {% endif %}
+        {% if mcp_servers %}
+        <div class="scope-row">
+          <span class="scope-gname">Tools (MCP) <a class="link-btn" href="/tools">manage</a></span>
+          <span class="scope-chips">
+            {% for m in mcp_servers %}
+            <label class="scope-chip" title="{{ m.tools | length }} tools{{ ' (starting)' if m.starting else '' }}{{ ': ' ~ m.error if m.error else '' }}"><input type="checkbox" value="mcp:{{ m.name }}" data-plugin="mcp" {{ 'checked' if ('mcp:' ~ m.name) in sel else '' }}><span>{{ m.name }}</span></label>
+            {% endfor %}
+          </span>
+        </div>
+        {% endif %}

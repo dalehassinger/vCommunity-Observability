@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}Scheduled prompts · vCommunity Ask{% endblock %}
+{% block body %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb">Knowledge</div>
+    <h1>Scheduled prompts</h1>
+    <p class="subtle">A prompt Ask answers on a schedule and emails to you. Each run is answered exactly like a chat and saved as a chat
+      (<i>Scheduled: name · date</i>), so you can open it and ask follow-up questions. The email holds the answer, its sources with their
+      URLs, an <b>Open in Ask</b> link and the HTML report when the answer made one. Email goes through the mail server set up in
+      vCommunity Observability (<b>Log alerts → Notifications</b>).</p>
+  </div>
+  {% if not show_form %}<a class="btn btn-primary" href="/schedules?new=1">New scheduled prompt</a>{% endif %}
+</div>
+{% include "_token.html" %}
+{% if ask_paused %}<div class="alert alert-danger">Ask is paused (Settings, Apps on / off), so scheduled prompts don't run.</div>{% endif %}
+{% if not mail_token %}<div class="alert alert-danger">No dashboards API token found: set <code>VCO_API_TOKEN_MPBUILDER</code> (or <code>ASK_VCO_TOKEN</code>) in <code>.env</code>
+  and restart vco-ask. Ask needs it to send email through vCommunity Observability.</div>{% endif %}
+
+{% if show_form %}
+{% set c = current or {} %}
+{% set sel = c.scope.split(',') if c.scope and c.scope != 'all' else [] %}
+<form class="card sched-form" id="sched-form" novalidate>
+  <div class="card-header">{{ 'Edit: ' ~ c.name if current else 'New scheduled prompt' }}</div>
+  <div class="card-block">
+    <input type="hidden" name="id" value="{{ c.id or '' }}">
+    <div class="field"><label for="f-name">Name</label>
+      <div><input type="text" id="f-name" name="name" value="{{ c.name or '' }}" maxlength="120" placeholder="Weekly blog summary" required>
+        <div class="hint">Also the email subject: <code>[Ask] name: date</code>.</div><div class="field-err" data-err="name"></div></div></div>
+    <div class="field"><label>Sources</label>
+      <div>
+        <div class="scope-panel sched-scope" id="f-scope" role="group" aria-label="Sources to search">
+          <div class="scope-head">
+            <span class="scope-summary" id="f-scope-label" aria-live="polite">All sources (not spreadsheets)</span>
+            <span class="scope-quick">
+              <button type="button" class="scope-chip-btn" data-scope-all aria-pressed="false">All sources</button>
+              <label class="scope-chip" title="No search: the model answers from the prompt alone"><input type="checkbox" value="none" data-plugin="none" {{ 'checked' if 'none' in sel else '' }}><span>No sources (just the model)</span></label>
+            </span>
+          </div>
+          <div class="scope-groups">{% include '_scope_rows.html' %}</div>
+        </div>
+        <div class="hint">The same pick as the chat. Nothing picked searches every source except spreadsheets.</div></div></div>
+    <div class="field"><label for="f-prompt">Prompt</label>
+      <div><textarea id="f-prompt" name="prompt" rows="5" placeholder="Summarize the posts published in the last 7 days. List each with its date and full URL.">{{ c.prompt or '' }}</textarea>
+        <div class="hint">Written exactly as you would type it in the chat. Words like <i>report</i> or <i>dashboard</i> make an HTML report (with a spreadsheet source).</div>
+        <div class="field-err" data-err="prompt"></div></div></div>
+    <div class="field"><label for="f-model">Model</label>
+      <div><select id="f-model" name="model" data-current="{{ c.model or '' }}"><option value="">The chat model in Settings ({{ settings.chat_model }})</option></select>
+        <div class="hint">Web search and MCP tools need a model that can call tools.</div></div></div>
+    <div class="field"><label for="f-frequency">Schedule</label>
+      <div class="sched-when">
+        <select id="f-frequency" name="frequency">{% for k, label in frequencies.items() %}<option value="{{ k }}" {{ 'selected' if (c.frequency or 'daily') == k else '' }}>{{ label }}</option>{% endfor %}</select>
+        <span data-show="weekly"><select name="weekday" aria-label="Day of the week">{% for k, label in weekdays %}<option value="{{ k }}" {{ 'selected' if (c.weekday or 'mon') == k else '' }}>{{ label }}</option>{% endfor %}</select></span>
+        <span data-show="monthly">day <select name="monthday" aria-label="Day of the month">{% for d in range(1, 29) %}<option value="{{ d }}" {{ 'selected' if (c.monthday or '1') == d|string else '' }}>{{ d }}</option>{% endfor %}<option value="last" {{ 'selected' if c.monthday == 'last' else '' }}>last</option></select></span>
+        <span data-show="hours">every <input type="number" name="every_hours" min="1" max="168" value="{{ c.every_hours or 6 }}" style="width:70px" aria-label="Hours"> hours from</span>
+        <span>at <input type="time" name="at_time" value="{{ c.at_time or '07:00' }}" aria-label="Time"></span>
+        <input type="text" name="timezone" value="{{ c.timezone or default_tz }}" list="tz-list" style="width:190px" aria-label="Time zone">
+        <datalist id="tz-list"><option value="America/New_York"><option value="America/Chicago"><option value="America/Denver"><option value="America/Los_Angeles"><option value="UTC"><option value="Europe/London"><option value="Europe/Berlin"><option value="Asia/Tokyo"><option value="Australia/Sydney"></datalist>
+        <div class="field-err" data-err="at_time"></div><div class="field-err" data-err="timezone"></div><div class="field-err" data-err="monthday"></div><div class="field-err" data-err="every_hours"></div></div></div>
+    <div class="field"><label for="f-recipients">Email to</label>
+      <div><span class="inline-row"><input type="text" id="f-recipients" name="recipients" value="{{ c.recipients or '' }}" placeholder="you@example.com, team@example.com">
+          <button class="btn btn-outline" type="button" id="f-test-email">Send a test email</button></span>
+        <div class="hint">One or more addresses, separated by commas.</div><div class="field-err" data-err="recipients"></div>
+        <div class="sched-msg" id="f-test-msg" aria-live="polite"></div></div></div>
+    <div class="field"><label>Options</label>
+      <div class="sched-opts">
+        <label class="switch"><input type="checkbox" role="switch" name="sync_first" {{ 'checked' if c.sync_first else '' }}><span></span>Sync the picked sources first</label>
+        <div class="hint sched-opt-hint">Runs <b>Sync now</b> on each picked knowledge source and waits for it (up to 30 minutes) before asking, so new posts or files are included.
+          Only new and changed pages are fetched. Not needed for MCP tools or web search, which are always live.</div>
+        <label class="switch"><input type="checkbox" role="switch" name="attach_report" {{ 'checked' if c.attach_report is not defined or c.attach_report else '' }}><span></span>Attach the HTML report when the answer makes one</label>
+        <label class="switch"><input type="checkbox" role="switch" name="include_prompt" {{ 'checked' if c.include_prompt is not defined or c.include_prompt else '' }}><span></span>Show the prompt in the email</label>
+        <label class="switch"><input type="checkbox" role="switch" name="include_sources" {{ 'checked' if c.include_sources is not defined or c.include_sources else '' }}><span></span>List the sources in the email</label>
+        <label class="switch"><input type="checkbox" role="switch" name="avoid_repeats" {{ 'checked' if c.avoid_repeats else '' }}><span></span>Don't repeat recent answers</label>
+        <div class="hint sched-opt-hint">Sends the answers of the last 30 runs along with the prompt and tells the model not to repeat them. Good for a daily quote, tip or idea. Leave it off for reports and status checks.</div>
+        <label class="switch"><input type="checkbox" role="switch" name="only_changed" {{ 'checked' if c.only_changed else '' }}><span></span>Email only when the answer changed since the last run</label>
+        <label class="switch"><input type="checkbox" role="switch" name="enabled" {{ 'checked' if c.enabled is not defined or c.enabled else '' }}><span></span>On (runs on its schedule)</label>
+      </div></div>
+    <div class="sched-actions">
+      <button class="btn btn-primary" type="submit">Save</button>
+      <a class="btn btn-outline" href="/schedules">Cancel</a>
+      <span class="sched-msg" id="f-msg" aria-live="polite"></span>
+    </div>
+  </div>
+</form>
+{% endif %}
+
+<div class="card" id="sched-list">
+  {% if items %}
+  <div class="table-wrap"><table class="datagrid sched-table">
+    <thead><tr><th>Scheduled prompt</th><th>When</th><th>Last run</th><th>Email to</th><th>On</th><th></th></tr></thead>
+    <tbody>
+    {% for s in items %}
+      <tr data-id="{{ s.id }}">
+        <td><b>{{ s.name }}</b>
+          <div class="subtle sched-prompt">“{{ s.prompt | truncate(140) }}”</div>
+          <div class="subtle sched-meta">Sources: {{ 'all' if s.scope == 'all' else s.scope.replace(',', ', ') }}{% if s.model %} · model {{ s.model }}{% endif %}</div></td>
+        <td>{{ s.when }}{% if s.next %}<div class="subtle sched-meta">Next: {{ s.next }}</div>{% endif %}</td>
+        <td class="sched-last">
+          {% if s.running %}<span class="badge badge-info">running…</span>
+          {% elif s.last %}
+            {% set st = s.last.status %}
+            <span class="label {{ 'label-ok' if st == 'ok' else ('label-warn' if st in ('unchanged', 'email_failed') else ('label-crit' if st == 'error' else '')) }}">{{ {'ok': 'sent', 'unchanged': 'no change', 'email_failed': 'email failed', 'error': 'failed'}.get(st, st) }}</span>
+            <div class="subtle sched-meta">{{ s.last.started | ago }}{% if s.last.seconds %} · {{ s.last.seconds | round | int }} s{% endif %}
+              {% if s.last.chat_id %} · <a href="/chat/{{ s.last.chat_id }}">answer</a>{% endif %}</div>
+            {% if s.last.error %}<div class="sched-err">{{ s.last.error | truncate(160) }}</div>
+            {% elif st != 'ok' and s.last.email %}<div class="sched-err">{{ s.last.email | truncate(160) }}</div>{% endif %}
+          {% else %}<span class="subtle">never</span>{% endif %}
+        </td>
+        <td class="sched-meta">{{ s.recipients }}</td>
+        <td><label class="switch"><input type="checkbox" role="switch" data-enable="{{ s.id }}" aria-label="Run {{ s.name }} on its schedule" {{ 'checked' if s.enabled else '' }}><span></span></label></td>
+        <td class="sched-acts">
+          <button class="link-btn" type="button" data-run="{{ s.id }}" {{ 'disabled' if s.running else '' }}>Run now</button> ·
+          <a class="link-btn" href="/schedules?edit={{ s.id }}">Edit</a> ·
+          <button class="link-btn" type="button" data-history="{{ s.id }}" aria-expanded="false">History</button> ·
+          <button class="link-btn" type="button" data-del="{{ s.id }}" data-name="{{ s.name }}">Delete</button>
+        </td>
+      </tr>
+      <tr class="sched-history" id="hist-{{ s.id }}" hidden><td colspan="6"></td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% elif not show_form %}
+  <div class="card-block"><p class="subtle">No scheduled prompts yet. <a href="/schedules?new=1">Create the first one</a>, for example a weekly summary of new blog posts
+    sent every Monday at 07:00.</p></div>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/admin.js?v={{ asset_v }}"></script>
+<script src="/static/schedules.js?v={{ asset_v }}"></script>
+{% endblock %}

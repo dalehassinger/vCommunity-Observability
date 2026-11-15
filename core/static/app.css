@@ -54,10 +54,20 @@ h3 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacin
 .brand-name { font-size: 17px; font-weight: 300; letter-spacing: .01em; }
 .brand-name b { font-weight: 600; }
 .brand-by { margin-left: 18px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px;
-  font-weight: 600; color: #f08c00; white-space: nowrap; margin-top: 3px; }
+  font-weight: 600; color: #f08c00; white-space: nowrap; margin-top: 3px; text-decoration: none; }
+/* Links to the author's blog, but looks like the plain byline (no blue, no underline). */
+a.brand-by:hover, a.brand-by:focus-visible { color: #ffb347; text-decoration: none; }
 .header-spacer { flex: 1; }
 .header-chip { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
   padding: 3px 10px; border-radius: 999px; background: rgba(239, 176, 0, .2); color: #ffd36b; }
+/* App switcher (top right): the current app is highlighted, the other one is a link. */
+.app-switch { display: inline-flex; align-items: center; padding: 2px; margin-right: 6px; border-radius: 6px;
+  background: rgba(255, 255, 255, .08); border: 1px solid rgba(255, 255, 255, .14); }
+.app-switch-item { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 4px;
+  font-size: 13px; font-weight: 500; color: var(--header-fg); opacity: .75; text-decoration: none; white-space: nowrap; }
+a.app-switch-item:hover { opacity: 1; background: rgba(255, 255, 255, .1); }
+.app-switch-item.active { opacity: 1; background: rgba(73, 175, 217, .28); box-shadow: inset 0 -2px 0 #49afd9; font-weight: 600; }
+@media (max-width: 600px) { .app-switch-label, .header-chip { display: none; } .app-switch-item { padding: 0 9px; } }
 .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px;
   background: transparent; border: 0; border-radius: 6px; color: var(--header-fg); cursor: pointer; opacity: .85; }
 .icon-btn:hover { background: rgba(255, 255, 255, .1); opacity: 1; }
@@ -109,6 +119,7 @@ a.btn:hover { text-decoration: none; }
 .status-red i, .status-disconnected i, .status-notresponding i { background: var(--crit); }
 .alert { padding: 10px 14px; border-radius: 3px; margin-bottom: 12px; font-size: 13px; border-left: 4px solid; }
 .alert-danger { background: var(--crit-bg); border-color: var(--crit); }
+.alert-success { background: var(--ok-bg); border-color: var(--ok); }
 .text-danger { color: var(--crit); }
 
 /* Cards and grid */
@@ -178,10 +189,25 @@ a.btn:hover { text-decoration: none; }
   .sidenav { position: fixed; left: 0; top: 56px; z-index: 15; transform: translateX(-100%); box-shadow: 2px 0 8px rgba(0,0,0,.2);
     @media (prefers-reduced-motion: no-preference) { transition: transform .2s; } }
   body.nav-open .sidenav { transform: none; }
+  /* Dimmed page behind the open drawer; a click on it closes the drawer (drawer.js). */
+  body.nav-open .nav-backdrop { display: block; position: fixed; inset: 56px 0 0 0; z-index: 14; background: rgba(0,0,0,.35); }
   .content { padding: 16px; }
   .brand-name { font-size: 15px; }
   .brand-by { display: none; }
 }
+
+.nav-backdrop { display: none; }
+
+/* Keyboard focus: a clear ring on buttons and links (not shown for mouse clicks). */
+.btn:focus-visible, .icon-btn:focus-visible, .link-btn:focus-visible, a:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--primary); outline-offset: 2px; }
+.nav-link:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+
+/* Modules page: one API token field for every button */
+.modules-token { display: flex; gap: 10px; align-items: center; margin: 0 0 16px; flex-wrap: wrap; }
+.modules-token label { font-size: 12px; font-weight: 600; color: var(--subtle); }
+.modules-token input { flex: 1; min-width: 220px; max-width: 520px; padding: 6px 8px; border: 1px solid var(--border);
+  border-radius: 3px; background: var(--surface); color: inherit; font: inherit; }
 
 /* Module on/off switch */
 .module-actions { display: flex; align-items: center; gap: 12px; }

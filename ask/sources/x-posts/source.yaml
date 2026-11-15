@@ -1,0 +1,57 @@
+# Knowledge source plug-in: recent posts (tweets) of a list of X accounts.
+#
+# Same contract as markdown-repo (see sources/markdown-repo/source.yaml): the core
+# passes options in ASK_SOURCE_OPTIONS, a work folder in ASK_SOURCE_WORKDIR and
+# the last state in ASK_SOURCE_STATE; the script prints one JSON object.
+#
+# Uses the X API v2 "recent search" (GET /2/tweets/search/recent, the last 7 days)
+# with an app Bearer token. The token is never stored here: `token_env` holds the
+# NAME of the environment variable (in .env) that has it, X_BEARER_TOKEN by default.
+# All accounts go into as few queries as possible ("(from:a OR from:b) -is:retweet"),
+# and each later sync asks only for posts newer than the newest one it has (since_id),
+# so a sync usually costs one request. Posts are kept in the work folder for `keep_days`,
+# one document each, linked to https://x.com/<account>/status/<id>.
+name: x-posts
+title: X posts (accounts)
+description: New posts from a list of X (Twitter) accounts, through the X API with your Bearer token. One document per post, with its date, text, likes and reposts and a link to it.
+version: 0.1.0
+runtime: python
+entry: fetch_x.py
+timeout_seconds: 300
+options:
+  - key: accounts
+    label: Accounts
+    type: list
+    default: []
+    hint: "One X account per line, with or without @, e.g. bpatvmware"
+  - key: retweets
+    label: Reposts (retweets)
+    type: select
+    choices: [skip, include]
+    default: skip
+  - key: replies
+    label: Replies
+    type: select
+    choices: [skip, include]
+    default: skip
+    hint: "skip = only the accounts' own posts. include = also their replies to others."
+  - key: keep_days
+    label: Keep posts for (days)
+    type: number
+    min: 1
+    default: 30
+    hint: "Older posts are dropped from the index. X only returns the last 7 days, so the rest come from earlier syncs."
+  - key: max_per_sync
+    label: Max posts read per sync
+    type: number
+    min: 10
+    default: 100
+    hint: "X bills or caps the posts your app reads each month; this caps one sync."
+  - key: token_env
+    label: Token env var
+    default: X_BEARER_TOKEN
+    hint: "NAME of the environment variable in .env that holds your X API Bearer token (never the token itself). Restart vco-ask after editing .env."
+  - key: api_url
+    label: API address
+    default: https://api.x.com
+    hint: "Leave as is. Only for tests with a stand-in API."

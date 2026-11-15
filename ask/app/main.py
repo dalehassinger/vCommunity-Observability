@@ -35,6 +35,7 @@ from . import control, mcp, rag, syslog_out, websearch, webusage
 from .reports import Reports
 from .perf import SAMPLE_SECONDS, Sampler
 from .evalrun import MAX_PROMPTS, EvalRunner
+from . import schedules as sched
 
 HERE = Path(__file__).resolve().parent
 def asset_version(*folders: Path) -> str:
@@ -164,9 +165,37 @@ def create_app() -> FastAPI:
             if not s["enabled"] or indexer.is_running(s["name"]):
                 continue
             last = s.get("last_end") or 0
+            if s["status"] == "never":
+                indexer.start(s["name"])            # first sync of a new source, whatever its schedule
+            elif s["sync_schedule"].get("frequency"):
+                continue                            # set day and time: its own job (refresh_sync_jobs)
             # 0 hours = never re-sync on a schedule (only the first sync and "Sync now").
-            if s["status"] == "never" or (s["interval_hours"] > 0 and now - last > s["interval_hours"] * 3600):
+            elif s["interval_hours"] > 0 and now - last > s["interval_hours"] * 3600:
                 indexer.start(s["name"])
+
+    def scheduled_sync(name: str) -> None:
+        if not control.is_on("ask"):
+            return
+        s = db.get_source(name)
+        if s and s["enabled"] and not indexer.is_running(name):
+            log.info("scheduled sync of %s (%s)", name, sched.sync_when(s))
+            indexer.start(name)
+
+    def refresh_sync_jobs() -> None:
+        """One scheduler job per enabled source that re-syncs at a set day and time."""
+        for job in scheduler.get_jobs():
+            if job.id.startswith("source-sync-"):
+                job.remove()
+        for s in db.list_sources():
+            sch = s["sync_schedule"]
+            if not (s["enabled"] and sch.get("frequency")):
+                continue
+            try:
+                scheduler.add_job(scheduled_sync, sched.trigger({**sch, "every_hours": 6}), args=[s["name"]],
+                                  id=f"source-sync-{s['name']}", replace_existing=True, max_instances=1,
+                                  coalesce=True, misfire_grace_time=3600)
+            except Exception:  # noqa: BLE001 - a broken schedule must not stop the others
+                log.exception("source %s: bad sync schedule %s", s["name"], sch)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -177,6 +206,9 @@ def create_app() -> FastAPI:
         # Performance page: one sample of the container, Ollama and the host agent every 10 s.
         scheduler.add_job(sampler.sample, "interval", seconds=SAMPLE_SECONDS, id="perf-sample",
                           max_instances=1, coalesce=True, next_run_time=datetime.now(timezone.utc) + timedelta(seconds=2))
+        # Scheduled prompts: one job per enabled schedule. Sources with a set sync time: one job each.
+        schedules.register_all()
+        refresh_sync_jobs()
         scheduler.start()
         yield
         scheduler.shutdown(wait=False)
@@ -187,6 +219,7 @@ def create_app() -> FastAPI:
     app.mount("/shared", StaticFiles(directory=shared_dir()), name="shared")
     templates = Jinja2Templates(directory=HERE / "templates")
     templates.env.globals["asset_v"] = asset_version(HERE / "static", shared_dir())
+    templates.env.globals["sync_when"] = sched.sync_when
     reports = Reports(cfg.data_dir / "reports", templates.env, shared_dir(), HERE / "static")
     rag.REPORTS = reports
     usage = webusage.Usage(db)
@@ -258,6 +291,8 @@ def create_app() -> FastAPI:
 
     # Answer quality test: replays saved prompts with the current settings (Settings page button).
     evaluator = EvalRunner(db, settings, scope_list)
+    # Scheduled prompts: answered on a schedule and emailed (Scheduled prompts page).
+    schedules = sched.Schedules(db, settings, split_scope, indexer, reports, scheduler)
 
     # -- pages ----------------------------------------------------------------
     @app.get("/", include_in_schema=False)
@@ -295,7 +330,8 @@ def create_app() -> FastAPI:
                 s["tables"] = [{"table": t["table"], "sheet": t["sheet"], "rows": t["rows"]} for t in st.get("tables") or []]
         pl = plugins()
         return page(request, "sources.html", "/sources", plugins=pl, stats=db.stats(), sources=srcs,
-                    plugins_json={n: p.options for n, p in pl.items()})
+                    plugins_json={n: p.options for n, p in pl.items()}, weekdays=sched.WEEKDAYS,
+                    sync_frequencies=sched.SYNC_FREQUENCIES, default_tz=sched.DEFAULT_TZ)
 
     @app.get("/sources/{name}", response_class=HTMLResponse, include_in_schema=False)
     def source_docs(request: Request, name: str):
@@ -719,10 +755,17 @@ def create_app() -> FastAPI:
         if isinstance(examples, str):
             examples = [x.strip() for x in examples.splitlines() if x.strip()]
         is_new = db.get_source(name) is None
+        sync_schedule = None                 # not in the body (older pages, API): keep the saved one
+        if "sync_schedule" in body:
+            sync_schedule, errs = sched.clean_sync_schedule(body.get("sync_schedule"))
+            if errs:
+                raise HTTPException(400, "Re-sync: " + " ".join(errs.values()))
         db.upsert_source({"name": name, "plugin": plugin.name, "title": body.get("title") or name,
                           "enabled": bool(body.get("enabled", True)),
                           "interval_hours": interval_hours(body.get("interval_hours")),
-                          "options": options, "examples": examples[:6], "origin": "ui"})
+                          "options": options, "examples": examples[:6], "origin": "ui",
+                          "sync_schedule": sync_schedule})
+        refresh_sync_jobs()
         if body.get("sync_now", is_new):
             indexer.start(name, full=True)
         return {"ok": True, "name": name}
@@ -765,6 +808,7 @@ def create_app() -> FastAPI:
     @app.post("/ui/sources/{name}/enabled", include_in_schema=False, dependencies=[Depends(require_admin)])
     def ui_source_enabled(name: str, body: dict = Body(...)):
         db.set_source_enabled(name, bool(body.get("enabled")))
+        refresh_sync_jobs()
         return {"ok": True}
 
     @app.put("/ui/sources/{name}/files/{filename}", include_in_schema=False, dependencies=[Depends(require_admin)])
@@ -827,9 +871,120 @@ def create_app() -> FastAPI:
             raise HTTPException(409, "A sync is running; try again when it finishes")
         db.delete_source(name)
         indexer.remove_workdir(name)
+        refresh_sync_jobs()
         return {"ok": True}
 
     # -- REST API -------------------------------------------------------------
+    # -- scheduled prompts ------------------------------------------------------
+    def schedule_or_404(sid: int) -> dict[str, Any]:
+        s = schedules.get(sid)
+        if not s:
+            raise HTTPException(404, "No such scheduled prompt")
+        return s
+
+    def save_schedule(body: dict, sid: int | None = None):
+        try:
+            return schedules.save(body, sid)
+        except ValueError as e:
+            return JSONResponse({"errors": json.loads(str(e))}, status_code=400)
+        except KeyError:
+            raise HTTPException(404, "No such scheduled prompt")
+
+    def run_schedule(sid: int) -> dict[str, Any]:
+        schedule_or_404(sid)
+        paused()
+        if not schedules.start(sid):
+            raise HTTPException(409, "It is already running.")
+        return {"ok": True, "started": True}
+
+    @app.get("/schedules", response_class=HTMLResponse, include_in_schema=False)
+    def schedules_page(request: Request, edit: int | None = None, new: bool = False):
+        s = settings()
+        current = schedules.get(edit) if edit else None
+        return page(request, "schedules.html", "/schedules", items=schedules.list(), current=current,
+                    show_form=bool(current) or new, frequencies=sched.FREQUENCIES, weekdays=sched.WEEKDAYS,
+                    default_tz=sched.DEFAULT_TZ, mcp_servers=mcp.quick_servers(s["agent_url"]),
+                    web_search=websearch.status(s), brave_search=websearch.brave_status(s),
+                    mail_token=bool(sched.Mailer.token()))
+
+    @app.get("/ui/schedules", include_in_schema=False)
+    def ui_schedules():
+        return {"items": schedules.list()}
+
+    @app.get("/ui/schedules/{sid}/runs", include_in_schema=False)
+    def ui_schedule_runs(sid: int):
+        schedule_or_404(sid)
+        return {"items": schedules.runs(sid)}
+
+    @app.post("/ui/schedules/save", include_in_schema=False, dependencies=[Depends(require_admin)])
+    def ui_schedule_save(body: dict = Body(...)):
+        sid = body.get("id")
+        return save_schedule(body, int(sid) if sid else None)
+
+    @app.post("/ui/schedules/{sid}/run", include_in_schema=False, dependencies=[Depends(require_admin)])
+    def ui_schedule_run(sid: int):
+        return run_schedule(sid)
+
+    @app.post("/ui/schedules/{sid}/enabled", include_in_schema=False, dependencies=[Depends(require_admin)])
+    def ui_schedule_enabled(sid: int, body: dict = Body(...)):
+        schedule_or_404(sid)
+        return schedules.set_enabled(sid, bool(body.get("on")))
+
+    @app.post("/ui/schedules/{sid}/delete", include_in_schema=False, dependencies=[Depends(require_admin)])
+    def ui_schedule_delete(sid: int):
+        schedule_or_404(sid)
+        return {"ok": schedules.delete(sid)}
+
+    @app.post("/ui/schedules/test-email", include_in_schema=False, dependencies=[Depends(require_admin)])
+    def ui_schedule_test_email(body: dict = Body(...)):
+        to = sched.recipients(body.get("recipients"))
+        bad = [a for a in to if not sched.EMAIL_RE.match(a)]
+        if not to or bad:
+            raise HTTPException(400, "Enter valid email addresses first." + (f" Not valid: {', '.join(bad)}" if bad else ""))
+        text = "This is a test from vCommunity Ask. Scheduled prompt emails go through this mail server."
+        try:
+            result = schedules.mailer.send(to, "[Ask] Test email", text, f"<p>{text}</p>")
+        except RuntimeError as e:
+            raise HTTPException(502, str(e))
+        return {"ok": True, "result": result}
+
+    TAG = ["scheduled prompts"]
+
+    @app.get("/api/schedules", tags=TAG, dependencies=[Depends(require_token)])
+    def api_schedules():
+        """Every scheduled prompt with its schedule, next run and last run."""
+        return {"items": schedules.list()}
+
+    @app.post("/api/schedules", tags=TAG, dependencies=[Depends(require_token)])
+    def api_schedule_create(body: dict = Body(..., examples=[{
+            "name": "Weekly blog summary", "prompt": "Summarize the posts published in the last 7 days, with their URLs.",
+            "scope": "vcrocs", "frequency": "weekly", "weekday": "mon", "at_time": "07:00",
+            "timezone": "America/New_York", "recipients": "you@example.com"}])):
+        """Create a scheduled prompt. scope: "all", source names (comma-separated or a list),
+        "web:ollama", "web:brave", "mcp:<server>" or "none". frequency: daily, weekdays, weekly
+        (weekday mon..sun), monthly (monthday 1-28 or last) or hours (every_hours). Optional: model,
+        sync_first, attach_report (default true), only_changed, enabled (default true)."""
+        return save_schedule(body)
+
+    @app.get("/api/schedules/{sid}", tags=TAG, dependencies=[Depends(require_token)])
+    def api_schedule(sid: int):
+        return {**schedule_or_404(sid), "runs": schedules.runs(sid)}
+
+    @app.put("/api/schedules/{sid}", tags=TAG, dependencies=[Depends(require_token)])
+    def api_schedule_update(sid: int, body: dict = Body(...)):
+        """Replace a scheduled prompt (same fields as create; fields left out take their defaults)."""
+        return save_schedule(body, sid)
+
+    @app.delete("/api/schedules/{sid}", tags=TAG, dependencies=[Depends(require_token)])
+    def api_schedule_delete(sid: int):
+        schedule_or_404(sid)
+        return {"ok": schedules.delete(sid)}
+
+    @app.post("/api/schedules/{sid}/run", tags=TAG, dependencies=[Depends(require_token)])
+    def api_schedule_run(sid: int):
+        """Run it now in the background and email the result (see GET /api/schedules/{id} for the run)."""
+        return run_schedule(sid)
+
     @app.get("/api/health", tags=["core"])
     def health():
         return {"status": "ok", "version": __version__, **db.stats()}
@@ -875,7 +1030,8 @@ def create_app() -> FastAPI:
     @app.get("/api/sources", tags=["sources"], dependencies=[Depends(require_token)])
     def api_sources():
         return [{**_source_view(s), "title": s["title"], "plugin": s["plugin"], "options": s["options"],
-                 "interval_hours": s["interval_hours"]} for s in db.list_sources()]
+                 "interval_hours": s["interval_hours"], "sync_schedule": s["sync_schedule"],
+                 "resync": sched.sync_when(s)} for s in db.list_sources()]
 
     @app.post("/api/sources/{name}/sync", tags=["sources"], dependencies=[Depends(require_token)])
     def api_source_sync(name: str, full: bool = False):

@@ -13,3 +13,5 @@ docs/*
 **/__pycache__/
 **/*.pyc
 .venv/
+# Local backups, bundles and copies (never part of an image)
+dist/

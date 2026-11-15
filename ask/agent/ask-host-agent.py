@@ -40,7 +40,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 MAC = sys.platform == "darwin"
 
 
@@ -53,6 +53,26 @@ def run(cmd: list, timeout: float = 8) -> str:
 
 def sysctl(name: str) -> str:
     return run(["sysctl", "-n", name], 3).strip()
+
+
+def lan_ip() -> str:
+    """This computer's current network address (the one its default route uses), so Ask can
+    put a link that works from other computers in its emails. A laptop's address changes with
+    the network, so it is read again for every sample. "" when there is no network."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sk:
+            sk.connect(("10.255.255.255", 1))     # UDP: picks the route, sends nothing
+            ip = sk.getsockname()[0]
+        if ip and not ip.startswith(("127.", "0.")):
+            return ip
+    except OSError:
+        pass
+    if MAC:
+        m = re.search(r"interface:\s*(\S+)", run(["route", "-n", "get", "default"], 3))
+        ip = run(["ipconfig", "getifaddr", m.group(1)], 3).strip() if m else ""
+        if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", ip):
+            return ip
+    return ""
 
 
 def num(s, kind=float):
@@ -209,7 +229,8 @@ class Collector:
 
     def collect(self) -> dict:
         t = time.time()
-        d: dict = {"agent": "ask-host-agent", "version": VERSION, "host": self.static, "errors": []}
+        d: dict = {"agent": "ask-host-agent", "version": VERSION, "host": self.static, "errors": [],
+                   "lan_ip": lan_ip()}
         try:
             d["load"] = [round(x, 2) for x in os.getloadavg()]
         except OSError:

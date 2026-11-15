@@ -108,6 +108,11 @@ class Core:
         # Extra numbers for the Performance dashboard, added by module web extensions
         # (ctx.add_perf): name -> function returning a dict.
         self.perf_extras: dict[str, Any] = {}
+        # One lock per collector: a manual "Run collectors now" and the scheduled run of the
+        # same collector never overlap (both would write the same tables).
+        self._run_locks: dict[tuple[str, str], threading.Lock] = {}
+        self._run_locks_guard = threading.Lock()
+        self.running: set[tuple[str, str]] = set()
         # Normalize vcenter to always expose instances[] (file may still be flat).
         if "vcenter" in cfg.connections:
             cfg.connections["vcenter"] = mirror_primary(normalize_vcenter(cfg.connections["vcenter"]))
@@ -181,7 +186,25 @@ class Core:
     def _scheduled_run(self, mod: Module, c) -> None:
         # Settings → Apps on / off: a paused Observability collects nothing.
         if mod.available and control.is_on("observability"):
-            run_collector(self.cfg, self.storage, mod, c)
+            self.run_one(mod, c)
+
+    def run_one(self, mod: Module, c) -> dict:
+        """Run one collector unless that collector is already running (then skip it)."""
+        key = (mod.name, c.name)
+        with self._run_locks_guard:
+            lock = self._run_locks.setdefault(key, threading.Lock())
+        if not lock.acquire(blocking=False):
+            log.info("%s/%s is already running; this run is skipped", mod.name, c.name)
+            return {"status": "running", "module": mod.name, "collector": c.name}
+        self.running.add(key)
+        try:
+            return run_collector(self.cfg, self.storage, mod, c)
+        finally:
+            self.running.discard(key)
+            lock.release()
+
+    def is_running(self, mod: Module) -> bool:
+        return any(m == mod.name for m, _ in self.running)
 
     def run_all(self) -> None:
         if not control.is_on("observability"):
@@ -194,7 +217,7 @@ class Core:
     def run_module(self, mod: Module) -> list[dict]:
         if not control.is_on("observability"):
             return []
-        return [run_collector(self.cfg, self.storage, mod, c) for c in mod.collectors]
+        return [self.run_one(mod, c) for c in mod.collectors]
 
     def set_connection(self, name: str, values: dict[str, str]) -> None:
         self.storage.set_connection_settings(name, values)
@@ -528,6 +551,10 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
 
     @app.get("/export/{module}/{name}", include_in_schema=False)
     def export_ui(module: str, name: str, request: Request):
+        # Download buttons on the dashboards: open to our own pages (like the dashboards
+        # themselves); anything else (scripts, other sites) needs the API token when tokens exist.
+        if core.cfg.api_tokens and not from_this_site(request) and not admin_ok(header_token(request)):
+            raise HTTPException(status_code=401, detail="Missing or invalid API token")
         return export_response(module, name, request)
 
     for mod in core.modules.values():
@@ -648,6 +675,46 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
     def admin_ok(token: str) -> bool:
         # The UI has no login yet, so changes need an API token when tokens exist.
         return not core.cfg.api_tokens or any(secrets.compare_digest(token or "", t) for t in core.cfg.api_tokens)
+
+    def from_this_site(request: Request) -> bool:
+        """True when the browser says the request comes from one of our own pages (or a typed
+        URL / bookmark). Uses Sec-Fetch-Site, then Origin, then Referer; a request without any
+        of them (curl, scripts) is not a UI request."""
+        from urllib.parse import urlparse
+        site = request.headers.get("sec-fetch-site")
+        if site:
+            return site in ("same-origin", "none")
+        host = request.headers.get("host")
+        for h in ("origin", "referer"):
+            v = request.headers.get(h)
+            if v:
+                return urlparse(v).netloc == host
+        return False
+
+    def refuse_cross_site(request: Request) -> None:
+        """UI changes: refuse a form another web site's page posts from the user's browser."""
+        from urllib.parse import urlparse
+        site = request.headers.get("sec-fetch-site")
+        origin = request.headers.get("origin")
+        if (site and site not in ("same-origin", "none")) or (origin and urlparse(origin).netloc != request.headers.get("host")):
+            raise HTTPException(status_code=403, detail="Cross-site request refused")
+
+    def header_token(request: Request) -> str:
+        token = request.headers.get("x-api-key", "")
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            token = auth[7:].strip()
+        return token
+
+    def modules_redirect(msg: str = "", ok: bool = True, anchor: str = "") -> RedirectResponse:
+        from urllib.parse import urlencode
+        q = ("?" + urlencode({"msg": msg, "ok": int(ok)})) if msg else ""
+        return RedirectResponse(f"/modules{q}{'#' + anchor if anchor else ''}", status_code=303)
+
+    async def modules_change_allowed(request: Request) -> bool:
+        refuse_cross_site(request)
+        form = await read_form(request)
+        return admin_ok(form.get("token", "") or header_token(request))
 
     def denied(where: str = "") -> RedirectResponse:
         return settings_redirect("Not saved: enter a valid API token (the one in .env) to change settings.",
@@ -1033,31 +1100,42 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
             "runs": core.storage.last_runs(), "mock": core.cfg.mock,
             "auth": bool(core.cfg.api_tokens), "active": "/modules",
             "services": {(x["module"], x["name"]): x for x in core.services.statuses()},
+            "running_mods": {m for m, _ in core.running}, "msg": request.query_params.get("msg"),
+            "ok": request.query_params.get("ok") != "0",
         })
 
+    NO_TOKEN = "Not changed: enter a valid API token (the one in .env) at the top of this page."
+
     @app.post("/modules/{module}/run", include_in_schema=False)
-    def run_now(module: str):
+    async def run_now(module: str, request: Request):
         mod = core.modules.get(module)
         if not mod or not mod.available:
             raise HTTPException(404, "Module not available")
+        if not await modules_change_allowed(request):
+            return modules_redirect(NO_TOKEN, False, mod.name)
         if not control.is_on("observability"):
             return settings_redirect("vCommunity Observability is paused, so nothing was collected. Turn it on here first.",
                                      False, "#apps")
-        core.run_module(mod)
-        return RedirectResponse("/modules", status_code=303)
+        # In the background: the page comes back at once and shows "running" until it ends.
+        threading.Thread(target=core.run_module, args=[mod], daemon=True).start()
+        return modules_redirect(f"{mod.name}: collectors started. This page refreshes until they finish.", True, mod.name)
 
     @app.post("/modules/{module}/move", include_in_schema=False)
-    def move(module: str, dir: str = "up"):
+    async def move(module: str, request: Request, dir: str = "up"):
         if module not in core.modules:
             raise HTTPException(404, "Unknown module")
+        if not await modules_change_allowed(request):
+            return modules_redirect(NO_TOKEN, False, module)
         core.move(module, -1 if dir == "up" else 1)
         return RedirectResponse(f"/modules#{module}", status_code=303)
 
     @app.post("/modules/{module}/toggle", include_in_schema=False)
-    def toggle(module: str):
+    async def toggle(module: str, request: Request):
         mod = core.modules.get(module)
         if not mod:
             raise HTTPException(404, "Unknown module")
+        if not await modules_change_allowed(request):
+            return modules_redirect(NO_TOKEN, False, mod.name)
         core.set_enabled(mod, not mod.enabled)
         return RedirectResponse(f"/modules#{mod.name}", status_code=303)
 

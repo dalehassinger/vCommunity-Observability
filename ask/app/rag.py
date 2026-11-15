@@ -312,6 +312,12 @@ URL_NOTE = ("Each source header and catalog line shows the page's full url. When
             "links or URLs, copy them exactly as shown (full address, starting with http). Never shorten, "
             "guess or make up a url; if a page has none, say so.")
 
+# Sent before the last tool turn (Settings, MCP tools: tool turns), when no more tools can be called.
+FINAL_ROUND_NOTE = ("You can't call any more tools. Write your final answer now, using only the tool results "
+                    "above. Answer the original question in full: show the data you got (tables are good). "
+                    "If something could not be found, say what is missing. Don't describe next steps or "
+                    "say what you would check.")
+
 
 def build_messages(cfg: dict[str, Any], items: list[dict[str, Any]], question: str,
                    history: list[dict[str, Any]], lead: list[str] | None = None,
@@ -590,6 +596,15 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
             # so it has to answer.
             calls: list[dict[str, Any]] = []
             said = ""
+            if rounds and rnd == rounds:
+                # Out of tool turns. Without this note models tend to write "Let me check ..."
+                # and stop, so the reader (or a scheduled prompt's email) gets no answer at all.
+                msgs.append({"role": "user", "content": FINAL_ROUND_NOTE})
+                stats["tool_rounds_used_up"] = rounds
+            if rnd and content and not content.endswith("\n\n"):
+                # Keep one turn's "I'll look at ..." apart from the next turn's text.
+                content += "\n\n"
+                yield sse("token", "\n\n")
             for obj in olla.chat_stream(model, msgs, options=options, think=cfg["think"], keep_alive=cfg["keep_alive"],
                                         tools=mcp_tools if rnd < rounds else None):
                 msg = obj.get("message") or {}
@@ -608,8 +623,8 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
                     stats = {**stats, "tokens": ev_sum, "tok_per_s": round(ev_sum / (ed_sum / 1e9), 1) if ed_sum else None,
                              "prompt_tokens": obj.get("prompt_eval_count"),
                              "seconds": round(time.time() - t0, 1)}
-            if not calls:
-                break
+            if not calls or rnd == rounds:
+                break   # (tool calls in the last turn, which had no tools, are ignored)
             msgs.append({"role": "assistant", "content": said, "tool_calls": calls})
             for c in calls:
                 card = {"kind": "tool", "n": len(cards) + 1, "status": "running"}
@@ -773,8 +788,11 @@ def run_web_tool(cfg: dict[str, Any], card: dict[str, Any], tool: str, args: dic
 
 def answer(db: DB, cfg: dict[str, Any], chat_id: str, question: str, sources: list[str] | None,
            tools: list[str] | None = None) -> dict[str, Any]:
-    """Non-streaming version for the REST API."""
+    """Non-streaming version for the REST API. With tools, `answer` is the model's last turn
+    (written after its tool calls) and `steps` what it said between tool calls ("I'll check
+    ..."); the saved chat keeps both."""
     text, cards, err, stats = "", [], None, {}
+    steps = ""
     for chunk in answer_stream(db, cfg, chat_id, question, sources, tools, interactive=False):
         if chunk.startswith(":"):
             continue
@@ -791,8 +809,16 @@ def answer(db: DB, cfg: dict[str, Any], chat_id: str, question: str, sources: li
             cards = cards + [payload["card"]]
         elif event.endswith("tool"):
             cards = [c for c in cards if c.get("n") != payload.get("n")] + [payload]
+            if text.strip():
+                steps, text = (steps + "\n\n" + text.strip()).strip(), ""
         elif event.endswith("done"):
             stats = payload["stats"]
         elif event.endswith("error"):
             err = payload["message"]
-    return {"chat_id": chat_id, "answer": text, "sources": cards, "stats": stats, "error": err}
+    text = text.strip()
+    if not text and steps:
+        # The model never got past "Let me check ...": hand back what it said, marked.
+        text = steps
+        stats = {**stats, "no_final_answer": True}
+    return {"chat_id": chat_id, "answer": text, "steps": steps if text != steps else "",
+            "sources": cards, "stats": stats, "error": err}

@@ -292,7 +292,8 @@ The header of both apps shows the app name and **– By: Dale Hassinger**. To ch
 - Every module with its version, language, collectors, last run, row count and any error.
 - **On/Off switch** per module. Off stops its collectors and hides its dashboards and API endpoints (they return 404). Saved in `data/_core.db`, so it survives restarts and upgrades.
 - **↑ ↓** buttons set the menu order used by the sidebar, home page and this page. New modules appear at the bottom.
-- **Run collectors now** runs a module's collectors immediately (dashboards have a **Refresh** button that does the same).
+- **Run collectors now** starts a module's collectors in the background and the page comes back at once. The module shows **running…** and the page refreshes every few seconds until the run ends (dashboards have a **Refresh** button that does the same). Each collector runs once at a time: a manual run and the scheduled run of the same collector never overlap, and the second one is skipped.
+- **API token.** When API tokens are configured, the page shows one **API token** field at the top. On/Off, ↑ ↓ and **Run collectors now** need it (it is kept for this browser tab only). Requests posted from another web site are refused.
 - The full list of each module's REST endpoints and downloads.
 
 ### Settings
@@ -304,7 +305,7 @@ The header of both apps shows the app name and **– By: Dale Hassinger**. To ch
 | Switched off | What stops | What keeps working |
 | --- | --- | --- |
 | vCommunity Observability | Every collector run (scheduled, **Run now**, start-up) and scheduled exports. A yellow banner says it is paused | Dashboards, exports and the API, with the last collected data; Settings. Turning it on runs all collectors once |
-| vCommunity Ask | Questions (chat page and `POST /api/ask` answer 503) and source syncs (scheduled, **Sync now**, uploads). The Ask link in this sidebar is hidden | Chats, sources, Settings and the rest of Ask's pages |
+| vCommunity Ask | Questions (chat page and `POST /api/ask` answer 503) and source syncs (scheduled, **Sync now**, uploads). The **Ask** button of the app switcher (top right) is hidden | Chats, sources, Settings and the rest of Ask's pages |
 
 The same two sliders are on Ask's Settings page, and both pages save to one shared file, `./control/apps.json` (mounted at `/app/control` in both containers), so either page can switch either part. Saving here needs the API token when tokens are set; on Ask, the Ask API token. Scripts use `GET /api/core/apps` and `PUT /api/core/apps/{observability|ask}?on=false` (or `/api/apps` on Ask). A missing file means both are on.
 
@@ -490,7 +491,7 @@ vCenter: VAMI (`https://<vcenter>:5480`) → **Syslog** → **Configure**. `tcp:
 - **Alerts** are checked every 30 seconds. A rule fires when its search finds at least its threshold of new messages in its window, then waits its cooldown before it can fire again. A message counts for a rule only once, so a cooldown of 0 is safe (every new match alerts right away, no repeats). For a rule with threshold 1, matches that arrive during the wait are sent together when it is over. Every fired alert is listed on Log alerts (and counted on the Logs page); email and webhook are optional per rule. The webhook is a JSON POST with a `text` field (Slack, Mattermost, Rocket.Chat style) plus the alert details (rule, count, window, search, newest messages). Both work at a dark site with a local mail relay or chat server.
 - The **Performance** dashboard (on Ask) has a **Logs** panel: logs per second, per minute and per hour, log disk space used (against the cap) and disk space available, with charts. See [Performance](#performance).
 
-**REST API** (token required, in Swagger under `logs`): `GET /api/logs/search?q=...&range=1h&sev=err&host=...&limit=200&before=<id>` (or `since`/`until` as epoch seconds), `app=` filters by app name too. `GET /api/logs/summary`, `GET /api/logs/hosts` (every source with its top apps; `quiet: true` = idle), `GET /api/logs/apps` (every app name: last seen, messages and errors in 24 h, how many sources), `GET /api/logs/alerts`.
+**REST API** (token required, in Swagger under `logs`): `GET /api/logs/search?q=...&range=1h&sev=err&host=...&limit=200&before=<id>` (or `since`/`until` as epoch seconds), `app=` filters by app name too. `GET /api/logs/summary`, `GET /api/logs/hosts` (every source with its top apps; `quiet: true` = idle), `GET /api/logs/apps` (every app name: last seen, messages and errors in 24 h, how many sources), `GET /api/logs/alerts`. `POST /api/logs/notify/email` sends an email through the mail server set under **Notifications**, for other apps (Ask's [scheduled prompts](#scheduled-prompts)): `{"to": "a@x.com, b@x.com", "subject": "...", "text": "...", "html": "...", "attachments": [{"filename": "r.html", "content_type": "text/html", "data_base64": "..."}], "sender_name": "vCommunity Ask"}` (at most 20 addresses and 15 MB of attachments; 400 when no mail server is set or an address is wrong, 502 when the mail server refuses).
 
 **Limits.** It is sized for a lab or a small site, not for a whole data center (use a dedicated log platform there). No TLS syslog (port 6514) yet. Syslog itself has no authentication: anyone who can reach port 514 can send messages, so keep it on the management network. The SMTP password is stored unencrypted in `data/syslog.db`, like the vCenter passwords in `_core.db`.
 
@@ -569,7 +570,8 @@ ASK_OLLAMA_URL=http://127.0.0.1:11434 uvicorn app.main:create_app --factory --po
 - **New chat** shows example questions (set per source) and how much is indexed. Type a question; **Enter** sends, **Shift+Enter** adds a line. The **Sources** list under the question box shows every source as a button, one row per type (blogs and web sites, markdown repositories, PDF documents, API specs, spreadsheets, web, MCP tools). Click buttons to pick one or more (a picked one turns blue with a check mark), or use **only these** on a row (for example only the blog sites). **All sources** clears the picks, which searches every enabled source except spreadsheets (a source switched off on Knowledge sources is left out until you pick it by name); the line at the top says what is picked. **Hide list** folds the rows to that one line (remembered in this browser; folded by default on a phone). A mouse click or tap in the question box also folds the list, so it gets out of the way while you type; **Show list** opens it again. A chat keeps the sources it started with, and a new chat starts with your last selection (remembered in this browser). **Stop** ends an answer early (what was written so far is kept).
 - Each answer starts with a compact **Sources** strip: one numbered pill per matching section (title · heading), plus a **+N linked** pill for files added by link expansion. It stays small while the answer streams, so the answer is what you read.
 - Numbered **citation chips** `[n]` in the answer, and the pills in the strip, open **Source details** and jump to the matching card. **Source details** (folded by default) holds the full cards: title, section, file id, `draft`/`reviewed` badge, a snippet, linked diagrams, **Open** (the full file in the app, with its images and metadata) and **View on GitHub**, then a **Linked files** group showing what link expansion added and why.
-- While an answer streams the page follows it to the bottom. Scroll up to read something and it stops following; scroll back to the bottom and it follows again.
+- While an answer streams the page follows it to the bottom. Scroll up to read something and it stops following, and a **Jump to latest** button appears above the question box; click it, or scroll back to the bottom, and it follows again. The answer is redrawn at most 10 times a second while it streams, so long answers with tables and code stay smooth.
+- Every code block in an answer has a **Copy** button at its top right (it also works on a plain `http://` address, where the browser's clipboard API is not allowed).
 - The footer shows the model, the time and tokens per second, and **Copy answer**. With **Show model thinking** on (Settings), thinking models show their reasoning above the answer.
 - Chats are saved: **Recent chats** in the sidebar reopens them, **Delete chat** removes the open one. To remove several, press **Select** next to **Recent chats**: each chat gets a check box (click a chat to tick it, Shift+click ticks a range, **All** ticks every listed chat), then **Delete (n)** removes them after one confirmation. **Cancel** or **Esc** leaves select mode. Follow-up questions see the last turns (Settings → Chat history).
 - **More room:** the menu button at the top left hides the whole sidebar so chats, reports and dashboards use the full width; click it again to bring the sidebar back. Click a sidebar heading (**Recent chats**, **Knowledge**, **Administration**) to fold just that section. Both choices are remembered in the browser.
@@ -585,8 +587,9 @@ ASK_OLLAMA_URL=http://127.0.0.1:11434 uvicorn app.main:create_app --factory --po
 One card per source with a status ring (green OK, blue syncing, red error, amber new), document and chunk counts, repository and branch (or site and date range), the commit it indexed (or page count and newest post), last sync, re-sync interval and progress while it runs.
 
 - **Sync now** pulls and re-embeds what changed. **Re-index all** re-embeds every file. **Documents** lists every indexed file (with a filter), and each opens in the document view. **Edit** changes options. **Delete** removes the source and its index (not the repository itself). The switch turns a source off without deleting it.
-- **Add source** opens a form built from the chosen plug-in's options. For **Markdown repository**: repository URL and branch (or a local folder), include and exclude globs, metadata format, link base and a token env var for private repositories. For **Web site (blog crawler)**: site URL, where to find pages, URL include/exclude globs, **Published from / Published to** dates or **last N days**, what to do with undated pages, max pages and delay. Every source also has a name, title, re-sync interval (**Re-sync every (hours)**, `0` = never) and up to six example questions.
+- **Add source** opens a form built from the chosen plug-in's options. For **Markdown repository**: repository URL and branch (or a local folder), include and exclude globs, metadata format, link base and a token env var for private repositories. For **Web site (blog crawler)**: site URL, where to find pages, URL include/exclude globs, **Published from / Published to** dates or **last N days**, what to do with undated pages, max pages and delay. Every source also has a name, title, re-sync interval (****Re-sync**, see below) and up to six example questions.
 - Sources are re-synced automatically when their interval has passed (checked every 10 minutes); the plug-in reports "no changes" cheaply when the commit hasn't moved. Set **Re-sync every (hours)** to `0` to never re-sync on a schedule: the card shows "never (Sync now only)", the source keeps its index, and it changes only when you press **Sync now** or **Re-index all**. A new source still gets its first sync. The smallest other value is 0.25 (15 minutes).
+- **Re-sync at a set day and time.** Instead of **Every N hours**, **Re-sync** can be **Daily**, **Weekdays (Mon–Fri)**, **Weekly** (pick the day) or **Monthly** (day 1–28 or **last**), at a time in a time zone, the same choices as [scheduled prompts](#scheduled-prompts). The card shows it with the next run, for example *Every Sunday at 05:30 America/New_York · next 2026-11-15 05:30 EST*. A sync that is already running is not started twice, a run missed while the container was down is made up within an hour, and nothing runs while Ask is paused or the source is off. A new source still gets its first sync right away. Saved in `ask.db` (`sources.sync_schedule`); `GET /api/sources` returns `sync_schedule` and a `resync` text, and `POST /ui/sources/save` takes `"sync_schedule": {"frequency": "weekly", "weekday": "sun", "at_time": "05:30", "timezone": "America/New_York"}` (`"interval"` = every `interval_hours`).
 - Sources from `ask.yaml` are seeded into the database on first start (badge **ask.yaml**); after that the page owns them.
 
 ![Document view](docs/screenshots/ask-document.png)
@@ -595,7 +598,7 @@ One card per source with a status ring (green OK, blue syncing, red error, amber
 
 ![Ask settings](docs/screenshots/ask-settings.png)
 
-**Apps on / off** (top card): the same two sliders as on the dashboards' Settings page (see [Settings](#settings)), saved as soon as you flip one (needs the Ask API token when `ASK_API_TOKEN` is set). With **vCommunity Ask** off, the chat answers "vCommunity Ask is paused" and sources don't sync; with **vCommunity Observability** off, the Observability link in Ask's sidebar is hidden.
+**Apps on / off** (top card): the same two sliders as on the dashboards' Settings page (see [Settings](#settings)), saved as soon as you flip one (needs the Ask API token when `ASK_API_TOKEN` is set). With **vCommunity Ask** off, the chat answers "vCommunity Ask is paused" and sources don't sync; with **vCommunity Observability** off, the **Observability** button of the app switcher (top right) is hidden.
 
 | Setting | Default | Notes |
 | --- | --- | --- |
@@ -614,6 +617,7 @@ One card per source with a status ring (green OK, blue syncing, red error, amber
 | Data questions | on | Counting and totals questions about spreadsheet sources are answered with a read-only SQL query (see [Spreadsheets and data questions](#spreadsheets-and-data-questions)) |
 | Whole-source questions | on | "How many posts…", "summarize this blog", "what does it write about most" are answered from a catalog of every post in the selected sources (see [Whole-source questions](#whole-source-questions)) |
 | Host agent URL | `http://host.docker.internal:9101` | The Ask host agent for the [Performance page](#performance-page-and-host-agent); empty turns it off (`ASK_AGENT_URL`) |
+| Ask address | `http://localhost:8081` | The address used for links in [scheduled prompt](#scheduled-prompts) emails (`ASK_PUBLIC_URL`). `localhost` is replaced by the Mac's current IP from the host agent; a name you set is used as it is |
 | Observability URL | `http://localhost:8080` | Sidebar link back to the dashboards. A `localhost` address follows the host you opened Ask with, so it works from another computer too |
 | Send activity to the log server | on | Prompts, thinking, tool calls and answers go to the Logs module as syslog (`ASK_ACTIVITY_LOG`). See [Ask activity log](#ask-activity-log) |
 | Log server | `tcp://vco:5514` | Where the activity goes: `tcp://` or `udp://` host and port (`ASK_ACTIVITY_LOG_URL`). **Send a test message** tries the address in the box |
@@ -621,7 +625,7 @@ One card per source with a status ring (green OK, blue syncing, red error, amber
 | Include the answer text | on | Off sends only the answer's length, time and token counts |
 | System prompt | built in | Editable; **Reset to the default** restores it |
 
-Saved values live in `data/ask.db` and win over `ask.yaml` and environment variables; they apply on the next question. Saving needs the API token when `ASK_API_TOKEN` is set (enter it in the bar at the top; it is kept in that browser only). The first container's sidebar shows an **Ask (AI chat)** link (set `VCO_ASK_URL`, default `http://localhost:8081`, empty hides it).
+Saved values live in `data/ask.db` and win over `ask.yaml` and environment variables; they apply on the next question. Saving needs the API token when `ASK_API_TOKEN` is set (enter it in the bar at the top; it is kept in that browser only). Both apps have an **app switcher** at the top right, next to the light/dark button: **Observability | Ask**, with the app you are in highlighted and the other one a link (only icons on a phone). The dashboards' Ask button uses `VCO_ASK_URL` (default `http://localhost:8081`, empty hides the switcher); Ask's Observability button uses **Observability URL**.
 
 ### Answer quality test
 
@@ -640,6 +644,55 @@ Use it to check whether a change (new code, another chat model, different **Chun
 Runs are kept in `ask.db` (tables `eval_runs`, `eval_items`). The card lists the last five, and **Delete run** removes one. Starting a run needs the API token when `ASK_API_TOKEN` is set. The same works from the API: `POST /api/eval/runs` with `{"count": 10, "judge": true, "model": "gemma3:27b", "judge_model": "qwen3.8:27b-mlx"}` (model and judge_model are optional), then `GET /api/eval/runs/{id}?vs={other id}`.
 
 Code: `ask/app/evalrun.py`, `ask/app/templates/eval.html`. Tests: `ask/tests/test_eval.py`.
+
+### Scheduled prompts
+
+A prompt Ask answers on a schedule and emails to you, for example "Summarize the posts published in the last 7 days, with each post's date and full URL" every Monday at 07:00. Open **Scheduled prompts** in the sidebar (under Knowledge) and press **New scheduled prompt**:
+
+| Field | What it does |
+| --- | --- |
+| Name | Shown in the list and used as the email subject: `[Ask] Weekly blog: 2026-11-16` |
+| Sources | The same grouped buttons as the chat: **All sources** (every source except spreadsheets), **No sources (just the model)**, or any mix of sources, MCP tools and web search |
+| Prompt | Written exactly as you would type it in the chat. Words like *report* or *dashboard* make an HTML report when a spreadsheet source is picked |
+| Model | Empty uses the **Chat model** from Settings. Another model can be picked for this prompt only (web search and MCP tools need one that can call tools) |
+| Schedule | **Every day**, **Weekdays (Mon–Fri)**, **Every week** (day), **Every month** (day 1–28 or **last**) or **Every N hours**, at a time, in a time zone (default `America/New_York`, or `ASK_SCHEDULE_TZ`) |
+| Email to | One or more addresses, separated by commas (at most 20). **Send a test email** checks the mail path right away |
+| Sync the picked sources first | Starts a sync of each picked source and waits for it (up to 30 minutes) before asking |
+| Attach the HTML report | When the answer made a report or dashboard, the `.html` file is attached (up to 12 MB) |
+| Show the prompt in the email | On by default. Off leaves the prompt out of the email's header (a failure email still shows it) |
+| List the sources in the email | On by default. Off leaves out the Sources list and the `[1]` citation marks in the answer, for example for an X posts digest where the answer already has the links |
+| Email only when the answer changed | Skips the email when the answer is the same as the last run's (ignoring citation numbers, case and spacing). The run shows **no change** |
+| On | Off keeps the prompt but stops its schedule; **Run now** still works |
+
+**What a run does.** It asks the question exactly like the chat (same retrieval, tools and system prompt) and saves it as a new chat called *Scheduled: name · date*, so the answer is in **Recent chats** and you can ask follow-up questions there. Then it emails:
+
+- the answer, turned from Markdown into HTML (tables, lists and links; raw HTML from the model is shown as text, never run), plus a plain-text copy for mail apps that don't show HTML,
+- the sources, each with its web URL, or a link to the document in Ask,
+- an **Open in Ask** button for the chat and a link to change or stop the schedule,
+- the report as an attachment when there is one.
+
+When the answer fails (for example Ollama can't be reached), an email saying so is sent instead (subject ends in *failed*). With MCP tools or web search picked, the email holds only the model's final answer, written after its tool calls, not the "Let me check ..." lines in between (those stay in the saved chat). The sources list names each tool call and says which ones failed. If a model never writes an answer, the email shows what it said and a note to raise **Tool turns per answer** or make the prompt more specific.
+
+**Don't repeat recent answers** (off by default) is for prompts that should give something new each time, such as a daily inspirational quote from a web search. Each run adds the answers of that schedule's last 30 runs under the prompt (newest first, each cut to 600 characters) and tells the model not to repeat any of them. The model never sees earlier runs otherwise, because each run is a fresh chat. The added text is saved in the run's chat, so you can see what was sent. Runs whose chat you deleted are left out. Leave it off for reports and status checks, where the same answer is fine.
+
+**The list** shows each prompt's schedule and next run, the last run (**sent**, **no change**, **failed** or **email failed**, with the reason), **Run now**, the on/off switch, **Edit**, **History** (the newest 25 runs; 100 are kept with time, how it started, result, seconds, who got the email and a link to the answer) and **Delete** (the chats it made are kept). A run that is already going is not started twice. While Ask is paused (Apps on / off), scheduled runs are skipped. A run missed because the container was down is made up when it starts again within an hour; older ones are skipped.
+
+**How email is sent.** Ask has no mail settings of its own. It uses the mail server set up in vCommunity Observability under **Log alerts → Notifications** (host, port, security, user, password, from). Ask posts the message to the Logs module's `POST /api/logs/notify/email` on `vco` (inside the compose network, `ASK_VCO_INTERNAL_URL`, default `http://vco:8080`), with the dashboards API token: `ASK_VCO_TOKEN` if set, else `VCO_API_TOKEN_MPBUILDER`. Both containers read the same `.env`, so normally nothing needs setting. The SMTP password never leaves the vco container. Messages say what to fix when something is missing: no token, Logs module off, no mail server, or vco not reachable.
+
+**Links in the email** use **Ask address** on the Settings page (default `http://localhost:8081`, `ASK_PUBLIC_URL`). While it says `localhost` (or `127.0.0.1`, `host.docker.internal`), each run asks the [host agent](#performance-page-and-host-agent) for the Mac's current IP address and uses that instead, keeping the port, for example `http://192.168.1.50:8081`. The address is read at every run, so the links follow a laptop to a new network. This needs host agent 0.2.1 or later (run the installer again to update it); without the agent the links say `localhost`. Set a name such as `http://dales-mac.local:8081` to always use that name.
+
+Schedules are kept in `ask.db` (tables `schedules`, `schedule_runs`). They work from the API too, with the same fields as the form (`scope` is a source name, a comma-separated list, `all` or `none`):
+
+```powershell
+$h = @{ 'X-API-Key' = $env:ASK_API_TOKEN }
+$body = @{ name = 'Weekly blog'; prompt = 'Summarize the posts published in the last 7 days with each full URL'
+           scope = 'vcrocs'; frequency = 'weekly'; weekday = 'mon'; at_time = '07:00'
+           timezone = 'America/New_York'; recipients = 'you@example.com' } | ConvertTo-Json
+$s = Invoke-RestMethod -Method Post -Uri http://localhost:8081/api/schedules -Headers $h -ContentType 'application/json' -Body $body
+Invoke-RestMethod -Method Post -Uri "http://localhost:8081/api/schedules/$($s.id)/run" -Headers $h
+```
+
+Code: `ask/app/schedules.py`, `ask/app/templates/schedules.html`, `ask/app/static/schedules.js`; the email endpoint is in `modules/logs/web.py` and `modules/logs/notify.py`. Tests: `ask/tests/test_schedules.py` (no Ollama, no mail server) and the email part of `scripts/smoke_test.py`, which uses `scripts/fake_smtp.py` (a stand-in mail server that saves each message as a `.eml` file: `python scripts/fake_smtp.py 2525 ./fake-mail`).
 
 ### Ask activity log
 
@@ -915,6 +968,18 @@ Tips for good data answers:
 - Use a chat model that is good at SQL; Qwen 3.x models are. Smaller models write wrong queries more often, and you see it in the query card.
 - Turn **Data questions** off on the Settings page to send every question through the normal search.
 
+### X posts (accounts)
+
+The `x-posts` source indexes the recent posts of a list of X (Twitter) accounts, one document per post: the account, date and time, full text (long posts included), likes, reposts, replies, quotes and views, and the link `https://x.com/<account>/status/<id>`. With **Email only when the answer changed** on a [scheduled prompt](#scheduled-prompts), you get an email when the accounts post something new.
+
+1. **Token, once.** Create an app in the X developer portal and copy its **Bearer token**. Put it in `.env` as `X_BEARER_TOKEN=<token>` and run `docker compose up -d vco-ask`. The token is never stored in Ask's database or in the source's options; the source only names the variable (**Token env var**, default `X_BEARER_TOKEN`).
+2. **Source.** On **Knowledge sources**, **Add source**, plug-in **X posts (accounts)**. Under **Accounts** put one account per line (`bpatvmware`, `@vcrocs` or `https://x.com/lamw` all work). Options: **Reposts** and **Replies** (skip by default), **Keep posts for (days)** (default 30), **Max posts read per sync** (default 100). Set **Re-sync** to how often to check, for example every 2 hours, or daily at a set time.
+3. **Email.** On **Scheduled prompts**, pick the X source, a prompt such as *List the latest posts with their account, date, text and link*, a schedule (for example every 2 hours), and turn on **Sync the picked sources first** and **Email only when the answer changed**.
+
+How it reads X: the X API v2 recent search (`GET /2/tweets/search/recent`), which covers the last 7 days. All accounts go into as few queries as fit (`(from:a OR from:b) -is:retweet -is:reply`, 512 characters each, about 25 accounts), and later syncs ask only for posts newer than the newest one kept (`since_id`), so a sync is usually one request. Posts older than **Keep posts for** and posts of accounts taken off the list are dropped. **Cost:** X charges or caps the posts an app reads per month by plan, so keep **Max posts read per sync** low and don't sync more often than you need. A rate limit (429) keeps the posts already indexed and says when to try again; a refused token (401) or a plan without recent search (403) fails the sync with that reason. The chat's Sources list has an **X posts** group, and "latest posts" or "how many tweets" questions get the [whole-source catalog](#whole-source-questions). For X posts that catalog lists every post with its date and time (UTC), account, **complete text** and link, plus the current time, and the model is told to copy post text word for word, so "posts from the last 24 hours" can be answered and emailed in full.
+
+Code: `ask/sources/x-posts/` (`fetch_x.py`, `source.yaml`). Tests: `ask/tests/test_x_posts.py` against `ask/scripts/fake_x.py`, a stand-in for the X API (`python ask/scripts/fake_x.py 11557`, token `good-token`, then set the source's **API address** to `http://127.0.0.1:11557`).
+
 ### API specs (OpenAPI)
 
 An **API specs (OpenAPI)** source (plug-in `openapi`) indexes REST API specifications in OpenAPI 3 or Swagger 2 format, JSON or YAML: the VCF Operations API, vCenter, SDDC Manager, NSX or any other product that publishes one. Ask can then answer "which call do I use to ...", "what fields does that body take" and "show me that in PowerShell", with citations to the exact endpoint.
@@ -1059,7 +1124,7 @@ A GPU share under 100% means part of the model runs on the CPU, which is many ti
 
 On Linux it reports CPU, memory, network, disk and Ollama from `/proc` (no GPU).
 
-It answers on port 9101: `GET /metrics` (JSON, needs the token as `Authorization: Bearer <token>` or `X-API-Key`) and `GET /health`. It listens on all addresses because the Docker VM reaches the Mac through its own network; the token keeps everyone else out, and it only ever returns numbers.
+It answers on port 9101: `GET /metrics` (JSON, needs the token as `Authorization: Bearer <token>` or `X-API-Key`) and `GET /health`. Since 0.2.1 `/metrics` also has `lan_ip`, the Mac's current network address (the one its default route uses), which [scheduled prompt](#scheduled-prompts) emails use for their links. It listens on all addresses because the Docker VM reaches the Mac through its own network; the token keeps everyone else out, and it only ever returns numbers.
 
 **Install it** on the Mac, from the repository folder:
 
@@ -1116,7 +1181,7 @@ Ask (container) --HTTP + token--> Ask host agent (Mac) --stdio JSON-RPC--> pwsh 
 | **Ask first** | The chat shows the tool and its arguments with **Run** and **Cancel**; nothing runs until you press Run (it waits up to 15 minutes). The default for tools that change things (`Send-Email`, `Create-DNS-ARecord`, `Save-HTML-Report`) |
 | **Off** | The model never sees the tool |
 
-Below that: **Tool turns per answer** (default 6: how many times the model may call tools before it must answer) and **Result size the model reads** (default 16,000 characters of one tool result; keep it well under the Model context). Changing them needs the API token, like Settings.
+Below that: **Tool turns per answer** (default 6: how many times the model may call tools before it must answer; on the last turn Ask tells the model it can't call more tools and must answer from the results it has, and any tool call it still makes is ignored. Between turns, what the model says ("I'll check the hosts ...") is kept as its own paragraph) and **Result size the model reads** (default 16,000 characters of one tool result; keep it well under the Model context). Changing them needs the API token, like Settings.
 
 **In the chat:** the Sources strip gets one pill per tool call, and a folded **Tool calls** box under the answer holds a card per call: tool, server, status (done, failed, needs your OK, cancelled), time, the arguments, and the **Result** (formatted JSON; PowerShell results are shown without their `{"data": ...}` wrapper). Tools can be combined with knowledge sources: tick a blog and the tools, and the answer can use both. "Nothing ticked" never includes tools.
 
@@ -1209,6 +1274,7 @@ The order is enforced by Ask, not only asked of the model: if the model tries th
 | `ASK_AGENT_TOKEN` | Token of the Ask host agent (printed by `Install-AskAgent.ps1`), for the Performance page |
 | `ASK_AGENT_URL` | Where Ask reaches the host agent (default `http://host.docker.internal:9101`) |
 | `OLLAMA_API_KEY` | ollama.com API key for [Web search (Ollama)](#web-search-ollama). Secret: keep it in `.env` only |
+| `X_BEARER_TOKEN` | X API Bearer token for the [X posts](#x-posts-accounts) source. Secret: keep it in `.env` only |
 | `BRAVE_API_KEY` | Brave Search API key for [Web search (Brave)](#web-search-brave). Secret: keep it in `.env` only |
 | `ASK_WEB_ORDER` | Which web search goes first when both are ticked: `ollama_first` (default), `brave_first` or `model` (the Settings page wins) |
 | `ASK_BRAVE_SEARCH`, `ASK_BRAVE_SEARCH_URL` | `1` turns Brave web search on by default (the Settings switch wins); API URL (default `https://api.search.brave.com`) |
@@ -1281,7 +1347,7 @@ All under token auth when `ASK_API_TOKEN` is set; Swagger UI at http://localhost
 | --- | --- |
 | `GET /api/health` | Status and counts (open) |
 | `GET /api/apps`, `PUT /api/apps/{name}?on=false` | Apps on / off (`observability`, `ask`), shared with the dashboards. While Ask is off, `POST /api/ask` and source syncs answer 503 |
-| `POST /api/ask` | `{"question": "...", "sources": "all" \| "isvara" \| [...], "chat_id": "..."}` (`all` = every source except spreadsheets; a name or a list of names picks those sources, spreadsheets included) → answer, source cards, stats, chat id (pass it back for follow-ups) |
+| `POST /api/ask` | `{"question": "...", "sources": "all" \| "isvara" \| [...], "chat_id": "..."}` (`all` = every source except spreadsheets; a name or a list of names picks those sources, spreadsheets included) → answer, source cards, stats, chat id (pass it back for follow-ups). With tools, `answer` is the final answer and `steps` what the model said between tool calls |
 | `GET /api/search?q=...&sources=a,b` | Retrieval only: which chunks a question would get, and the FTS query used |
 | `GET /api/chats`, `GET /api/chats/{id}` | Saved chats and their messages |
 | `GET /api/sources`, `POST /api/sources/{name}/sync?full=false`, `GET /api/sources/{name}/documents` | Sources, sync, indexed files |
@@ -1289,6 +1355,7 @@ All under token auth when `ASK_API_TOKEN` is set; Swagger UI at http://localhost
 | `GET /perf/container` | Open, numbers only: this container's raw counters, read by the Observability container |
 | `GET /api/mcp` | MCP servers of the host agent, their tools and each tool's policy (allow, ask, off). Use one with `"sources": ["mcp:<server>"]` on `POST /api/ask` (tools set to Ask first are refused there) |
 | `POST /api/eval/runs`, `GET /api/eval/runs`, `GET /api/eval/runs/{id}?vs=` | [Answer quality test](#answer-quality-test): start a run (`{"count": 10, "judge": true, "model": "...", "judge_model": "..."}`, 409 while one is running), list runs with summaries, one run with every question (saved answer vs replay: speed, documents, judge verdict, both answers) and the previous run it is compared with |
+| `GET /api/schedules`, `POST /api/schedules`, `GET/PUT/DELETE /api/schedules/{id}`, `POST /api/schedules/{id}/run` | [Scheduled prompts](#scheduled-prompts): list (with next run and last run), create, one with its run history, change, delete, run now (409 while it is running). A bad field answers 400 with `errors` per field |
 | `GET /api/reports` | HTML reports and dashboards (id, title, type, source, question, created, size); open one at `/reports/{id}.html`, add `?download=1` to download it |
 
 ```powershell
@@ -1343,6 +1410,10 @@ Precedence for module on/off: `enabled_by_default` in `module.yaml` → `modules
 | `TZ` | Default time zone offered for scheduled exports (for example `America/New_York`) |
 | `VCO_SYSLOG_UDP_PORT`, `VCO_SYSLOG_TCP_PORT` | Ports the Logs module's syslog listener uses inside the container (default 5514) |
 | `ASK_ACTIVITY_LOG`, `ASK_ACTIVITY_LOG_URL` | Ask's activity log on or off (default on) and where it goes (default `tcp://vco:5514`); the Settings page overrides both |
+| `ASK_PUBLIC_URL` | Ask address used in scheduled prompt emails (default `http://localhost:8081`; the Settings page overrides it) |
+| `ASK_VCO_INTERNAL_URL` | How Ask reaches the vco container for email and the Performance page (default `http://vco:8080`) |
+| `ASK_SCHEDULE_TZ` | Time zone a new scheduled prompt starts with (default `America/New_York`) |
+| `ASK_VCO_TOKEN` | Token Ask sends to vco's email endpoint; default is `VCO_API_TOKEN_MPBUILDER` from the same `.env` |
 | `ASK_SYSLOG_HOSTNAME` | The source name Ask's activity messages carry (default `vco-ask`) |
 | `SYSLOG_PORT` (`.env`, used by `docker-compose.yml`) | Host port mapped to the syslog listener (default 514). Use 1514 if your container runtime can't open ports below 1024 |
 
@@ -1399,6 +1470,7 @@ The full list of endpoints is on the **Modules** page, in Swagger at `/docs`, an
 | `GET /api/core/apps`, `PUT /api/core/apps/{name}?on=false` | token | Apps on / off: `observability` (collection, scheduled exports) and `ask` (chat, syncs). Off pauses the part; shared with Ask in `./control/apps.json` |
 | `GET /api/{module}/...` | token | Module endpoints declared in `module.yaml` |
 | `GET /api/logs/search`, `/api/logs/summary`, `/api/logs/hosts`, `/api/logs/alerts` | token | The Logs module's search, counts and rates, senders and alerts (added by its web extension) |
+| `POST /api/logs/notify/email` | token | Send an email through the Logs mail server (used by Ask's scheduled prompts) |
 | `GET /api/{module}/export/{name}` | token | Module file downloads for scripts |
 | `GET /export/{module}/{name}` | none (UI) | The same downloads for the UI |
 
@@ -1521,7 +1593,7 @@ The core (`core/services.py`) starts every service of an available module with t
 ## Security
 
 - The REST API requires a token whenever `api.tokens` is set. Tokens are compared in constant time.
-- The web UI has no login yet. Changes on the Settings page need an API token when tokens are configured; dashboards and **Run now** are open. Keep the port on a management network until UI login lands.
+- The web UI has no login yet. When API tokens are configured, changes on the Settings page and the Modules page buttons (On/Off, ↑ ↓, **Run collectors now**) need a token, and those forms refuse requests posted from another web site (Origin and `Sec-Fetch-Site` checks). Dashboards are open. The **Download** buttons (`/export/...`) work from the app's own pages; a script or another site needs the token, like `/api/<module>/export/...`. Keep the port on a management network until UI login lands.
 - Secrets live in `.env`, never in `config.yaml`. A password saved on the Settings page is stored **unencrypted** in `data/_core.db`, so protect the `data` folder as you would `.env`.
 - The container runs as a non-root user. Collectors only receive the connections they list in `module.yaml`.
 - The syslog port (514) accepts messages from anyone who can reach it (syslog has no authentication). Keep it on the management network. The Logs pages are open like the dashboards; changing Logs settings and alert rules needs the API token when tokens are set. The SMTP password for alert email is stored unencrypted in `data/syslog.db`.
@@ -1593,6 +1665,7 @@ The core (`core/services.py`) starts every service of an available module with t
 | Ask: MCP server "not running" with `Operation not permitted` (stderr) | macOS privacy protection: a LaunchAgent may not read `~/Documents` or `~/Desktop`. Give the Python the installer names Full Disk Access (System Settings → Privacy & Security), then `launchctl kickstart -k gui/$(id -u)/com.vcommunity.ask-host-agent`, or keep the MCP folder outside Documents |
 | Ask: MCP server "not running" with `pwsh` not found or a module error | The agent's PATH has `/opt/homebrew/bin`, `/usr/local/bin` and `/usr/local/microsoft/powershell/7`; put the full path of `pwsh` in `command` otherwise. Modules (PowerCLI, ImportExcel, Posh-SSH, powershell-yaml) must be installed for your user; the server's own messages are under **Server messages (stderr)** |
 | Ask: no **Web search (Ollama)** in the Sources list, or "Web search is not available" | Settings → **Web search (Ollama)** must be on and say the key is **set**: add `OLLAMA_API_KEY=` to `.env` and run `docker compose up -d vco-ask` |
+| Ask: X posts source fails with "no X API token" or "refused the Bearer token" | Put `X_BEARER_TOKEN=<token>` in `.env` (no quotes or spaces) and run `docker compose up -d vco-ask`; a refused token was regenerated or revoked in the X developer portal. "no API credits or plan" or 403 means the app's X plan doesn't include recent search |
 | Ask: no **Web search (Brave)** in the Sources list, or "Brave web search is not available" | Settings → **Web search (Brave)** must be on and say the key is **set**: add `BRAVE_API_KEY=` to `.env` and run `docker compose up -d vco-ask`. "Brave refused the API key" means the key is wrong or revoked; a 429 means the plan's rate or monthly limit was reached |
 | Ask: web search card says "refused the API key", "limit was reached" or "Cannot reach Ollama web search" | Check or create the key on ollama.com (Settings → Keys); 429 = Ollama's usage limit, try later; "cannot reach" = the container has no internet (proxy: set `HTTPS_PROXY` for `vco-ask`) |
 | Ask: "The MCP tools are not available" or the model never calls a tool | The chat model needs the `tools` capability (Settings shows the models; `qwen3.8:27b-mlx` has it). Also check the tools aren't all **Off**, and name what you want in the question ("use the RVTools vHost data") |
@@ -1655,7 +1728,7 @@ core/                   FastAPI app, scheduler, module loader, runner, storage
   control.py            Apps on / off (./control/apps.json, same file as ask/app/control.py)
   perfstat.py           this container's cgroup counters (GET /perf/container) for Ask's Performance dashboard
   templates/            base layout, home, dashboards, Modules, Settings, About
-  static/               app.css, about.css/about.js (About page, shared with Ask), dialogs.js (themed confirm / alert dialog, shared with Ask), vendored Swagger UI, marked, DOMPurify, ECharts
+  static/               app.css, about.css/about.js (About page, shared with Ask), dialogs.js (themed confirm / alert dialog, shared with Ask), drawer.js (small-screen menu backdrop and Escape, shared with Ask), vendored Swagger UI, marked, DOMPurify, ECharts
 modules/                built-in modules (one folder each)
   logs/                 syslog server: syslog_service.py (listener, retention, alerts), logstore.py (database, search, parser),
                         notify.py (email, webhook), web.py (search, alerts and settings routes, REST API), templates/, static/
@@ -1680,21 +1753,25 @@ ask/                    vCommunity Ask (second container)
   sources/spreadsheet/  built-in source plug-in (xlsx/csv from /exports or uploads, sheets into tables.db)
   sources/pdf/          built-in source plug-in (PDFs from uploads or a folder; pypdf text, Tesseract OCR for scanned pages)
   sources/openapi/      built-in source plug-in (OpenAPI / Swagger specs: one document per API call plus an overview)
+  sources/x-posts/      built-in source plug-in (recent posts of a list of X accounts, X API v2 recent search)
   app/perf.py           Performance page: container, Ollama and host-agent samples (24 h in ask.db)
   app/mcp.py            MCP tools: client of the host agent's MCP bridge, tool policy, Run / Cancel approvals
   app/websearch.py      Web search: Ollama's web_search / web_fetch and Brave's brave_search as model tools
   app/webusage.py       counts web calls for the Performance page's usage and cost panel
+  app/schedules.py      scheduled prompts: APScheduler jobs, headless answers saved as chats, the email
   agent/ask-host-agent.py  Ask host agent for the Mac (standard library only; performance numbers and the MCP bridge), plus Install-AskAgent.ps1 and install.sh
   config/               ask.example.yaml
   scripts/fake_ollama.py  stand-in for Ollama, for tests (also answers with tool calls)
   scripts/fake_mcp.py   stand-in stdio MCP server (three tools), for tests
   scripts/fake_websearch.py  stand-in for Ollama's and Brave's web search APIs (port 11556), for tests
   scripts/make_sample_rvtools.py  made-up RVTools-style workbook, for tests
+  scripts/fake_x.py     stand-in for the X API recent search, for tests
+  tests/                unit tests (balanced retrieval, answer quality test, scheduled prompts); no Ollama needed
   Dockerfile            vcommunity-ask image (build from the repo root)
   requirements.in/.txt  direct dependencies / hashed lock file
 Dockerfile              base, pwsh (cached PowerShell + PowerCLI), core and core-pwsh stages
 docker-compose.yml      vco (dashboards) and vco-ask (chat) services
-.dockerignore           keeps data, .env and docs out of both images
+.dockerignore           keeps data, .env, docs and dist/ out of both images
 requirements.in/.txt    direct dependencies / hashed lock file
 .env.example            secrets and build settings template
 ```
@@ -1713,6 +1790,19 @@ requirements.in/.txt    direct dependencies / hashed lock file
 
 | Date | Change |
 | --- | --- |
+| 2026-11-15 | Scheduled prompts: **Don't repeat recent answers** switch (off by default). Each run adds the schedule's last 30 answers under the prompt with "do not repeat these", for example for a daily quote. New column `schedules.avoid_repeats` (added automatically) |
+| 2026-11-14 | Scheduled prompts: **History** shows the newest 25 runs (was 30; the newest 100 are still kept in `ask.db`) |
+| 2026-11-14 | Ask whole-source catalog for **X posts** sources: each post's line now has its date and time (UTC), account and complete text (not the 70-character title), the catalog states the current time, and the model is told to copy post text in full and pick time windows by date and time. Fixes cut-off posts ("…") in scheduled X post emails. No re-sync needed |
+| 2026-11-14 | Scheduled prompts: **Show the prompt in the email** and **List the sources in the email** switches (both on by default; existing schedules keep both on). With sources off, the answer's `[1]` citation marks are removed too. New columns `schedules.include_prompt` and `include_sources` (added automatically) |
+| 2026-11-14 | Ask Knowledge sources: **Re-sync** can run at a set day and time (**Daily**, **Weekdays**, **Weekly** on a day, **Monthly** on a day or the last day, at a time in a time zone), like scheduled prompts, besides **Every N hours**. One scheduler job per source; the card shows the schedule and the next run. New column `sources.sync_schedule` (added automatically); `GET /api/sources` adds `sync_schedule` and `resync` |
+| 2026-11-14 | Ask: **X posts** source plug-in (`x-posts`): recent posts of a list of X accounts through the X API v2 recent search, one document per post (account, date, text, likes, reposts, views, link to the post), kept 30 days by default. Token once in `.env` as `X_BEARER_TOKEN` (the source only names it). One combined query for all accounts and `since_id` on later syncs keep it to about one request per sync; **Max posts read per sync** caps cost; 429 keeps what is indexed. **X posts** group in the chat's Sources list, accounts shown on the Sources page, "tweets" questions get the whole-source catalog. With a scheduled prompt and **Email only when the answer changed**, new posts are emailed. `ask/tests/test_x_posts.py`, `ask/scripts/fake_x.py` |
+| 2026-11-14 | The "By: Dale Hassinger" byline in the header of both apps links to the author's blog, https://www.vcrocs.info (new tab). It keeps its orange monospace look (no blue, no underline) and turns a lighter orange on hover. It is now its own link next to the logo, not inside the Home link |
+| 2026-11-14 | **App switcher** at the top right of both apps (next to the light/dark button): **Observability \| Ask**, the current app highlighted, the other a link; icons only on phones (the "Sample data" chip is hidden there too). It replaces the **Ask (AI chat)** link in the dashboards' sidebar and the **Observability dashboards** link in Ask's sidebar. Hidden when the other app is off or has no URL |
+| 2026-11-14 | Scheduled prompts form: a short description under **Sync the picked sources first** (what it does, the 30-minute wait, not needed for MCP tools or web search) |
+| 2026-11-14 | Scheduled prompt emails link to the Mac's current IP address instead of `localhost`. Host agent 0.2.1 reports `lan_ip` (the address of the default route, read every sample, so a laptop's new network is picked up) in `/metrics`. While **Ask address** names localhost, each run swaps in that IP and keeps the port. A real name in **Ask address** is kept. Reinstall the host agent to get 0.2.1 |
+| 2026-11-14 | Fix: a scheduled prompt with MCP tools emailed only the model's "Let me check ..." lines and no results. The model had used all its tool turns, and its last turn (no tools) narrated again instead of answering. Now the last turn gets a note to answer from the tool results it has (stray tool calls there are ignored), the turns' texts are kept apart as paragraphs, and `rag.answer` (REST API and scheduled prompts) returns the final answer separately from the `steps`. The email shows only the final answer, names each tool call in the sources (and says which ones failed), and adds a note when a model still never answers. New `ask/tests/test_tool_rounds.py` |
+| 2026-11-14 | Ask **Scheduled prompts**: pick the sources, write a prompt, set when it runs (every day, weekdays, a day of the week, a day of the month or every N hours, at a time in a time zone) and who gets the email. Each run is answered like a chat and saved as one (*Scheduled: name · date*), then emailed as HTML (answer with tables and links, sources with URLs, **Open in Ask**) with a plain-text copy and the HTML report attached when one was made. Options: sync the sources first, a model for this prompt only, email only when the answer changed, on/off. List with next run, last result, **Run now**, **History** (100 runs) and delete; **Send a test email**. Email uses the Logs module's mail server through the new token-protected `POST /api/logs/notify/email` (the SMTP password stays in vco). New Ask setting **Ask address** (`ASK_PUBLIC_URL`) for the links; `ASK_VCO_TOKEN` optional. REST `/api/schedules`. New dependency markdown-it-py 4.3.0 (MIT) in the Ask lock file, so **rebuild both images**. New `ask/app/schedules.py`, `templates/schedules.html`, `static/schedules.js`, `templates/_scope_rows.html` (source buttons shared with the chat), `ask/tests/test_schedules.py`, `scripts/fake_smtp.py` |
+| 2026-11-13 | Review fixes. **Security:** the Modules page buttons (On/Off, move, **Run collectors now**) need the API token when tokens exist (one field at the top of the page) and refuse cross-site posts; the UI download link `/export/...` needs the token unless it comes from the app's own pages. **Run collectors now** runs in the background with a **running…** badge, and a lock per collector stops a manual and a scheduled run of the same collector from overlapping. **Logs:** the Sources list uses three queries in total instead of four per source. **Ask:** the streaming answer is redrawn at most every 100 ms (about 10 times a second instead of every frame), **Copy** on every code block, a **Jump to latest** button when you scroll up, and copy buttons that also work over plain http. **Both apps:** on small screens the menu drawer has a dimmed backdrop that closes it, Escape closes it, and buttons and links show a focus ring for keyboard use (`core/static/drawer.js`, served to Ask at `/shared/drawer.js`). `dist/` added to `.dockerignore` |
 | 2026-11-13 | Faster `core-pwsh` rebuilds. The Dockerfile installs PowerShell and PowerCLI in their own `pwsh` stage with no app code, and copies the app on top last, so a code change no longer reinstalls PowerCLI (rebuild about 2 s instead of minutes). Optional local copy: `scripts/Save-PwshVendor.ps1` saves the PowerShell tarball (SHA256-checked) and PowerCLI into git-ignored `vendor/pwsh/`, which the build uses instead of GitHub and the PowerShell Gallery |
 | 2026-11-13 | Ask shows the model each page's full URL. Source headers get `| url: …` and the whole-source catalog lines end with the post's URL, plus a note to copy links exactly and never invent them. Before this the URL and path were saved by every web-site sync but never sent to the model, so prompts asking for links got none. No re-index needed |
 | 2026-11-13 | SQLite performance. **Ask:** one connection per thread (sqlite-vec loaded once, 64 MB page cache `ASK_SQLITE_CACHE_MB`, optional `ASK_SQLITE_MMAP_MB`), the vector size is remembered, and `synchronous=NORMAL`. `chunks_vec` has a `source` partition key, so per-source searches scan only that source (one source about 250 ms → 4 ms, All sources with balancing about 2.1 s → 0.22 s on a 28k-chunk index, same results). An older index is migrated on first start by copying the vectors, with no re-embedding. Syncs save 25 documents per transaction with `executemany`, and the spreadsheet part file is built with `synchronous=OFF`. **Dashboards:** module databases and `_core.db` use WAL with `synchronous=NORMAL` and a 15 s busy timeout, so dashboards read the last snapshot while a collector writes. Tables can declare `indexes:` in `module.yaml` (added for used_pct, free_pct, powerstate, datastore history and impact). **Logs:** PASSIVE checkpoints during housekeeping, TRUNCATE only on the size-cap pass, plus an index on `app`. The SQLite library itself is unchanged. New `ask/tests/test_db.py` |

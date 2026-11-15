@@ -9,6 +9,8 @@
     <p class="subtle">API auth: {{ 'token required (Authorization: Bearer … or X-API-Key)' if auth else 'OFF, no tokens configured' }} · use ↑ ↓ to change the menu order · switch a module off to stop its collectors, dashboards and API endpoints (remembered across restarts) · interactive docs at <a href="/docs">/docs</a> · spec at <a href="/openapi.json">/openapi.json</a></p>
   </div>
 </div>
+{% if msg %}<div class="alert {{ 'alert-success' if ok else 'alert-danger' }} span-all" role="status">{{ msg }}</div>{% endif %}
+{% if auth %}<div class="token-row modules-token"><label for="modules-token">API token</label><input type="password" id="modules-token" autocomplete="off" placeholder="Required to switch, move or run modules: the token from .env (VCO_API_TOKEN_...)"></div>{% endif %}
 {% for m in modules %}
 <section class="card span-all module-card {{ 'is-off' if not m.enabled }}" id="{{ m.name }}">
   <div class="card-header module-head">
@@ -19,13 +21,13 @@
     </div>
     <div class="module-actions">
       <div class="order-btns" title="Change the order in the menu">
-        <form method="post" action="/modules/{{ m.name }}/move?dir=up"><button class="icon-btn order" aria-label="Move {{ m.name }} up" {{ 'disabled' if loop.first }}>
+        <form method="post" action="/modules/{{ m.name }}/move?dir=up" class="module-form">{% if auth %}<input type="hidden" name="token" class="token-copy">{% endif %}<button class="icon-btn order" aria-label="Move {{ m.name }} up" {{ 'disabled' if loop.first }}>
           <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 15l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></form>
-        <form method="post" action="/modules/{{ m.name }}/move?dir=down"><button class="icon-btn order" aria-label="Move {{ m.name }} down" {{ 'disabled' if loop.last }}>
+        <form method="post" action="/modules/{{ m.name }}/move?dir=down" class="module-form">{% if auth %}<input type="hidden" name="token" class="token-copy">{% endif %}<button class="icon-btn order" aria-label="Move {{ m.name }} down" {{ 'disabled' if loop.last }}>
           <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></form>
       </div>
-      {% if m.available and m.collectors %}<form method="post" action="/modules/{{ m.name }}/run"><button class="btn btn-outline">Run collectors now</button></form>{% endif %}
-      <form method="post" action="/modules/{{ m.name }}/toggle">
+      {% if m.available and m.collectors and m.name in running_mods %}<span class="badge badge-info running-badge">running…</span>{% elif m.available and m.collectors %}<form method="post" action="/modules/{{ m.name }}/run" class="module-form">{% if auth %}<input type="hidden" name="token" class="token-copy">{% endif %}<button class="btn btn-outline">Run collectors now</button></form>{% endif %}
+      <form method="post" action="/modules/{{ m.name }}/toggle" class="module-form">{% if auth %}<input type="hidden" name="token" class="token-copy">{% endif %}
         <button class="switch {{ 'on' if m.enabled }}" role="switch" aria-checked="{{ 'true' if m.enabled else 'false' }}"
                 title="{{ 'Turn this module off' if m.enabled else 'Turn this module on' }}"><span></span>{{ 'On' if m.enabled else 'Off' }}</button>
       </form>
@@ -71,4 +73,19 @@
   </div>
 </section>
 {% endfor %}
+<script>
+  // The token typed once at the top goes with every button on this page (kept for this tab only).
+  (function () {
+    var t = document.getElementById("modules-token");
+    if (t) { try { t.value = sessionStorage.getItem("vco.modules.token") || ""; } catch (e) {} }
+    document.querySelectorAll("form.module-form").forEach(function (f) {
+      f.addEventListener("submit", function () {
+        var c = f.querySelector(".token-copy");
+        if (c && t) { c.value = t.value; try { sessionStorage.setItem("vco.modules.token", t.value); } catch (e) {} }
+      });
+    });
+    // While collectors run in the background, refresh to show the result.
+    if (document.querySelector(".running-badge")) setTimeout(function () { location.replace("/modules" + location.hash); }, 4000);
+  })();
+</script>
 {% endblock %}

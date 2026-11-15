@@ -98,6 +98,16 @@ html[data-nav-folded~="recent"] #chat-select { display: none; }
 .md pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: 3px; padding: 10px 12px; overflow-x: auto; }
 .md code { background: var(--surface-2); padding: 1px 4px; border-radius: 3px; }
 .md pre code { background: none; padding: 0; }
+.md pre { position: relative; }
+.code-copy { position: absolute; top: 6px; right: 6px; padding: 2px 8px; font: inherit; font-size: 11px; font-weight: 600;
+  color: var(--subtle); background: var(--surface); border: 1px solid var(--border); border-radius: 3px; cursor: pointer; opacity: .75; }
+.md pre:hover .code-copy, .code-copy:focus-visible { opacity: 1; }
+.code-copy:hover { color: var(--primary); border-color: var(--primary); }
+.jump-bottom { position: absolute; left: 50%; top: -34px; transform: translateX(-50%); z-index: 2; padding: 5px 14px;
+  font: inherit; font-size: 12px; font-weight: 600; color: var(--primary); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 999px; box-shadow: 0 2px 8px rgba(0,0,0,.15); cursor: pointer; }
+.jump-bottom:hover { border-color: var(--primary); }
+.jump-bottom[hidden] { display: none; }
 .md table { border-collapse: collapse; margin: 8px 0 12px; font-size: 13px; display: block; overflow-x: auto; }
 .md th, .md td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; vertical-align: top; }
 .md th { background: var(--surface-2); font-weight: 600; }
@@ -457,3 +467,31 @@ body.chart-open { overflow: hidden; }
 .eval-grid .card { min-width: 0; }
 .eval-grid .card-block { overflow-x: auto; }
 .eval-table-wrap .datagrid th { white-space: normal; } .eval-table-wrap .datagrid th, .eval-table-wrap .datagrid td { padding: 8px 10px; }
+
+/* Scheduled prompts page */
+.sched-form { margin-bottom: 16px; }
+.sched-scope { margin: 0; }
+.sched-when { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; }
+.sched-when select, .sched-when input { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); color: var(--text); }
+.sched-when .field-err { flex-basis: 100%; }
+.sched-when [hidden] { display: none; }
+.sched-opts { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
+.sched-opts .switch { font-weight: 400; color: var(--text); min-width: 0; }
+.sched-opts .sched-opt-hint { margin: -4px 0 2px 44px; }
+.sched-actions { display: flex; gap: 10px; align-items: center; margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
+.field-err { color: var(--crit); font-size: 12px; margin-top: 3px; }
+.field-err:empty { display: none; }
+.sched-msg { font-size: 12px; }
+.sched-msg.ok { color: var(--subtle); }
+.sched-msg.err { color: var(--crit); }
+.sched-table td { vertical-align: top; white-space: normal; }
+.sched-table td:first-child { min-width: 220px; }
+.sched-table .sched-meta { overflow-wrap: anywhere; }
+.sched-table td.sched-acts { white-space: nowrap; }
+.sched-history > td { padding: 8px 12px; }
+.sched-runs td { white-space: normal; }
+.sched-prompt { font-size: 12px; margin-top: 2px; }
+.sched-meta { font-size: 12px; }
+.sched-err { font-size: 12px; color: var(--crit); margin-top: 2px; max-width: 360px; }
+.sched-history > td { background: var(--surface-2); }
+.sched-runs { font-size: 12px; }

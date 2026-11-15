@@ -97,6 +97,9 @@ class DB:
         with self.conn() as c:
             c.execute("PRAGMA journal_mode=WAL")
             c.executescript(SCHEMA)
+            # 2026-11-14: re-sync at a set day and time (JSON; {} = every interval_hours).
+            if "sync_schedule" not in {r[1] for r in c.execute("PRAGMA table_info(sources)")}:
+                c.execute("ALTER TABLE sources ADD COLUMN sync_schedule TEXT NOT NULL DEFAULT '{}'")
         self._migrate_vec_partition()
 
     def _open(self) -> sqlite3.Connection:
@@ -170,6 +173,7 @@ class DB:
             d = dict(r)
             d["options"] = json.loads(d["options"] or "{}")
             d["examples"] = json.loads(d["examples"] or "[]")
+            d["sync_schedule"] = json.loads(d.get("sync_schedule") or "{}")
             d["enabled"] = bool(d["enabled"])
             d["status"] = d["status"] or "never"
             out.append(d)
@@ -181,17 +185,22 @@ class DB:
     def upsert_source(self, src: dict[str, Any]) -> None:
         with self.conn() as c:
             pos = c.execute("SELECT COALESCE(MAX(position), 0) + 1 FROM sources").fetchone()[0]
-            c.execute("""INSERT INTO sources(name, plugin, title, enabled, interval_hours, options, examples, origin, position)
-                         VALUES(:name, :plugin, :title, :enabled, :interval_hours, :options, :examples, :origin, :position)
+            # sync_schedule None (not given) keeps the saved one on an update.
+            c.execute("""INSERT INTO sources(name, plugin, title, enabled, interval_hours, options, examples, origin, position,
+                                             sync_schedule)
+                         VALUES(:name, :plugin, :title, :enabled, :interval_hours, :options, :examples, :origin, :position,
+                                COALESCE(:sync_schedule, '{}'))
                          ON CONFLICT(name) DO UPDATE SET plugin=excluded.plugin, title=excluded.title,
                            enabled=excluded.enabled, interval_hours=excluded.interval_hours,
-                           options=excluded.options, examples=excluded.examples""",
+                           options=excluded.options, examples=excluded.examples,
+                           sync_schedule=COALESCE(:sync_schedule, sources.sync_schedule)""",
                       {"name": src["name"], "plugin": src["plugin"], "title": src.get("title") or src["name"],
                        "enabled": 1 if src.get("enabled", True) else 0,
                        "interval_hours": (lambda v: 24.0 if v in (None, "") else max(0.0, float(v)))(src.get("interval_hours")),
                        "options": json.dumps(src.get("options") or {}),
                        "examples": json.dumps(src.get("examples") or []),
-                       "origin": src.get("origin", "ui"), "position": pos})
+                       "origin": src.get("origin", "ui"), "position": pos,
+                       "sync_schedule": None if src.get("sync_schedule") is None else json.dumps(src["sync_schedule"])})
 
     def set_source_enabled(self, name: str, enabled: bool) -> None:
         with self.conn() as c:

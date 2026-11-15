@@ -13,11 +13,12 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
+from datetime import datetime, timezone
 from typing import Any
 
 from .db import DB
 
-NOUN = r"(blog\s*posts?|blogs?|posts?|articles?|pages?|documents?|docs|entries|write-?ups)"
+NOUN = r"(blog\s*posts?|blogs?|posts?|tweets?|articles?|pages?|documents?|docs|entries|write-?ups)"
 OVERVIEW = re.compile("|".join([
     rf"\bhow\s+many\s+(\w+\s+){{0,2}}{NOUN}\b",
     rf"\b(count|number\s+of)\s+(\w+\s+){{0,2}}{NOUN}\b",
@@ -45,7 +46,13 @@ def is_overview_question(question: str) -> bool:
     return bool(OVERVIEW.search(question or ""))
 
 
-def _docs(db: DB, source: str) -> list[dict[str, Any]]:
+# Short posts (X posts) go into the catalog whole: date and time, account, the complete text.
+# The text is the part of the document between its "Account:" line and its counts / link.
+X_POST_TEXT = re.compile(r"^Account: [^\n]*\n\n(.*?)\n\n(?:(?:Likes|Reposts|Replies|Quotes|Views) [^\n]*\n\n)?Link: ", re.S | re.M)
+FULL_TEXT_PLUGINS = {"x-posts"}
+
+
+def _docs(db: DB, source: str, plugin: str = "") -> list[dict[str, Any]]:
     with db.conn() as c:
         rows = c.execute("SELECT id, doc_id, title, path, url, meta, text FROM documents WHERE source=?", (source,)).fetchall()
     out = []
@@ -57,10 +64,21 @@ def _docs(db: DB, source: str) -> list[dict[str, Any]]:
         date = str(meta.get("published") or meta.get("date") or "")[:10]
         heads = [h.strip("# ").strip() for h in HEADING.findall(r["text"] or "")]
         heads = [h for h in heads if h and h.lower() not in ("metadata", "contents", "table of contents")]
-        out.append({"row": r["id"], "doc_id": r["doc_id"], "title": (r["title"] or r["doc_id"]).strip(),
-                    "path": r["path"] or "", "url": r["url"] or "", "date": date, "heads": heads,
-                    "post": not NOT_POST.search((r["path"] or r["doc_id"] or "").split("?")[0])})
-    out.sort(key=lambda d: (d["date"] or "0000", d["title"]), reverse=True)  # newest first
+        d = {"row": r["id"], "doc_id": r["doc_id"], "title": (r["title"] or r["doc_id"]).strip(),
+             "path": r["path"] or "", "url": r["url"] or "", "date": date, "heads": heads,
+             "post": not NOT_POST.search((r["path"] or r["doc_id"] or "").split("?")[0]), "sort": date}
+        if plugin in FULL_TEXT_PLUGINS:
+            m = X_POST_TEXT.search(r["text"] or "")
+            if m:
+                d["heads"] = []
+                d["full"] = re.sub(r"\s*\n\s*", " / ", m.group(1).strip())     # one line; " / " marks a line break
+                d["author"] = str(meta.get("author") or "")
+                when = str(meta.get("created_at") or "")
+                if len(when) >= 16:
+                    d["date"] = when[:16].replace("T", " ") + " UTC"
+                    d["sort"] = when
+        out.append(d)
+    out.sort(key=lambda d: (d["sort"] or "0000", d["title"]), reverse=True)  # newest first
     return out
 
 
@@ -82,6 +100,8 @@ def _words(titles: list[str]) -> list[tuple[str, int]]:
 
 
 def _line(d: dict[str, Any], level: int) -> str:
+    if d.get("full"):
+        return f"- {d['date']} | {d['author']} | {d['full']}" + (f" | {d['url']}" if d.get("url") else "")
     s = f"- {d['date'] or 'undated'} | {d['title']}"
     if level >= 2 and d["heads"]:
         s += " — " + "; ".join(h[:60] for h in d["heads"][:5])
@@ -97,7 +117,7 @@ def build(db: DB, cfg: dict[str, Any], sources: list[str] | None) -> dict[str, A
             if s["enabled"] and s["plugin"] != "spreadsheet" and (sources is None or s["name"] in sources)]
     cats = []
     for s in srcs:
-        docs = _docs(db, s["name"])
+        docs = _docs(db, s["name"], s["plugin"])
         if not docs:
             continue
         posts = [d for d in docs if d["post"]]
@@ -165,18 +185,30 @@ def block(c: dict[str, Any], n: int) -> str:
     head = "Every post, newest first (date | title" + (" — section headings" if c["level"] >= 2 else "") + " | url):"
     if c["shown"] < len(c["posts"]):
         head = f"The newest {c['shown']} of {len(c['posts'])} posts (the rest did not fit), newest first (date | title | url):"
+    if any(d.get("full") for d in c["posts"]):
+        lines.append("- Now: " + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+                     + " (use it for \"last 24 hours\", \"today\" and similar)")
+        head = ("Every post, newest first (date and time | account | COMPLETE post text, \" / \" = line break | link):"
+                if c["shown"] >= len(c["posts"]) else
+                f"The newest {c['shown']} of {len(c['posts'])} posts (the rest did not fit), newest first "
+                "(date and time | account | COMPLETE post text, \" / \" = line break | link):")
     lines.append(head)
     lines += [_line(d, c["level"]) for d in c["posts"][: c["shown"]]]
     return "\n".join(lines)
 
 
 def instructions(cat: dict[str, Any]) -> str:
+    full = any(d.get("full") for c in cat.get("catalogs") or [] for d in c["posts"])
+    extra = (" Post lines that show a COMPLETE post text are the whole post: when asked to show posts, copy that text "
+             "in full, word for word (turn \" / \" back into line breaks); never shorten it or add \"…\". Pick posts "
+             "for a time window by their date and time compared with Now, and give each post's link exactly as shown."
+             if full else "")
     return ("The catalog source(s) above list every indexed post of the selected source(s), with exact counts "
             "made by Ask. Use those counts as given (do not recount the list). For topic and summary questions, "
             "group the posts into themes from their titles and headings and say roughly how many posts each "
             "theme has; give examples by title. Cite the catalog as its source number. Other numbered sources, "
             "if any, are excerpts of the best matching posts. If a post you would need is not in the catalog, "
-            "say that the knowledge base does not include it.")
+            "say that the knowledge base does not include it." + extra)
 
 
 def card(c: dict[str, Any], n: int) -> dict[str, Any]:

@@ -85,6 +85,38 @@
     return e;
   }
 
+  // Clipboard: navigator.clipboard needs https or localhost; on a plain http LAN address
+  // fall back to a hidden textarea and execCommand('copy').
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+    return new Promise(function (resolve, reject) {
+      var t = document.createElement('textarea');
+      t.value = text; t.setAttribute('readonly', ''); t.style.position = 'fixed'; t.style.opacity = '0';
+      document.body.appendChild(t); t.select();
+      try { document.execCommand('copy') ? resolve() : reject(new Error('copy failed')); } catch (e) { reject(e); }
+      t.remove();
+    });
+  }
+  function flash(btn, label) {
+    btn.textContent = 'Copied';
+    setTimeout(function () { btn.textContent = label; }, 1500);
+  }
+
+  // A Copy button on every code block of an answer.
+  function addCodeCopy(target) {
+    target.querySelectorAll('pre').forEach(function (pre) {
+      if (pre.querySelector('.code-copy')) return;
+      var code = pre.querySelector('code') || pre;
+      var b = el('button', 'code-copy', 'Copy');
+      b.type = 'button';
+      b.setAttribute('aria-label', 'Copy this code');
+      b.addEventListener('click', function () {
+        copyText(code.textContent).then(function () { flash(b, 'Copy'); }, function () { b.textContent = 'Copy failed'; });
+      });
+      pre.appendChild(b);
+    });
+  }
+
   // [2] or [1, 3] in the answer become links to the matching source card.
   function renderMarkdown(target, md, prefix) {
     var withCites = md.replace(/\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\](?!\()/g, function (_, nums) {
@@ -95,6 +127,7 @@
     });
     target.innerHTML = DOMPurify.sanitize(marked.parse(withCites), { ADD_ATTR: ['data-n'] });
     target.querySelectorAll('a[href^="http"]').forEach(function (a) { a.target = '_blank'; a.rel = 'noopener'; });
+    addCodeCopy(target);
   }
 
   function statusBadge(status) {
@@ -345,7 +378,7 @@
       if (s.truncated) card.appendChild(el('div', 'subtle', 'The first ' + s.rows.length + ' rows are shown (the query limit).'));
     }
     var copy = el('button', 'link-btn', 'Copy SQL'); copy.type = 'button';
-    copy.onclick = function () { try { navigator.clipboard.writeText(s.sql); copy.textContent = 'Copied'; } catch (e) {} };
+    copy.onclick = function () { copyText(s.sql).then(function () { flash(copy, 'Copy SQL'); }, function () {}); };
     var links = el('div', 'src-links'); links.appendChild(copy);
     if (s.columns && s.columns.length && s.rows && s.rows.length) {
       var dl = el('button', 'link-btn', 'Download CSV'); dl.type = 'button';
@@ -631,10 +664,7 @@
     container.appendChild(el('span', null, parts.join(' · ')));
     var copy = el('button', 'link-btn', 'Copy answer');
     copy.type = 'button';
-    copy.onclick = function () {
-      try { navigator.clipboard.writeText(m.content || ''); copy.textContent = 'Copied'; } catch (e) {}
-      setTimeout(function () { copy.textContent = 'Copy answer'; }, 1500);
-    };
+    copy.onclick = function () { copyText(m.content || '').then(function () { flash(copy, 'Copy answer'); }, function () {}); };
     container.appendChild(copy);
   }
 
@@ -680,12 +710,25 @@
   var follow = true;
   window.addEventListener('wheel', function (e) { if (e.deltaY < 0) follow = false; }, { passive: true });
   window.addEventListener('touchmove', function () { follow = false; }, { passive: true });
+  // "Jump to latest": shown while the reader is scrolled up and there is more below.
+  var jump = el('button', 'jump-bottom', 'Jump to latest');
+  jump.type = 'button'; jump.hidden = true;
+  jump.setAttribute('aria-label', 'Jump to the latest message');
+  jump.addEventListener('click', function () { scrollDown(true); jump.hidden = true; });
+  var composerBox = document.querySelector('.composer');
+  if (composerBox) composerBox.appendChild(jump);
+  function updateJump() {
+    var below = document.body.scrollHeight - (window.innerHeight + window.scrollY);
+    jump.hidden = follow || below < 200;
+  }
   window.addEventListener('scroll', function () {
     if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 80) follow = true;
+    updateJump();
   }, { passive: true });
   function scrollDown(force) {
     if (force) follow = true;
     if (follow) window.scrollTo(0, document.body.scrollHeight);
+    updateJump();
   }
 
   function busy(on) {
@@ -722,10 +765,27 @@
     busy(true);
     controller = new AbortController();
     var content = '', thinking = '', meta = {}, pending = false, isNew = !chatId;
-    function paint() {
+    // Streaming render: markdown is parsed again over the whole answer, so do it at most
+    // every 100 ms (plus a last time on done), and scroll in the same frame as the render.
+    var lastPaint = 0, timer = 0;
+    function cancelPaint() {
       pending = false;
+      if (timer) { clearTimeout(timer); timer = 0; }
+    }
+    function paint() {
+      cancelPaint();
+      lastPaint = performance.now();
       renderMarkdown(a.text, content || '', a.prefix);
       if (thinking) a.thinkPre.textContent = thinking;
+      scrollDown();
+    }
+    function schedulePaint() {
+      if (pending) return;
+      pending = true;
+      timer = setTimeout(function () {
+        timer = 0;
+        requestAnimationFrame(function () { if (pending) paint(); });
+      }, Math.max(0, 100 - (performance.now() - lastPaint)));
     }
     try {
       var res = await fetch('/ui/chat', {
@@ -794,27 +854,29 @@
             }
           } else if (ev === 'thinking') {
             thinking += payload; a.thinking.hidden = false;
-            if (!pending) { pending = true; requestAnimationFrame(paint); }
+            schedulePaint();
           } else if (ev === 'token') {
             content += payload;
-            if (!pending) { pending = true; requestAnimationFrame(paint); }
+            schedulePaint();
           } else if (ev === 'done') {
             paint();
             statsLine(a.stats, { model: payload.model, stats: payload.stats, content: content });
           } else if (ev === 'error') {
+            cancelPaint();
             if (payload.chat_id && !chatId) chatId = payload.chat_id;
             a.row.classList.add('failed');
             a.text.innerHTML = '';
             a.text.appendChild(el('div', 'alert alert-danger', payload.message));
           }
         }
-        scrollDown();
+        if (!pending) scrollDown();   // a pending render scrolls when it paints
       }
     } catch (e) {
       if (e.name === 'AbortError') {
         paint();
         a.stats.textContent = 'Stopped';
       } else {
+        cancelPaint();
         a.row.classList.add('failed');
         a.text.innerHTML = '';
         a.text.appendChild(el('div', 'alert alert-danger', 'Request failed: ' + e.message));

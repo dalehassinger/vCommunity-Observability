@@ -5,6 +5,7 @@
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -76,10 +77,35 @@ assert client.get("/api/github-status/components", headers=auth).status_code == 
 assert client.get("/dash/github-status/status").status_code == 404
 assert "GitHub Status" not in client.get("/overview").text
 assert core.storage.module_states()["github-status"] is False
+# Modules page buttons: the token is needed when tokens exist, and other sites are refused.
 r = client.post("/modules/github-status/toggle", follow_redirects=False)
+assert r.status_code == 303 and "valid+API+token" in r.headers["location"] and not core.modules["github-status"].enabled, r.headers
+r = client.post("/modules/github-status/toggle", data={"token": "test-token"}, follow_redirects=False,
+                headers={"Origin": "http://evil.example"})
+assert r.status_code == 403 and not core.modules["github-status"].enabled, r.status_code
+r = client.post("/modules/github-status/toggle", data={"token": "test-token"}, follow_redirects=False,
+                headers={"Sec-Fetch-Site": "cross-site"})
+assert r.status_code == 403 and not core.modules["github-status"].enabled, r.status_code
+r = client.post("/modules/github-status/toggle", data={"token": "test-token"}, follow_redirects=False,
+                headers={"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"})
 assert r.status_code == 303 and core.modules["github-status"].enabled
 assert client.get("/api/github-status/components", headers=auth).status_code == 200
 print("  module on/off: ok")
+# Run collectors now: runs in the background, one run per collector at a time.
+gh = core.modules["github-status"]
+c0 = gh.collectors[0]
+lock = core._run_locks.setdefault((gh.name, c0.name), __import__("threading").Lock())
+lock.acquire()
+assert core.run_one(gh, c0)["status"] == "running", "a second run of the same collector must be skipped"
+lock.release()
+r = client.post("/modules/github-status/run", data={"token": "test-token"}, follow_redirects=False)
+assert r.status_code == 303 and "collectors+started" in r.headers["location"], r.headers
+for _ in range(300):
+    if not core.running:
+        break
+    time.sleep(0.1)
+assert not core.running and "running-badge\">" not in client.get("/modules").text
+print("  run in background + collector lock: ok")
 # Home: "/" opens DBH Insights; with dbh-insights off it falls back to All dashboards.
 r = client.get("/", follow_redirects=False)
 assert r.status_code == 302 and r.headers["location"] == "/dash/dbh-insights/insights", r.headers
@@ -91,6 +117,8 @@ print("  home: ok")
 # Module order: move down/up and set via API; the sidebar follows it.
 names = list(core.modules)
 client.post(f"/modules/{names[0]}/move?dir=down", follow_redirects=False)
+assert list(core.modules) == names, "move without a token must not change the order"
+client.post(f"/modules/{names[0]}/move?dir=down", data={"token": "test-token"}, follow_redirects=False)
 assert list(core.modules)[:2] == [names[1], names[0]], list(core.modules)
 r = client.put("/api/core/modules/order", headers=auth, json=["github-status", "vcenter-inventory"])
 assert r.status_code == 200 and r.json()["order"][:2] == ["github-status", "vcenter-inventory"], r.text
@@ -111,7 +139,12 @@ for tname, tdef in dbh_sheets.manifest_tables().items():
     assert mod.tables[tname]["indexes"] == tdef.get("indexes", []), f"module.yaml indexes out of date for {tname}: run python sheets.py --tables"
 status = core.storage.query("dbh-insights", "SELECT sheet, row_count, error FROM sheets")
 assert len(status) == 28 and not [s for s in status if s["error"]], status
-r = client.get("/export/dbh-insights/xlsx")
+# UI download link: open to our own pages, a token for anything else (scripts, other sites).
+assert client.get("/export/dbh-insights/xlsx").status_code == 401
+assert client.get("/export/dbh-insights/xlsx", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 401
+assert client.get("/export/dbh-insights/xlsx", headers={"Referer": "http://testserver/dash/dbh-insights/insights"}).status_code == 200
+assert client.get("/export/dbh-insights/xlsx", headers=auth).status_code == 200
+r = client.get("/export/dbh-insights/xlsx", headers={"Sec-Fetch-Site": "same-origin"})
 assert r.status_code == 200 and r.headers["content-type"].startswith("application/vnd.openxml"), r.text[:300]
 assert "attachment; filename=\"dbh-insights-" in r.headers["content-disposition"]
 z = zipfile.ZipFile(io.BytesIO(r.content))
@@ -294,7 +327,7 @@ r = client.post("/settings/apps", data={"ask": "1", "token": "test-token"}, foll
 assert r.status_code == 303 and not ctl.is_on("observability") and ctl.is_on("ask")
 assert "is paused" in client.get("/overview").text
 assert core.run_module(next(m for m in core.modules.values() if m.available)) == []
-r = client.post(f"/modules/{next(m.name for m in core.modules.values() if m.available)}/run", follow_redirects=False)
+r = client.post(f"/modules/{next(m.name for m in core.modules.values() if m.available)}/run", data={"token": "test-token"}, follow_redirects=False)
 assert r.status_code == 303 and "where=apps" in r.headers["location"]
 r = client.put("/api/core/apps/ask?on=false", headers=auth)
 assert r.status_code == 200 and not ctl.is_on("ask")
@@ -379,6 +412,33 @@ if "logs" in runnable:
         assert client.put("/ui/logs/settings", json={"retention_days": 999}, headers=auth).status_code == 400
         assert client.put("/ui/logs/settings", json={"retention_days": 5, "max_size_gb": 5}, headers=auth).json()["ok"]
         assert client.get("/perf/container").json()["logs"]["per_hour"] == 5
+        # Email for other apps (Ask scheduled prompts) through the Logs mail server.
+        import base64 as _b64
+        import email as _email
+        sys.path.insert(0, str(root / "scripts"))
+        import fake_smtp  # noqa: E402
+        mail_dir = Path(tempfile.mkdtemp()) / "mail"
+        smtp = fake_smtp.serve(2526, mail_dir)
+        try:
+            msg = {"to": "a@example.com, b@example.com", "subject": "Weekly", "text": "plain", "html": "<p>html</p>",
+                   "attachments": [{"filename": "r.html", "content_type": "text/html",
+                                    "data_base64": _b64.b64encode(b"<html>r</html>").decode()}], "sender_name": "vCommunity Ask"}
+            assert client.post("/api/logs/notify/email", json=msg).status_code == 401, "needs the token"
+            r = client.post("/api/logs/notify/email", json=msg, headers=auth)
+            assert r.status_code == 400 and "no mail server" in r.json()["detail"], r.text
+            client.put("/ui/logs/settings", json={"smtp_host": "127.0.0.1", "smtp_port": 2526, "smtp_security": "none",
+                                                  "smtp_from": "vco@example.com"}, headers=auth)
+            assert client.post("/api/logs/notify/email", json={**msg, "to": "nope"}, headers=auth).status_code == 400
+            r = client.post("/api/logs/notify/email", json=msg, headers=auth)
+            assert r.status_code == 200 and r.json()["ok"], r.text
+            sent = _email.message_from_bytes(sorted(mail_dir.glob("*.eml"))[-1].read_bytes())
+            assert sent["Subject"] == "Weekly" and "vCommunity Ask <vco@example.com>" in sent["From"], dict(sent)
+            parts = {p.get_content_type(): p for p in sent.walk()}
+            assert "text/plain" in parts and "text/html" in parts
+            assert any(p.get_filename() == "r.html" for p in sent.walk())
+        finally:
+            smtp.shutdown()
+        print("  logs: send email for other apps: ok")
     finally:
         core.services.stop()
     print("  logs: ok")

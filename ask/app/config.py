@@ -70,6 +70,8 @@ SETTINGS: dict[str, dict[str, Any]] = {
     "mcp_max_rounds":   {"default": 6, "type": "int"},
     "mcp_result_chars": {"default": 16000, "type": "int"},
     "observability_url": {"default": "", "env": "ASK_OBSERVABILITY_URL", "type": "str"},
+    # The address people open Ask on; scheduled-prompt emails link to it ("Open in Ask").
+    "public_url":       {"default": "http://localhost:8081", "env": "ASK_PUBLIC_URL", "type": "str"},
     # Activity log: prompts, the model's thinking, tool calls and answers sent as syslog to the
     # Logs module (app vcommunity-ask). tcp://vco:5514 is the vco container on the compose network.
     "activity_log":          {"default": True, "env": "ASK_ACTIVITY_LOG", "type": "bool"},

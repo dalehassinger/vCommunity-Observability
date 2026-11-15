@@ -125,17 +125,27 @@ def register(app, ctx) -> None:
             now = time.time()
             settings = logstore.load_settings(c)
             quiet = float(settings.get("silent_minutes") or 15) * 60
+            # Three statements for any number of sources (was four per source):
+            # 1. first/last seen per source, plus the IP of its newest message (index on host, ts);
+            # 2. one pass over the last 24 h, grouped by source and app (counts, errors, top apps).
+            day = now - 86400
+            n24: dict[Any, int] = {}
+            err24: dict[Any, int] = {}
+            app_counts: dict[Any, list[tuple[int, str]]] = {}
+            for r in c.execute("SELECT host, app, COUNT(*), SUM(CASE WHEN severity <= 3 THEN 1 ELSE 0 END) "
+                               "FROM logs WHERE ts >= ? GROUP BY host, app", (day,)):
+                n24[r[0]] = n24.get(r[0], 0) + r[2]
+                err24[r[0]] = err24.get(r[0], 0) + (r[3] or 0)
+                if r[1] is not None:
+                    app_counts.setdefault(r[0], []).append((r[2], r[1]))
             rows = []
-            for r in c.execute("SELECT host, MAX(ts) AS last_seen, MIN(ts) AS first_seen FROM logs GROUP BY host"):
-                n24 = c.execute("SELECT COUNT(*) FROM logs WHERE host = ? AND ts >= ?", (r["host"], now - 86400)).fetchone()[0]
-                err24 = c.execute("SELECT COUNT(*) FROM logs WHERE host = ? AND ts >= ? AND severity <= 3",
-                                  (r["host"], now - 86400)).fetchone()[0]
-                ip = c.execute("SELECT ip FROM logs WHERE host = ? ORDER BY id DESC LIMIT 1", (r["host"],)).fetchone()
-                apps = [a[0] for a in c.execute(
-                    "SELECT app FROM logs WHERE host = ? AND ts >= ? AND app IS NOT NULL GROUP BY app ORDER BY COUNT(*) DESC LIMIT 6",
-                    (r["host"], now - 86400))]
-                rows.append({"host": r["host"], "ip": ip[0] if ip else None, "apps": apps, "last_seen": r["last_seen"],
-                             "first_seen": r["first_seen"], "messages_24h": n24, "errors_24h": err24,
+            for r in c.execute("SELECT host, MAX(ts) AS last_seen, MIN(ts) AS first_seen, "
+                               "(SELECT ip FROM logs l2 WHERE l2.host = l.host ORDER BY ts DESC, id DESC LIMIT 1) AS ip "
+                               "FROM logs l GROUP BY host"):
+                apps = [a for _, a in sorted(app_counts.get(r["host"], []), key=lambda x: -x[0])[:6]]
+                rows.append({"host": r["host"], "ip": r["ip"], "apps": apps, "last_seen": r["last_seen"],
+                             "first_seen": r["first_seen"], "messages_24h": n24.get(r["host"], 0),
+                             "errors_24h": err24.get(r["host"], 0),
                              "quiet": now - r["last_seen"] > quiet})
         finally:
             c.close()
@@ -442,6 +452,39 @@ def register(app, ctx) -> None:
 
     # -- REST API for MP Builder and scripts -------------------------------------------
     tok = [Depends(ctx.require_token)]
+
+    @app.post("/api/logs/notify/email", tags=["logs"], dependencies=tok,
+              summary="Send an email through the mail server set on Log alerts → Notifications "
+                      "(used by vCommunity Ask scheduled prompts)")
+    def api_send_email(body: dict = Body(..., examples=[{"to": ["you@example.com"], "subject": "Hello",
+                                                         "text": "Plain text", "html": "<p>HTML</p>"}])):
+        """Body: to (list or comma-separated), subject, text, optional html, optional
+        attachments [{filename, content_type, data_base64}], optional sender_name."""
+        import base64
+        import binascii
+        c = con()
+        try:
+            settings = logstore.load_settings(c)
+        finally:
+            c.close()
+        to = body.get("to") or []
+        if isinstance(to, str):
+            to = to.replace(";", ",").split(",")
+        try:
+            files = [{"filename": str(a.get("filename") or "attachment"), "content_type": str(a.get("content_type") or ""),
+                      "data": base64.b64decode(a.get("data_base64") or "", validate=True)}
+                     for a in body.get("attachments") or []]
+        except (binascii.Error, AttributeError, TypeError):
+            raise HTTPException(400, "attachments need data_base64 (base64 text)")
+        try:
+            result = notify.send_message(settings, [str(t) for t in to], str(body.get("subject") or "(no subject)"),
+                                         str(body.get("text") or ""), str(body.get("html") or ""), files,
+                                         str(body.get("sender_name") or "")[:60])
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:  # noqa: BLE001 - SMTP / network errors go back to the caller
+            raise HTTPException(502, f"the mail server refused or could not be reached: {str(e)[:300]}")
+        return {"ok": True, "result": result}
     app.add_api_route("/api/logs/search", search, methods=["GET"], tags=["logs"], dependencies=tok,
                       summary="Search syslog messages (q uses the Logs page search language; range 15m/1h/6h/24h/3d/7d or since/until epoch)")
     app.add_api_route("/api/logs/summary", summary, methods=["GET"], tags=["logs"], dependencies=tok,

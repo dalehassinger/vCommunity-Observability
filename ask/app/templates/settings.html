@@ -126,6 +126,11 @@
       <div class="field"><label for="s-observability_url">Observability URL{% if 'observability_url' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><input type="text" id="s-observability_url" data-key="observability_url" value="{{ settings.observability_url }}" placeholder="http://localhost:8080">
           <div class="hint">Adds a sidebar link back to the vCommunity-Observability dashboards.</div></div></div>
+      <div class="field"><label for="s-public_url">Ask address{% if 'public_url' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><input type="text" id="s-public_url" data-key="public_url" value="{{ settings.public_url }}" placeholder="http://localhost:8081">
+          <div class="hint">The address you open Ask on. <a href="/schedules">Scheduled prompt</a> emails use it for their <b>Open in Ask</b> and source links When it says <code>localhost</code>, the emails use the Mac's current IP address instead (from the
+            <a href="/performance">host agent</a>, read at each run), so the links work from other computers and follow the laptop to a new network.
+            A name such as <code>http://dales-mac.local:8081</code> is used as it is.</div></div></div>
       <div class="field"><label for="s-web_search">Web search (Ollama){% if 'web_search' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><label class="switch"><input type="checkbox" role="switch" id="s-web_search" data-key="web_search" {{ 'checked' if settings.web_search else '' }}><span></span>On</label>
           <div class="hint">Adds <b>Web search (Ollama)</b> to the chat's Sources menu: the model may call <code>web_search</code> and <code>web_fetch</code>

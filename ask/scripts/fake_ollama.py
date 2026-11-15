@@ -180,6 +180,11 @@ class H(BaseHTTPRequestHandler):
                 text = "\n".join(lines)
             else:
                 text = "The sources do not cover this question."
+            # Test hooks for the chat page: "code" adds a code block, "long" makes a long answer.
+            if "code" in q.lower():
+                text += "\n\n```powershell\nGet-VM | Select-Object Name, PowerState\n```"
+            if "long" in q.lower():
+                text += "".join(f"\n\nParagraph {i} of a long stand-in answer." for i in range(120))
             self.send_response(200)
             self.send_header("Content-Type", "application/x-ndjson")
             self.end_headers()
