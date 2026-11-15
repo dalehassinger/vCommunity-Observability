@@ -4,12 +4,14 @@ Each schedule has sources (the same Sources pick as the chat), a prompt, an opti
 a schedule (daily, weekdays, weekly, monthly, or every N hours, in a time zone) and email
 recipients. At run time the prompt is answered exactly like a chat (rag.answer, saved as a
 chat named "Scheduled: <name> · <date>"), and the answer is emailed as HTML with its sources,
-an "Open in Ask" link and the HTML report attached when the answer made one.
+an "Open in Ask" link and the HTML report attached when the answer made one. It can also
+(or instead) be posted to the chat webhook set there (Discord, Slack, ...).
 
 Email goes through the mail server set up in the dashboards container (Log alerts →
 Notifications) by calling its token-protected POST /api/logs/notify/email. Ask never sees
 the SMTP password. Settings: ASK_VCO_INTERNAL_URL (default http://vco:8080) and the token in
 ASK_VCO_TOKEN, else VCO_API_TOKEN_MPBUILDER (both containers read the same .env).
+The webhook goes the same way (POST /api/logs/notify/webhook), so Ask never stores its URL.
 """
 from __future__ import annotations
 
@@ -48,6 +50,7 @@ CREATE TABLE IF NOT EXISTS schedules (
   only_changed INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1,
   include_prompt INTEGER NOT NULL DEFAULT 1, include_sources INTEGER NOT NULL DEFAULT 1,
   avoid_repeats INTEGER NOT NULL DEFAULT 0,
+  send_email INTEGER NOT NULL DEFAULT 1, send_webhook INTEGER NOT NULL DEFAULT 0,
   created REAL NOT NULL, updated REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS schedule_runs (
   id INTEGER PRIMARY KEY, schedule INTEGER NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
@@ -154,10 +157,16 @@ def clean(body: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
     s["scope"] = s["scope"].strip() or "all"
     s["model"] = str(body.get("model") or "").strip()
     clean_when(body, s, errors)
+    for k, default in (("send_email", True), ("send_webhook", False)):
+        v = body.get(k, default)
+        s[k] = 1 if (v is True or str(v).lower() in ("1", "true", "on", "yes")) else 0
+    if not s["send_email"] and not s["send_webhook"]:
+        errors["send_to"] = "Pick Email, Webhook or both."
     to = recipients(body.get("recipients"))
     bad = [a for a in to if not EMAIL_RE.match(a)]
     if not to:
-        errors["recipients"] = "Add at least one email address."
+        if s["send_email"]:
+            errors["recipients"] = "Add at least one email address."
     elif bad:
         errors["recipients"] = "Not an email address: " + ", ".join(bad)
     elif len(to) > 20:
@@ -345,6 +354,36 @@ def build_email(s: dict[str, Any], result: dict[str, Any], *, public: str, when:
     return subject, "\n".join(text), "".join(body)
 
 
+def build_chat(s: dict[str, Any], result: dict[str, Any], *, public: str, when: datetime,
+               model: str, seconds: float) -> tuple[str, str]:
+    """(title, markdown text) for the chat webhook: the same parts as the email, as one
+    Markdown message (Discord and Slack show **bold** and links)."""
+    failed = bool(result.get("error"))
+    title = f"[Ask] {s['name']}: {'failed ' if failed else ''}{when.strftime('%Y-%m-%d')}"
+    chat_url = f"{public.rstrip('/')}/chat/{result['chat_id']}" if public and result.get("chat_id") else ""
+    answer = result.get("answer") or ""
+    if not s.get("include_sources", 1):
+        answer = CITATION_RE.sub("", answer)
+    lines = [f"**{s['name']}** · {when.strftime('%Y-%m-%d %H:%M %Z')} · {model} · {seconds:.0f} s"]
+    if failed or s.get("include_prompt", 1):
+        lines.append(f"> {s['prompt'][:300]}")
+    lines.append("")
+    if failed:
+        lines += ["**The scheduled prompt failed.**", str(result["error"])[:1000]]
+    else:
+        if (result.get("stats") or {}).get("no_final_answer"):
+            lines += ["_The model used all its tool turns without writing an answer. This is what it said while it worked._", ""]
+        lines.append(answer.strip() or "_(empty answer)_")
+    srcs = [] if failed or not s.get("include_sources", 1) else source_lines(result.get("sources") or [], public)
+    if srcs:
+        lines += ["", "**Sources**"] + [f"[{x['n']}] {x['title']}" + (f" <{x['url']}>" if x["url"] else "") for x in srcs[:10]]
+        if len(srcs) > 10:
+            lines.append(f"… and {len(srcs) - 10} more")
+    if chat_url:
+        lines += ["", f"Open in Ask: <{chat_url}>"]
+    return title, "\n".join(lines)
+
+
 # "[1]", "[2, 3]" citations (not "[1](link)" markdown links), with the space before them.
 CITATION_RE = re.compile(r"[ \t]*\[\d+(?:\s*,\s*\d+)*\](?!\()")
 
@@ -393,6 +432,30 @@ class Mailer:
             raise RuntimeError(f"Email not sent: {detail}")
         return r.json().get("result") or "email sent"
 
+    def webhook(self, title: str, text: str) -> str:
+        """Post to the webhook set on Log alerts → Notifications."""
+        tok = self.token()
+        try:
+            r = requests.post(f"{self.url}/api/logs/notify/webhook", timeout=90,
+                              headers={"Authorization": f"Bearer {tok}"} if tok else {},
+                              json={"title": title, "text": text, "username": "vCommunity Ask"})
+        except requests.RequestException as e:
+            raise RuntimeError(f"vCommunity Observability is not reachable at {self.url} ({type(e).__name__}). "
+                               "The webhook is sent through it, so the vco container must be running.") from None
+        if r.status_code == 401:
+            raise RuntimeError("vCommunity Observability refused the API token. Put the dashboards token in .env "
+                               "as VCO_API_TOKEN_MPBUILDER (or ASK_VCO_TOKEN) and restart vco-ask.")
+        if r.status_code == 404:
+            raise RuntimeError("The Logs module is switched off (or too old) in vCommunity Observability; "
+                               "it holds the webhook. Turn it on on the Modules page and rebuild vco if it is old.")
+        if r.status_code >= 400:
+            try:
+                detail = r.json().get("detail")
+            except ValueError:
+                detail = r.text[:300]
+            raise RuntimeError(f"Webhook not sent: {detail}")
+        return r.json().get("result") or "webhook sent"
+
 
 class Schedules:
     def __init__(self, db: DB, settings: Callable[[], dict[str, Any]], split_scope: Callable[[Any], tuple],
@@ -412,6 +475,11 @@ class Schedules:
             # 2026-11-15: "Don't repeat recent answers" (off by default).
             if "avoid_repeats" not in have:
                 c.execute("ALTER TABLE schedules ADD COLUMN avoid_repeats INTEGER NOT NULL DEFAULT 0")
+            # 2026-11-15: send by email and/or the Logs webhook (old schedules: email only).
+            if "send_email" not in have:
+                c.execute("ALTER TABLE schedules ADD COLUMN send_email INTEGER NOT NULL DEFAULT 1")
+            if "send_webhook" not in have:
+                c.execute("ALTER TABLE schedules ADD COLUMN send_webhook INTEGER NOT NULL DEFAULT 0")
 
     # -- storage -------------------------------------------------------------------
     def list(self) -> list[dict[str, Any]]:
@@ -590,14 +658,25 @@ class Schedules:
             if prev and prev[0] == digest:
                 skip, status, email = True, "unchanged", "not sent: the answer has not changed"
         if not skip:
-            subject, text, html_body = build_email(s, result, public=public, when=when, model=cfg["chat_model"], seconds=seconds)
-            files = self._attachments(result) if s["attach_report"] and status == "ok" else []
-            try:
-                email = self.mailer.send(recipients(s["recipients"]), subject, text, html_body, files)
-            except Exception as e:  # noqa: BLE001
-                email = f"not sent: {e}"
-                if status == "ok":
-                    status = "email_failed"
+            sent, failed_any = [], False
+            if s.get("send_email", 1):
+                subject, text, html_body = build_email(s, result, public=public, when=when, model=cfg["chat_model"], seconds=seconds)
+                files = self._attachments(result) if s["attach_report"] and status == "ok" else []
+                try:
+                    sent.append(self.mailer.send(recipients(s["recipients"]), subject, text, html_body, files))
+                except Exception as e:  # noqa: BLE001
+                    sent.append(f"email not sent: {e}" if s.get("send_webhook") else f"not sent: {e}")
+                    failed_any = True
+            if s.get("send_webhook"):
+                title, chat_text = build_chat(s, result, public=public, when=when, model=cfg["chat_model"], seconds=seconds)
+                try:
+                    sent.append(self.mailer.webhook(title, chat_text))
+                except Exception as e:  # noqa: BLE001
+                    sent.append(f"webhook not sent: {e}")
+                    failed_any = True
+            email = "; ".join(sent)
+            if failed_any and status == "ok":
+                status = "email_failed"          # shown as "not sent"
         with self.db.conn() as c:
             c.execute("UPDATE schedule_runs SET finished=?, status=?, chat_id=?, email=?, error=?, answer_hash=?, seconds=? WHERE id=?",
                       (time.time(), status, chat_id, email[:500], err[:1000], digest, round(seconds, 1), rid))

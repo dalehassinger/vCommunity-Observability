@@ -957,6 +957,15 @@ def create_app() -> FastAPI:
             raise HTTPException(502, str(e))
         return {"ok": True, "result": result}
 
+    @app.post("/ui/schedules/test-webhook", include_in_schema=False, dependencies=[Depends(require_admin)])
+    def ui_schedule_test_webhook():
+        try:
+            result = schedules.mailer.webhook("[Ask] Test", "This is a test from **vCommunity Ask**. "
+                                              "Scheduled prompts with Webhook on post their answers here.")
+        except RuntimeError as e:
+            raise HTTPException(502, str(e))
+        return {"ok": True, "result": result}
+
     TAG = ["scheduled prompts"]
 
     @app.get("/api/schedules", tags=TAG, dependencies=[Depends(require_token)])
@@ -972,7 +981,9 @@ def create_app() -> FastAPI:
         """Create a scheduled prompt. scope: "all", source names (comma-separated or a list),
         "web:ollama", "web:brave", "mcp:<server>" or "none". frequency: daily, weekdays, weekly
         (weekday mon..sun), monthly (monthday 1-28 or last) or hours (every_hours). Optional: model,
-        sync_first, attach_report (default true), only_changed, enabled (default true)."""
+        sync_first, attach_report (default true), only_changed, enabled (default true),
+        send_email (default true; recipients needed then) and send_webhook (default false: posts to
+        the webhook on Log alerts → Notifications in vCommunity Observability)."""
         return save_schedule(body)
 
     @app.get("/api/schedules/{sid}", tags=TAG, dependencies=[Depends(require_token)])

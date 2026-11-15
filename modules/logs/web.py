@@ -447,6 +447,9 @@ def register(app, ctx) -> None:
                                           "severity_name": "info", "app": "logs", "message": "This is a test from vCommunity Logs."}],
                  "fired_at_text": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}
         kind = body.get("kind")
+        if kind == "webhook" and isinstance(body.get("webhook_url"), str):
+            # Test what is in the form now, even before Save.
+            settings = dict(settings, webhook_url=body["webhook_url"].strip())
         result = notify.notify(settings, event, kind == "email", kind == "webhook")
         return {"ok": "failed" not in result, "result": result}
 
@@ -484,6 +487,28 @@ def register(app, ctx) -> None:
             raise HTTPException(400, str(e))
         except Exception as e:  # noqa: BLE001 - SMTP / network errors go back to the caller
             raise HTTPException(502, f"the mail server refused or could not be reached: {str(e)[:300]}")
+        return {"ok": True, "result": result}
+    @app.post("/api/logs/notify/webhook", tags=["logs"], dependencies=tok,
+              summary="Post a message to the webhook set on Log alerts → Notifications, or to the url given "
+                      "(used by vCommunity Ask scheduled prompts)")
+    def api_send_webhook(body: dict = Body(..., examples=[{"title": "Hello", "text": "Markdown text"}])):
+        """Body: title, text, optional url (default: the saved webhook URL), optional username
+        (Discord only). Discord URLs get Discord messages (long text split into up to 5);
+        other URLs get JSON {"text", "title"}."""
+        url = str(body.get("url") or "").strip()
+        if not url:
+            c = con()
+            try:
+                url = str(logstore.load_settings(c).get("webhook_url") or "")
+            finally:
+                c.close()
+        try:
+            result = notify.post_webhook(url, str(body.get("title") or ""), str(body.get("text") or ""),
+                                         username=str(body.get("username") or "vCommunity")[:60] or "vCommunity")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:  # noqa: BLE001 - network errors go back to the caller
+            raise HTTPException(502, f"the webhook could not be reached: {type(e).__name__}: {str(e)[:200]}")
         return {"ok": True, "result": result}
     app.add_api_route("/api/logs/search", search, methods=["GET"], tags=["logs"], dependencies=tok,
                       summary="Search syslog messages (q uses the Logs page search language; range 15m/1h/6h/24h/3d/7d or since/until epoch)")

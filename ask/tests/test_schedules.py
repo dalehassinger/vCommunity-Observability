@@ -34,6 +34,14 @@ class FakeMailer:
         self.sent.append({"to": to, "subject": subject, "text": text, "html": html_body, "attachments": attachments or []})
         return f"email sent to {', '.join(to)}"
 
+    hook_fail = ""
+
+    def webhook(self, title, text):
+        if self.hook_fail:
+            raise RuntimeError(self.hook_fail)
+        self.posted = getattr(self, "posted", []) + [{"title": title, "text": text}]
+        return "webhook answered 204"
+
 
 class FakeIndexer:
     def __init__(self):
@@ -57,6 +65,29 @@ class FakeReports:
 
 
 class Checks(unittest.TestCase):
+    def test_send_to_needs_one_and_email_needs_recipients(self):
+        _, errors = sched.clean({**GOOD, "send_email": False, "send_webhook": False})
+        self.assertIn("send_to", errors)
+        _, errors = sched.clean({**GOOD, "recipients": ""})
+        self.assertIn("recipients", errors)
+        s, errors = sched.clean({**GOOD, "recipients": "", "send_email": "false", "send_webhook": "on"})
+        self.assertEqual(errors, {})
+        self.assertEqual((s["send_email"], s["send_webhook"]), (0, 1))
+
+    def test_chat_message(self):
+        s = {**GOOD, "id": 1, "include_prompt": 0, "include_sources": 0}
+        when = datetime(2026, 11, 16, 7, 0, tzinfo=ZoneInfo("America/New_York"))
+        title, text = sched.build_chat(s, {"chat_id": "c1", "answer": "Two posts [1].", "sources": [{"n": 1, "title": "A"}]},
+                                       public="http://ask:8081", when=when, model="qwen", seconds=3)
+        self.assertEqual(title, "[Ask] Weekly blog: 2026-11-16")
+        self.assertIn("Two posts.", text)
+        self.assertNotIn("What is new?", text)
+        self.assertNotIn("Sources", text)
+        _, text = sched.build_chat({**s, "include_prompt": 1}, {"chat_id": "", "error": "boom"}, public="", when=when,
+                                   model="qwen", seconds=1)
+        self.assertIn("> What is new?", text)
+        self.assertIn("failed", text)
+
     def test_clean_accepts_a_good_schedule(self):
         s, errors = sched.clean(GOOD)
         self.assertEqual(errors, {})
@@ -194,6 +225,28 @@ class Runs(unittest.TestCase):
             out = self.s.run(item["id"])
         self.assertEqual(out["status"], "email_failed")
         self.assertIn("not sent: The Logs module", self.s.runs(item["id"])[0]["email"])
+
+    def test_webhook_only_needs_no_recipients(self):
+        item = self.s.save({**GOOD, "recipients": "", "send_email": False, "send_webhook": True})
+        self.assertEqual((item["send_email"], item["send_webhook"]), (0, 1))
+        with mock.patch.object(sched.rag, "answer", self.fake_answer), mock.patch.object(sched.control, "is_on", return_value=True):
+            out = self.s.run(item["id"])
+        self.assertEqual(out["status"], "ok")
+        self.assertEqual(self.mailer.sent, [])
+        post = self.mailer.posted[0]
+        self.assertIn("**Weekly blog**", post["text"])
+        self.assertIn("Open in Ask: <http://ask.local:8081/chat/", post["text"])
+        self.assertEqual(out["email"], "webhook answered 204")
+
+    def test_email_and_webhook_and_a_failed_webhook(self):
+        item = self.s.save({**GOOD, "send_webhook": True})
+        self.mailer.hook_fail = "Webhook not sent: no webhook URL is set"
+        with mock.patch.object(sched.rag, "answer", self.fake_answer), mock.patch.object(sched.control, "is_on", return_value=True):
+            out = self.s.run(item["id"])
+        self.assertEqual(out["status"], "email_failed")
+        self.assertEqual(len(self.mailer.sent), 1)
+        self.assertIn("email sent to a@example.com", out["email"])
+        self.assertIn("webhook not sent: Webhook not sent: no webhook URL", out["email"])
 
     def test_avoid_repeats_sends_earlier_answers(self):
         item = self.s.save({**GOOD, "avoid_repeats": True})

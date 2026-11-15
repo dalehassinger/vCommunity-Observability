@@ -478,6 +478,9 @@ body.chart-open { overflow: hidden; }
 .sched-opts { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
 .sched-opts .switch { font-weight: 400; color: var(--text); min-width: 0; }
 .sched-opts .sched-opt-hint { margin: -4px 0 2px 44px; }
+.sched-sendto { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; padding-top: 4px; }
+.sched-sendto .switch { font-weight: 400; color: var(--text); min-width: 0; }
+.sched-form [hidden] { display: none !important; }
 .sched-actions { display: flex; gap: 10px; align-items: center; margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
 .field-err { color: var(--crit); font-size: 12px; margin-top: 3px; }
 .field-err:empty { display: none; }

@@ -11,6 +11,7 @@ import json
 import re
 import smtplib
 import ssl
+import urllib.error
 import urllib.request
 from email.message import EmailMessage
 from typing import Any
@@ -95,13 +96,68 @@ def send_message(settings: dict[str, Any], to: list[str], subject: str, text: st
 
 def send_webhook(settings: dict[str, Any], subject: str, body: str, event: dict[str, Any]) -> str:
     url = (settings.get("webhook_url") or "").strip()
+    alert = {k: v for k, v in event.items() if k != "fired_at_text"}
+    return post_webhook(url, subject, body, {"alert": alert}, username="vCommunity Logs", parts=1)
+
+
+DISCORD_LIMIT = 2000      # characters in one Discord message
+DISCORD_PARTS = 5         # a long text goes out as at most this many Discord messages
+
+
+def post_webhook(url: str, title: str, text: str, extra: dict[str, Any] | None = None, *,
+                 username: str = "vCommunity", parts: int = DISCORD_PARTS) -> str:
+    """POST text to a chat webhook. Discord URLs get Discord messages ("content", split on
+    paragraph lines into at most `parts` messages of 2,000 characters, no @mentions); any
+    other URL gets one JSON {"text", "title", **extra} (Slack, Mattermost, Rocket.Chat, scripts)."""
+    url = (url or "").strip()
+    if not url:
+        raise ValueError("no webhook URL is set: enter one under Log alerts → Notifications and click Save")
     if not url.lower().startswith(("http://", "https://")):
         raise ValueError("the webhook needs an http:// or https:// URL (Log alerts → Notifications)")
-    payload = {"text": body, "title": subject, "alert": {k: v for k, v in event.items() if k != "fired_at_text"}}
-    req = urllib.request.Request(url, data=json.dumps(payload, default=str).encode(),
-                                 headers={"Content-Type": "application/json", "User-Agent": "vcommunity-logs"}, method="POST")
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return f"webhook answered {resp.status}"
+    if DISCORD_RE.match(url):
+        payloads = [{"content": chunk, "username": username, "allowed_mentions": {"parse": []}}
+                    for chunk in split_text(text, DISCORD_LIMIT, parts)]
+    else:
+        payloads = [{"text": text, "title": title, **(extra or {})}]
+    status = 0
+    for payload in payloads:
+        req = urllib.request.Request(url, data=json.dumps(payload, default=str).encode(),
+                                     headers={"Content-Type": "application/json", "User-Agent": "vcommunity-logs"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                status = resp.status
+        except urllib.error.HTTPError as exc:  # say what the service answered (never the URL, it holds the secret)
+            detail = exc.read(300).decode("utf-8", "replace").strip()
+            raise ValueError(f"the webhook answered {exc.code} {exc.reason}" + (f": {detail}" if detail else "")) from None
+    return f"webhook answered {status}" + (f" ({len(payloads)} messages)" if len(payloads) > 1 else "")
+
+
+def split_text(text: str, limit: int, parts: int) -> list[str]:
+    """Cut text into at most `parts` pieces of at most `limit` characters, at line breaks
+    where it can (blank lines first). The last piece says so when text was left out."""
+    text = (text or "").strip() or " "
+    out: list[str] = []
+    while text and len(out) < parts:
+        if len(text) <= limit:
+            out.append(text)
+            text = ""
+            break
+        cut = text.rfind("\n\n", 0, limit)
+        if cut < limit // 2:
+            cut = text.rfind("\n", 0, limit)
+        if cut < limit // 2:
+            cut = text.rfind(" ", 0, limit)
+        if cut <= 0:
+            cut = limit
+        out.append(text[:cut].rstrip())
+        text = text[cut:].lstrip()
+    if text:
+        note = "\n… (cut: too long for the chat)"
+        out[-1] = out[-1][:limit - len(note)].rstrip() + note
+    return out
+
+
+DISCORD_RE = re.compile(r"^https://(?:\w+\.)?discord(?:app)?\.com/api/webhooks/", re.I)
 
 
 def notify(settings: dict[str, Any], event: dict[str, Any], email: bool, webhook: bool) -> str:

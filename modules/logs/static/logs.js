@@ -472,7 +472,8 @@
     ['email', 'hook'].forEach(function (k) {
       $('nt-test-' + k).addEventListener('click', function () {
         say(nmsg, 'Sending…');
-        api('POST', '/ui/logs/notify/test', { kind: k === 'hook' ? 'webhook' : 'email' })
+        var b = k === 'hook' ? { kind: 'webhook', webhook_url: nform.elements.webhook_url.value } : { kind: 'email' };
+        api('POST', '/ui/logs/notify/test', b)
           .then(function (r) { say(nmsg, r.result || 'Sent.', !r.ok); })
           .catch(function (e) { say(nmsg, e.message, true); });
       });

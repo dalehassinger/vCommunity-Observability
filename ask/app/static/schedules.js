@@ -1,5 +1,5 @@
 /* Scheduled prompts page: the form (sources pick, model list, schedule fields), save,
-   test email, and the list (run now, on/off, history, delete). */
+   test email / webhook, and the list (run now, on/off, history, delete). */
 (function () {
   'use strict';
   function $(sel, root) { return (root || document).querySelector(sel); }
@@ -66,7 +66,7 @@
         recipients: f.recipients.value, sync_first: f.sync_first.checked, attach_report: f.attach_report.checked,
         only_changed: f.only_changed.checked, enabled: f.enabled.checked,
         include_prompt: f.include_prompt.checked, include_sources: f.include_sources.checked,
-        avoid_repeats: f.avoid_repeats.checked
+        avoid_repeats: f.avoid_repeats.checked, send_email: f.send_email.checked, send_webhook: f.send_webhook.checked
       };
     }
     form.addEventListener('submit', async function (e) {
@@ -90,6 +90,22 @@
       } else {
         say(msg, data.detail || res.statusText, false);
       }
+    });
+    // Send to: the email fields show only with Email on, the webhook test only with Webhook on.
+    function showSendTo() {
+      $$('[data-email]', form).forEach(function (n) { n.hidden = !form.elements.send_email.checked; });
+      $$('[data-hook]', form).forEach(function (n) { n.hidden = !form.elements.send_webhook.checked; });
+    }
+    form.elements.send_email.addEventListener('change', showSendTo);
+    form.elements.send_webhook.addEventListener('change', showSendTo);
+    showSendTo();
+    $('#f-test-webhook').addEventListener('click', async function () {
+      var m = $('#f-hook-msg');
+      say(m, 'Sending…', true);
+      try {
+        var r = await AskAdmin.post('/ui/schedules/test-webhook', {});
+        say(m, r.result || 'Sent.', true);
+      } catch (err) { say(m, err.message, false); }
     });
     $('#f-test-email').addEventListener('click', async function () {
       var m = $('#f-test-msg');
@@ -127,7 +143,7 @@
       catch (err) { vcoAlert(err.message); }
     });
   });
-  var LABELS = { ok: 'sent', unchanged: 'no change', email_failed: 'email failed', error: 'failed', running: 'running' };
+  var LABELS = { ok: 'sent', unchanged: 'no change', email_failed: 'not sent', error: 'failed', running: 'running' };
   $$('[data-history]').forEach(function (b) {
     b.addEventListener('click', async function () {
       var row = document.getElementById('hist-' + b.dataset.history);
@@ -139,7 +155,7 @@
       cell.textContent = '';
       if (!d.items.length) { cell.appendChild(el('span', 'subtle', 'No runs yet.')); return; }
       var t = el('table', 'datagrid sched-runs');
-      t.innerHTML = '<thead><tr><th>Started</th><th>How</th><th>Result</th><th class="num">Seconds</th><th>Email</th><th></th></tr></thead>';
+      t.innerHTML = '<thead><tr><th>Started</th><th>How</th><th>Result</th><th class="num">Seconds</th><th>Sent</th><th></th></tr></thead>';
       var tb = el('tbody');
       d.items.forEach(function (r) {
         var tr = el('tr');
