@@ -43,17 +43,49 @@
   </a>
   <a class="brand-by" href="https://www.vcrocs.info" target="_blank" rel="noopener" title="Dale Hassinger's blog: www.vcrocs.info">&ndash; By: Dale Hassinger</a>
   <div class="header-spacer"></div>
+  {# Top-right toolbar: one grouped control (app switcher | light/dark), like a macOS toolbar. #}
+  <div class="hdr-toolbar" role="toolbar" aria-label="Toolbar">
+  {% if observability_url %}
+  {# The dashboards' Logs pages, in the same menu as on the Observability side. #}
+  {% set obs = observability_url.rstrip('/') %}
+  <details class="hdr-menu" id="logs-menu">
+    <summary class="hdr-menu-btn" title="Logs (on vCommunity Observability): search, alerts and settings">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="app-switch-label">Logs</span>
+      <svg class="hdr-caret" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </summary>
+    <div class="hdr-menu-list" role="menu" aria-label="Logs">
+      <a role="menuitem" href="{{ obs }}/dash/logs/search">Logs</a>
+      <a role="menuitem" href="{{ obs }}/dash/logs/alerts">Log alerts</a>
+      <a role="menuitem" href="{{ obs }}/dash/logs/settings">Log settings</a>
+    </div>
+  </details>
+  <script>
+    (function () {
+      var m = document.getElementById('logs-menu');
+      document.addEventListener('click', function (e) { if (m.open && !m.contains(e.target)) m.open = false; });
+      m.addEventListener('keydown', function (e) { if (e.key === 'Escape' && m.open) { m.open = false; m.querySelector('summary').focus(); } });
+    })();
+  </script>
+  {% endif %}
+  {# Performance: always shown (this app serves it). #}
+  <a class="hdr-seg {{ 'active' if active == '/performance' else '' }}" href="/performance" {{ 'aria-current=page' if active == '/performance' else '' }}
+     title="Performance of both containers, Ollama and the host">
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3 13h4l3-8 4 14 3-6h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="app-switch-label">Performance</span></a>
+  <span class="hdr-sep" aria-hidden="true"></span>
   {% if observability_url %}
   <nav class="app-switch" aria-label="Switch app">
     <a class="app-switch-item" href="{{ observability_url }}" title="vCommunity Observability (dashboards)"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" fill="none" stroke="currentColor" stroke-width="1.8"/></svg><span class="app-switch-label">Observability</span></a>
     <span class="app-switch-item active" aria-current="page" title="vCommunity Ask (AI chat)"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M5 6h14a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 17h-7l-4.5 3.5V17H5a1.5 1.5 0 0 1-1.5-1.5v-8A1.5 1.5 0 0 1 5 6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span class="app-switch-label">Ask</span></span>
   </nav>
+  <span class="hdr-sep" aria-hidden="true"></span>
   {% endif %}
-  <button class="icon-btn" aria-label="Switch light or dark theme" title="Light / dark" onclick="
+  <button class="hdr-seg hdr-theme" aria-label="Switch light or dark theme" title="Light / dark" onclick="
       var r=document.documentElement, t=r.getAttribute('data-theme')==='dark'?'light':'dark';
       r.setAttribute('data-theme',t); try{localStorage.setItem('vco-theme',t)}catch(e){}">
-    <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z" fill="currentColor"/></svg>
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z" fill="currentColor"/></svg>
   </button>
+  </div>
 </header>
 
 <div class="layout">
@@ -108,10 +140,6 @@
       <svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
       Settings
     </a>
-    <a class="nav-link {{ 'active' if active == '/performance' else '' }}" href="/performance">
-      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 13h4l3-8 4 14 3-6h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      Performance
-    </a>
     <a class="nav-link" href="/docs" target="_blank" rel="noopener">
       <svg viewBox="0 0 24 24" width="18" height="18"><path d="M8 4l-5 8 5 8M16 4l5 8-5 8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       API docs (Swagger)
@@ -131,6 +159,7 @@
 </div>
 <script src="/shared/dialogs.js?v={{ asset_v }}"></script>
 <script src="/shared/drawer.js?v={{ asset_v }}"></script>
+<script src="/shared/pagejump.js?v={{ asset_v }}"></script>
 <script src="/static/sidenav.js?v={{ asset_v }}"></script>
 <script src="/static/modelmenu.js?v={{ asset_v }}"></script>
 {% block scripts %}{% endblock %}

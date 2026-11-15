@@ -221,6 +221,16 @@ class Runs(unittest.TestCase):
             self.s.run(item["id"])
         self.assertEqual(seen[-1], GOOD["prompt"])
 
+    def test_using_source_finds_prompts_that_pick_it_by_name(self):
+        a = self.s.save({**GOOD, "name": "A", "scope": "vcrocs,isvara"})
+        self.s.save({**GOOD, "name": "B", "scope": "all"})
+        self.s.save({**GOOD, "name": "C", "scope": "vcrocs-old"})
+        self.assertEqual(self.s.using_source("vcrocs"), [{"id": a["id"], "name": "A"}])
+        self.assertEqual(self.s.using_source("isvara"), [{"id": a["id"], "name": "A"}])
+        self.assertEqual(self.s.using_source("other"), [])
+        self.s.save({**GOOD, "name": "A", "scope": "other"}, a["id"])
+        self.assertEqual(self.s.using_source("vcrocs"), [])
+
     def test_paused_ask_skips_scheduled_runs(self):
         item = self.s.save(GOOD)
         with mock.patch.object(sched.control, "is_on", return_value=False):

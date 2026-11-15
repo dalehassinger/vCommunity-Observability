@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Apple HomeView · vCommunity-Observability{% endblock %}
+{% block body %}
+<style>
+  .hv-launch { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; align-items: start; }
+  .hv-preview { position: relative; width: 100%; aspect-ratio: 1 / 1; border-radius: 6px; overflow: hidden; background: #121e25; border: 1px solid var(--border); }
+  .hv-preview iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .hv-launch ul { margin: 8px 0 0; padding-left: 18px; line-height: 1.6; }
+  .hv-launch code { word-break: break-all; }
+  @media (max-width: 900px) { .hv-launch { grid-template-columns: 1fr; } }
+</style>
+<div class="page-head">
+  <div>
+    <div class="breadcrumb"><a href="/overview">Dashboards</a> / apple-homeview</div>
+    <h1>Apple HomeView</h1>
+    <p class="subtle">A full-screen wall display of the lab for a 1088 × 1088 touch screen. The square canvas scales to fit any screen, without scrolling.</p>
+  </div>
+  <div class="page-actions">
+    <a class="btn btn-primary" href="/homeview" target="_blank" rel="noopener">Open full screen</a>
+  </div>
+</div>
+<div class="hv-launch">
+  <div class="hv-preview"><iframe src="/homeview" title="Apple HomeView preview" loading="lazy"></iframe></div>
+  <section class="card"><div class="card-header">How it works</div><div class="card-block" style="padding:14px 16px">
+    <p style="margin:0">Live data from the modules that are on, refreshed every minute:</p>
+    <ul>
+      <li><b>Home</b>: clock, vCenter, what needs your attention</li>
+      <li><b>Lab, Clusters, Hosts, VMs, Health</b>: DBH Insights</li>
+      <li><b>Storage</b>: Datastore Capacity (with runway)</li>
+      <li><b>GitHub</b>: GitHub Status (an example of an outside source)</li>
+    </ul>
+    <p>Lists longer than one screen become several pages. <b>Auto-cycle</b> shows every page for 20 seconds by default; change the time under <a href="/settings#homeview">Settings</a>. It is on by default and remembered on that screen. Tap the <b>home icon</b> at the top left for the dashboards menu. Arrow keys or a swipe go to the next page.</p>
+    <p>Bookmark <code>/homeview</code> on the wall screen, or a page such as <code>/homeview#hosts</code>.</p>
+  </div></section>
+</div>
+{% endblock %}

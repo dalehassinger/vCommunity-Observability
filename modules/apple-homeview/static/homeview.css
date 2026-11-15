@@ -1,0 +1,304 @@
+/* Apple HomeView live pages. Loaded after homeview-base.css (Dale's HomeView style.css,
+   unchanged), so the 1088 x 1088 canvas, the fit-to-screen scale and the palette stay as
+   they are. Everything below uses the same tokens. Budget per page: 1008 px wide and
+   971 px tall under the header (1088 - padding - header). There is no bottom bar (the home icon
+   at the top left opens the dashboards menu) and no page heading: each page's title and the
+   page count sit in the header row, at the size of "HomeView". */
+:root { --warn: var(--weather); --crit: #ff8f86; --crit-border: #9a5550; --warn-border: #8a7140; }
+
+/* Status colors (green / amber / red, like VCF Operations). */
+.ok-text { color: var(--success); } .warn-text { color: var(--warn); } .crit-text { color: var(--crit); }
+.dot.warn, .state.warn .dot, .health-badge.warn .dot, .storage-state.warn .dot { background: var(--warn); }
+.dot.crit, .state.crit .dot, .health-badge.crit .dot, .storage-state.crit .dot { background: var(--crit); }
+.state.info .dot, .health-badge.info .dot { background: var(--info); }
+.state.warn, .storage-state.warn { color: var(--warn); } .state.crit, .storage-state.crit { color: var(--crit); } .state.info { color: var(--info); }
+.health-badge.warn { color: var(--warn); border-color: var(--warn-border); }
+.health-badge.crit { color: var(--crit); border-color: var(--crit-border); }
+.health-badge.info { color: var(--info); border-color: var(--accent-muted); }
+.edition.offline .dot { background: var(--crit); }
+.event-dot-lg { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.event-dot-lg.gold { background: var(--warn); } .event-dot-lg.mint { background: var(--success); }
+.event-dot-lg.blue { background: var(--accent); } .event-dot-lg.red { background: var(--crit); }
+.live-tag { color: var(--success); border-color: var(--success-border); }
+.hv-empty, .hv-muted { color: var(--text-muted); font-size: 16px; }
+.metric-line strong { color: var(--text); }
+
+/* Meters colored by level. */
+.hv-meter.ok i { background: var(--success); }
+.hv-meter.warn i { background: var(--warn); }
+.hv-meter.crit i { background: var(--crit); }
+.storage-ring { background: conic-gradient(var(--ring, var(--accent)) 0 var(--p, 0%), var(--track) var(--p, 0%) 100%); }
+.storage-ring.ok { --ring: var(--success); } .storage-ring.warn { --ring: var(--warn); } .storage-ring.crit { --ring: var(--crit); }
+
+/* Dashboards menu: the home icon (top left) is its button; the menu drops down below it. */
+footer { display: none; }
+header { position: relative; z-index: 20; }
+button.brand-mark { border: 0; padding: 0; cursor: pointer; transition: box-shadow .15s, background .15s; }
+button.brand-mark:hover, button.brand-mark[aria-expanded=true] { box-shadow: 0 0 0 2px var(--accent-muted); }
+button.brand-mark[aria-expanded=true] { background: var(--accent); color: var(--accent-deep); }
+.hv-menu { position: absolute; top: calc(100% + 10px); left: 0; width: 380px; max-height: calc(1088px - 140px); overflow-y: auto;
+  background: var(--panel-raised); border: 1px solid var(--border); border-radius: 12px; padding: 14px;
+  box-shadow: 0 18px 60px #0009; display: flex; flex-direction: column; gap: 6px; }
+.hv-menu-title { font-size: 13px; font-weight: 600; letter-spacing: 1.9px; color: var(--accent); text-transform: uppercase; padding: 4px 10px 6px; }
+.hv-menu nav { height: auto; border: 0; background: none; padding: 0; display: block; }
+.hv-menu .nav-pages { display: flex; flex-direction: column; align-items: stretch; gap: 2px; }
+.hv-menu .nav-item { height: 60px; min-width: 0; padding: 0 16px; justify-content: flex-start; gap: 16px; font-size: 21px; color: var(--text); border-radius: 8px; }
+.hv-menu .nav-item svg { width: 24px; height: 24px; color: var(--accent); flex-shrink: 0; }
+.hv-menu .nav-item small { margin-left: auto; font-size: 13px; color: var(--text-muted); font-weight: 400; }
+.hv-menu .nav-item.active { background: var(--accent-surface); color: var(--accent-text); box-shadow: inset 3px 0 var(--accent); }
+.hv-menu .nav-item:not(.active):hover, .hv-menu .nav-item:focus-visible { background: #ffffff0d; }
+.hv-menu-cycle { display: flex; align-items: center; justify-content: space-between; height: 56px; padding: 0 16px; margin-top: 6px;
+  border: 0; border-top: 1px solid var(--border); background: none; font-size: 17px; color: var(--text-muted); text-align: left; }
+.hv-menu-note { font-size: 12px; line-height: 1.4; color: var(--text-muted); padding: 2px 16px 4px; }
+#toast { bottom: 40px; }
+
+/* Page title in the header row, same size as "HomeView"; the in-page heading is hidden. */
+.page-heading { display: none; }
+main { padding-top: 18px; }
+.brand { min-width: 0; }
+.hv-page-title { font-size: inherit; letter-spacing: inherit; font-weight: 500; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.hv-header-right { display: flex; align-items: center; gap: 22px; flex-shrink: 0; }
+.hv-count { font-size: 18px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.hv-count b { color: var(--text); font-weight: 400; }
+
+/* Show menu: in a long list's header row (next to its tag). A picked number scrolls inside the list. */
+.hv-tools { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+/* VMs sort menu: looks like the green BY CPU tag, with a small caret. */
+.hv-sort select { font: inherit; font-size: 10px; letter-spacing: 1.5px; color: var(--success); background-color: #ffffff07;
+  border: 1px solid var(--success-border); border-radius: 6px; padding: 6px 22px 6px 8px; cursor: pointer; appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--success) 50%), linear-gradient(135deg, var(--success) 50%, transparent 50%);
+  background-position: calc(100% - 12px) 52%, calc(100% - 8px) 52%; background-size: 4px 4px; background-repeat: no-repeat; }
+.hv-sort select:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.hv-sort option, .hv-show option { color: #111; }
+/* Both list menus (Show and the sort tag) share one height. */
+.hv-sort { display: flex; align-items: center; }
+.hv-show select, .hv-sort select { box-sizing: border-box; height: 32px; padding-top: 0; padding-bottom: 0; line-height: 30px; }
+.hv-show { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-muted); }
+.hv-show select { font: inherit; font-size: 15px; color: var(--text); background: var(--panel); border: 1px solid var(--border);
+  border-radius: 7px; padding: 6px 28px 6px 10px; cursor: pointer; appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%), linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 52%, calc(100% - 10px) 52%; background-size: 5px 5px; background-repeat: no-repeat; }
+.hv-show select:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.hv-list.hv-scroll { display: block; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--accent-muted) transparent; }
+/* The card's top padding moves into its title row, so the column header can stick at the very top. */
+.hv-list.hv-scroll { padding-top: 0; }
+.hv-scroll .card-top { padding-top: 18px; }
+.hv-scroll .hv-list-head { position: sticky; top: 0; z-index: 1; background: var(--panel); }
+.hv-scroll .hv-row:last-child { border-bottom: 0; }
+
+/* Page count: 01 / 09 */
+.page-count b { font-weight: 400; }
+
+/* Home: vCenter card (in place of the sample weather) and "Needs your attention". */
+.hv-vc-name { font-size: 30px; letter-spacing: -.6px; margin-top: 22px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hv-vc-ver { font-size: 15px; color: var(--text-muted); margin-top: 6px; }
+.hv-mini-stats { display: flex; gap: 0; margin-top: 26px; border-top: 1px solid var(--border); padding-top: 20px; }
+.hv-mini-stats > div { flex: 1; } .hv-mini-stats > div + div { border-left: 1px solid var(--border); padding-left: 22px; }
+.hv-mini-stats strong { display: block; font-size: 44px; font-weight: 400; letter-spacing: -1.5px; line-height: 1; }
+.hv-mini-stats small { font-size: 20px; color: var(--text-muted); letter-spacing: 0; }
+.hv-mini-stats span { display: block; font-size: 13px; color: var(--text-muted); margin-top: 8px; }
+.hv-vcenter .weather-low { margin-top: 26px; }
+.hv-attention .agenda-row { padding: 20px 0; }
+.hv-attention .agenda-row h3 { font-size: 18px; line-height: 1.25; }
+.hv-attention .agenda-row p { font-size: 13px; }
+
+/* Shared list card: a header row and rows with a name, meters and numbers. */
+.hv-list { padding: 18px 24px; display: flex; flex-direction: column; }
+.hv-list .card-top { margin-bottom: 8px; }
+.hv-list-head { display: grid; gap: 18px; align-items: end; font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase;
+  color: var(--text-muted); padding: 6px 0 10px; border-bottom: 1px solid var(--border); }
+.hv-row { display: grid; gap: 18px; align-items: center; border-bottom: 1px solid var(--border); min-height: 0; }
+.hv-row:last-child { border-bottom: 0; }
+.hv-name { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.hv-name > div, .hv-row > div { min-width: 0; }
+.hv-row h3 { font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hv-row p { font-size: 13px; color: var(--text-muted); margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hv-bar .metric-line { margin-top: 0; font-size: 12px; }
+.hv-bar .metric-line strong { font-size: 22px; }
+.hv-bar .meter { margin-top: 6px; }
+.hv-big { font-size: 24px; font-variant-numeric: tabular-nums; }
+.hv-big small { font-size: 14px; color: var(--text-muted); padding-left: 2px; }
+.hv-size { font-size: 15px; color: var(--text-muted); }
+.pill { justify-self: start; font-size: 13px; padding: 5px 12px; border-radius: 20px; border: 1px solid; }
+.pill.ok { color: var(--success); border-color: var(--success-border); } .pill.crit { color: var(--crit); border-color: var(--crit-border); }
+.hv-row .state { margin-left: 0; }
+
+/* Hosts: 9 per page. */
+.hv-hosts { height: 953px; }
+.hv-hosts .hv-list-head, .hv-hosts .hv-row { grid-template-columns: minmax(0, 1.7fr) 1fr 1fr 80px 120px; }
+.hv-hosts .hv-row { height: 94px; }
+
+/* Clusters: 7 per page. */
+.hv-clusters { height: 953px; }
+.hv-clusters .hv-list-head, .hv-clusters .hv-row { grid-template-columns: minmax(0, 1.75fr) 70px 80px 76px 1fr 56px 92px; gap: 14px; }
+.hv-clusters .hv-row { height: 118px; }
+
+/* VMs and Storage: a stats strip over a list. */
+.hv-stack { display: flex; flex-direction: column; gap: 18px; height: 953px; }
+.hv-stats { flex: 0 0 128px; display: flex; align-items: center; padding: 0 30px; background: var(--panel-raised); }
+.hv-stats > div { flex: 1; } .hv-stats > div + div { border-left: 1px solid var(--border); padding-left: 26px; }
+.hv-stats strong { display: block; font-size: 42px; font-weight: 400; letter-spacing: -1px; line-height: 1.1; }
+.hv-stats strong small { font-size: 18px; color: var(--text-muted); letter-spacing: 0; }
+.hv-stats span { display: block; font-size: 14px; color: var(--text-muted); margin-top: 6px; }
+.hv-vms, .hv-ds { flex: 1; min-height: 0; }
+.hv-vms .hv-list-head, .hv-vms .hv-row { grid-template-columns: minmax(0, 1.8fr) 1fr 1fr 150px; }
+.hv-vms .hv-row { height: 56px; }
+.hv-vms .hv-row h3 { font-size: 16px; } .hv-vms .hv-row p { font-size: 12px; margin-top: 3px; }
+.hv-vms .system-icon { width: 32px; height: 32px; }
+.hv-ds .hv-list-head, .hv-ds .hv-row { grid-template-columns: minmax(0, 1.6fr) 1.3fr 110px 120px; }
+.hv-ds .hv-row { height: 70px; }
+
+/* Health: by type + findings (12 per page). */
+.hv-two { display: grid; grid-template-columns: 330px 1fr; gap: 18px; height: 953px; }
+.hv-types { padding: 22px 24px; }
+.hv-type { margin-top: 18px; } .hv-type .metric-line { margin-top: 0; } .hv-type .metric-line strong { font-size: 22px; }
+.hv-findings .hv-row { grid-template-columns: 10px minmax(0, 1fr) auto; height: 68px; gap: 16px; }
+
+/* GitHub: banner, components grid, incidents. */
+.hv-gh-banner { flex: 0 0 150px; }
+.hv-gh-banner h2 { margin-top: 0; }
+.hv-components { flex: 0 0 316px; padding: 20px 26px; }
+.hv-comp-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 34px; margin-top: 8px; }
+.hv-comp { display: flex; justify-content: space-between; align-items: center; height: 47px; border-bottom: 1px solid var(--border); font-size: 16px; }
+.hv-comp .state { font-size: 13px; text-transform: capitalize; }
+.hv-incidents { flex: 1; min-height: 0; }
+.hv-incident { grid-template-columns: 10px minmax(0, 1fr) auto; height: 76px; gap: 16px; }
+
+/* A section whose module is off or has no data. */
+.hv-unavailable { height: 300px; display: flex; flex-direction: column; justify-content: center; padding: 0 40px; gap: 12px; }
+.hv-unavailable p { color: var(--text-muted); font-size: 16px; }
+
+/* Home and Lab grids fill the 953 px under the header (two 18 px gaps). */
+.home-grid { grid-template-rows: 300px 455px 162px; }
+.lab-grid { grid-template-rows: 275px 365px 277px; }
+
+/* Small trims so the live text fits the original card heights. */
+.lab-banner .banner-stats { margin-top: 20px; }
+.storage-card .storage-body { margin-top: 18px; }
+.storage-card .storage-footer { margin-top: 14px; }
+.systems .system-row { height: 58px; }
+.hv-attention .agenda-row { padding: 17px 0; }
+.lab-banner { padding-top: 22px; padding-bottom: 22px; }
+.storage-card { padding-top: 20px; padding-bottom: 20px; }
+.system-icon { flex-shrink: 0; }
+
+/* ---------------------------------------------------------------------------------------
+   Short, wide screen (the HomeView's Safari leaves about 1000 x 450 px under its browser
+   controls). homeview-base.css then stops scaling the canvas and shrinks the original cards;
+   these rules do the same for the live pages, following its guidelines:
+   - fonts 8-13 px (h1 23, h2 13, h3 12, numbers 13-19), secondary lines hidden
+   - every grid fills the space left (flex: 1, contain: size), rows share it evenly
+   - the page count is hidden; the dashboards menu is a smaller drop-down under the home icon
+   homeview.js also shows fewer rows per page in this mode, so nothing scrolls. */
+@media (min-width: 360px) and (max-height: 520px) and (min-aspect-ratio: 11/10) {
+  /* Header row: page title beside "HomeView" (15 px like it), page count before the status. */
+  main { padding-top: 0; }
+  .brand .divider { display: inline; padding: 0 1px; }
+  .hv-header-right { gap: 10px; }
+  .hv-count { font-size: 10px; }
+  .hv-show { font-size: 9px; gap: 4px; }
+  .hv-tools { gap: 6px; }
+  .hv-show select, .hv-sort select { height: 20px; line-height: 18px; }
+  .hv-sort select { font-size: 8px; letter-spacing: .8px; padding: 2px 16px 2px 5px; border-radius: 4px; background-position: calc(100% - 9px) 52%, calc(100% - 6px) 52%; background-size: 3px 3px; }
+  .hv-list .card-top h2 { font-size: 11px; }
+  .hv-show select { font-size: 10px; padding: 1px 20px 1px 6px; border-radius: 5px; background-position: calc(100% - 11px) 52%, calc(100% - 7px) 52%; background-size: 4px 4px; }
+  /* A picked number of rows: fixed row heights and the list scrolls (no shared-height rows). */
+  .hv-list.hv-scroll { display: block; }
+  .hv-list.hv-scroll { padding-top: 0; }
+  .hv-scroll .card-top { padding-top: 4px; }
+  .hv-scroll .hv-row { height: 32px; }
+  .hv-findings.hv-scroll .hv-row { height: 34px; }
+
+  /* Dashboards menu: compact drop-down that never runs past the bottom of the screen. */
+  header { flex: 0 0 26px; }
+  .hv-menu { top: calc(100% + 6px); width: 230px; max-height: calc(100dvh - 48px); padding: 6px; gap: 2px; border-radius: 9px; }
+  .hv-menu-title { font-size: 9px; letter-spacing: 1px; padding: 2px 8px 3px; }
+  .hv-menu .nav-item { height: 32px; padding: 0 10px; gap: 10px; font-size: 13px; border-radius: 6px; }
+  .hv-menu .nav-item svg { width: 16px; height: 16px; }
+  .hv-menu .nav-item small { font-size: 10px; }
+  .hv-menu-cycle { height: 34px; padding: 0 10px; margin-top: 2px; font-size: 12px; }
+  .hv-menu-note { font-size: 9px; padding: 2px 10px; }
+  /* Put back the base compact grid rows (the full-size Home and Lab rows above would win). */
+  .home-grid { grid-template-rows: minmax(93px, 1fr) minmax(104px, 1fr); }
+  .lab-grid { grid-template-rows: 58px minmax(80px, 1fr) 60px; }
+
+  /* Every live page fills the space between the heading and the bar. */
+  .hv-list, .hv-stack, .hv-two { flex: 1; height: auto; min-height: 0; contain: size; }
+  .hv-hosts, .hv-clusters { height: auto; }
+  .hv-stack, .hv-two { gap: 6px; }
+  .hv-two { grid-template-columns: minmax(0, 32%) minmax(0, 1fr); }
+
+  /* Lists: rows share the height evenly; one line per row. */
+  .hv-list { padding: 4px 9px; display: grid; grid-template-rows: auto; grid-auto-rows: minmax(0, 1fr); }
+  .hv-list:has(> .card-top + .hv-list-head) { grid-template-rows: auto auto; }
+  .hv-list .card-top { margin-bottom: 0; padding-top: 2px; }
+  .hv-list-head { font-size: 8px; letter-spacing: .5px; padding: 3px 0; gap: 8px; }
+  .hv-row, .hv-hosts .hv-row, .hv-clusters .hv-row, .hv-vms .hv-row, .hv-ds .hv-row, .hv-findings .hv-row, .hv-incident {
+    height: auto; min-height: 0; gap: 8px; }
+  .hv-clusters .hv-list-head, .hv-clusters .hv-row { gap: 6px; grid-template-columns: minmax(0, 1.6fr) 40px 50px 44px 1fr 38px 54px; }
+  .hv-hosts .hv-list-head, .hv-hosts .hv-row { grid-template-columns: minmax(0, 1.5fr) 1fr 1fr 46px 76px; }
+  .hv-vms .hv-list-head, .hv-vms .hv-row { grid-template-columns: minmax(0, 1.6fr) 1fr 1fr 104px; }
+  .hv-ds .hv-list-head, .hv-ds .hv-row { grid-template-columns: minmax(0, 1.5fr) 1.3fr 64px 70px; }
+  .hv-findings .hv-row, .hv-incident { grid-template-columns: 5px minmax(0, 1fr) auto; }
+  .hv-name { gap: 5px; }
+  .hv-row h3, .hv-vms .hv-row h3 { font-size: 11px; }
+  .hv-row p, .hv-list-head + .hv-row p { display: none; }
+  .hv-findings .hv-row p, .hv-incident p { display: block; font-size: 9px; margin-top: 1px; }
+  .hv-row .system-icon { width: 16px; height: 16px; border-radius: 4px; }
+  .hv-row .system-icon svg { width: 11px; height: 11px; }
+  .hv-bar .metric-line { font-size: 8px; }
+  .hv-bar .metric-line strong { font-size: 12px; }
+  .hv-bar .metric-line small { font-size: 8px; }
+  .hv-bar .meter { margin-top: 1px; height: 4px; }
+  .hv-big { font-size: 13px; } .hv-big small { font-size: 8px; }
+  .hv-size, .hv-muted, .hv-empty { font-size: 10px; }
+  .pill { font-size: 9px; padding: 1px 6px; }
+  .state, .hv-row .state { font-size: 10px; gap: 4px; }
+  .event-dot-lg { width: 5px; height: 5px; }
+
+  /* Stats strip (VMs, Storage). */
+  .hv-stats { flex: 0 0 auto; padding: 5px 10px; }
+  .hv-stats > div + div { padding-left: 8px; }
+  .hv-stats strong { font-size: 18px; letter-spacing: 0; }
+  .hv-stats strong small { font-size: 9px; }
+  .hv-stats span { font-size: 9px; margin-top: 1px; }
+
+  /* Health: by type. */
+  .hv-types { padding: 4px 9px; display: flex; flex-direction: column; justify-content: space-around; }
+  .hv-type { margin-top: 0; }
+  .hv-type .metric-line { font-size: 10px; } .hv-type .metric-line strong { font-size: 12px; }
+
+  /* Home: vCenter card and attention list. */
+  .hv-vcenter .card-top .tag { display: none; }
+  .hv-vc-name { font-size: 13px; margin-top: 2px; letter-spacing: 0; }
+  .hv-vc-ver { display: none; }
+  .hv-mini-stats { margin-top: 4px; padding-top: 4px; }
+  .hv-mini-stats > div + div { padding-left: 8px; }
+  .hv-mini-stats strong { font-size: 19px; letter-spacing: 0; }
+  .hv-mini-stats small { font-size: 10px; }
+  .hv-mini-stats span { font-size: 9px; margin-top: 1px; }
+  .hv-vcenter .weather-low { margin-top: 3px; }
+  .hv-attention .agenda-row { padding: 4px 0; gap: 6px; }
+  .hv-attention .agenda-row h3 { font-size: 10px; line-height: 1.2; }
+
+  /* GitHub. */
+  .hv-gh-banner { flex: 0 0 auto; }
+  .hv-gh-banner h2 { display: block; font-size: 13px; }
+  .hv-components { flex: 1 1 0; min-height: 0; padding: 4px 9px; display: flex; flex-direction: column; }
+  .hv-comp-grid { flex: 1; min-height: 0; column-gap: 14px; margin-top: 2px; grid-auto-rows: minmax(0, 1fr); }
+  .hv-comp { height: auto; font-size: 10px; }
+  .hv-comp .state { font-size: 9px; }
+  .hv-incidents { flex: 0 0 auto; }
+  .hv-incident .tag { display: none; }
+
+  /* Undo the full-size trims above, so the original compact card rules apply again. */
+  .lab-banner, .storage-card { padding: 6px 9px; }
+  .lab-banner .banner-stats { margin-top: 3px; }
+  .storage-card .storage-body { margin-top: 3px; }
+  .systems .system-row { height: 16px; }
+  .hv-incidents { contain: none; flex: 0 0 auto; }
+  .hv-incident + .hv-incident { display: none; }
+
+  .hv-unavailable { height: auto; padding: 10px 14px; gap: 4px; }
+  .hv-unavailable p { font-size: 10px; }
+}

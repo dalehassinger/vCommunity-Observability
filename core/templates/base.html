@@ -31,17 +31,52 @@
   <a class="brand-by" href="https://www.vcrocs.info" target="_blank" rel="noopener" title="Dale Hassinger's blog: www.vcrocs.info">&ndash; By: Dale Hassinger</a>
   <div class="header-spacer"></div>
   {% if mock %}<span class="header-chip" title="Collectors return built-in sample data (VCO_MOCK=1)">Sample data</span>{% endif %}
+  {# Top-right toolbar: one grouped control (Logs menu | app switcher | light/dark), like a macOS toolbar. #}
+  <div class="hdr-toolbar" role="toolbar" aria-label="Toolbar">
+  {# Logs module pages live in a menu in the top-right toolbar, not in the sidebar. #}
+  {% set log_nav = (nav or [])|selectattr('module', 'equalto', 'logs')|list %}
+  {% if log_nav %}
+  {% set log_here = (active or '').startswith('/dash/logs/') %}
+  <details class="hdr-menu" id="logs-menu">
+    <summary class="hdr-menu-btn {{ 'active' if log_here else '' }}" title="Logs: search, alerts and settings">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="app-switch-label">Logs</span>
+      <svg class="hdr-caret" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </summary>
+    <div class="hdr-menu-list" role="menu" aria-label="Logs">
+      {% for n in log_nav %}{% set href = '/dash/logs/' ~ n.slug %}
+      <a role="menuitem" href="{{ href }}" {{ 'aria-current=page' if active == href else '' }} class="{{ 'active' if active == href else '' }}">{{ n.title }}</a>
+      {% endfor %}
+    </div>
+  </details>
+  <script>
+    // Close the Logs menu on Esc (focus back on the button) or a click outside it.
+    (function () {
+      var m = document.getElementById('logs-menu');
+      document.addEventListener('click', function (e) { if (m.open && !m.contains(e.target)) m.open = false; });
+      m.addEventListener('keydown', function (e) { if (e.key === 'Escape' && m.open) { m.open = false; m.querySelector('summary').focus(); } });
+    })();
+  </script>
+  {% endif %}
+  {# Performance (one dashboard for both containers, served by Ask): always shown while Ask has a URL, even when Ask is paused. #}
+  {% if ask_url_config %}
+  <a class="hdr-seg" href="{{ ask_url_for() }}/performance" title="Performance of both containers, Ollama and the host (on vCommunity Ask)">
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3 13h4l3-8 4 14 3-6h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="app-switch-label">Performance</span></a>
+  {% endif %}
+  {% if log_nav or ask_url_config %}<span class="hdr-sep" aria-hidden="true"></span>{% endif %}
   {% if ask_url_config and control.is_on('ask') %}
   <nav class="app-switch" aria-label="Switch app">
     <span class="app-switch-item active" aria-current="page" title="vCommunity Observability (dashboards)"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" fill="none" stroke="currentColor" stroke-width="1.8"/></svg><span class="app-switch-label">Observability</span></span>
     <a class="app-switch-item" href="{{ ask_url_for() }}" title="vCommunity Ask (AI chat)"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M5 6h14a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 17h-7l-4.5 3.5V17H5a1.5 1.5 0 0 1-1.5-1.5v-8A1.5 1.5 0 0 1 5 6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span class="app-switch-label">Ask</span></a>
   </nav>
+  <span class="hdr-sep" aria-hidden="true"></span>
   {% endif %}
-  <button class="icon-btn" aria-label="Switch light or dark theme" title="Light / dark" onclick="
+  <button class="hdr-seg hdr-theme" aria-label="Switch light or dark theme" title="Light / dark" onclick="
       var r=document.documentElement, t=r.getAttribute('data-theme')==='dark'?'light':'dark';
       r.setAttribute('data-theme',t); try{localStorage.setItem('vco-theme',t)}catch(e){}">
-    <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z" fill="currentColor"/></svg>
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z" fill="currentColor"/></svg>
   </button>
+  </div>
 </header>
 
 <div class="layout {% block layout_class %}{% endblock %}">
@@ -57,18 +92,12 @@
     </a>
     <div class="nav-section">Dashboards</div>
     {# Keep module order (Modules page ↑/↓); groupby would sort A-Z. #}
-    {% for n in nav %}
+    {% for n in nav|rejectattr('module', 'equalto', 'logs') %}
       {% if loop.first or loop.previtem.module != n.module %}<div class="nav-group">{{ n.module }}</div>{% endif %}
       {% set href = '/dash/' ~ n.module ~ '/' ~ n.slug %}
       <a class="nav-link sub {{ 'active' if active == href else '' }}" href="{{ href }}">{{ n.title }}</a>
     {% endfor %}
     <div class="nav-section">Administration</div>
-    {% if ask_url_config %}
-    <a class="nav-link" href="{{ ask_url_for() }}/performance" title="One dashboard for both containers, on vCommunity Ask">
-      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 13h4l3-8 4 14 3-6h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      Performance
-    </a>
-    {% endif %}
     <a class="nav-link {{ 'active' if active == '/modules' else '' }}" href="/modules">
       <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 2l9 5v10l-9 5-9-5V7zM12 12l9-5M12 12v10M12 12L3 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
       Modules &amp; API
@@ -97,5 +126,6 @@
 </div>
 <script src="/static/dialogs.js?v={{ asset_v }}"></script>
 <script src="/static/drawer.js?v={{ asset_v }}"></script>
+<script src="/static/pagejump.js?v={{ asset_v }}"></script>
 </body>
 </html>

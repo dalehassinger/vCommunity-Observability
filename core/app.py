@@ -52,6 +52,15 @@ def asset_version(*folders: Path) -> str:
 
 REPO_URL = "https://github.com/dalehassinger/vCommunity-Observability"
 
+# Apple HomeView Auto-cycle: seconds each page shows (Settings page, app_settings homeview.cycle_seconds).
+HOMEVIEW_CYCLE_DEFAULT = 20
+HOMEVIEW_CYCLE_MIN = 5
+HOMEVIEW_CYCLE_MAX = 3600
+# Apple HomeView pages in their default order (Settings page can reorder and hide them:
+# app_settings homeview.order = comma list of ids, homeview.hidden = comma list of ids).
+HOMEVIEW_PAGES = [("home", "Home"), ("lab", "Lab"), ("hosts", "Hosts"), ("vms", "VMs"), ("storage", "Storage"),
+                  ("clusters", "Clusters"), ("health", "Health"), ("github", "GitHub")]
+
 
 def find_readme() -> Path | None:
     """README.md for the About page: /app/README.md in the image, the repo root otherwise."""
@@ -790,7 +799,59 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
             "weekdays": xs.WEEKDAYS, "frequencies": xs.FREQUENCIES, "timezones": xs.timezone_names(),
             "default_tz": xs.default_timezone(), "exports_root": str(xs.exports_root()),
             "apps": control.status(),
+            "homeview": "apple-homeview" in core.modules, "homeview_cycle": homeview_cycle_seconds(),
+            "homeview_pages": homeview_page_rows(),
         })
+
+    def homeview_layout() -> dict[str, list[str]]:
+        """Page order and hidden pages for the Apple HomeView display (unknown ids dropped, new ones appended)."""
+        ids = [i for i, _ in HOMEVIEW_PAGES]
+        saved = [i for i in (core.storage.get_setting("homeview.order") or "").split(",") if i in ids]
+        order = list(dict.fromkeys(saved)) + [i for i in ids if i not in saved]
+        hidden = [i for i in (core.storage.get_setting("homeview.hidden") or "").split(",") if i in ids]
+        return {"order": order, "hidden": hidden}
+    core.homeview_layout = homeview_layout
+
+    def homeview_page_rows() -> list[dict[str, Any]]:
+        lay, labels = homeview_layout(), dict(HOMEVIEW_PAGES)
+        return [{"id": i, "label": labels[i], "shown": i not in lay["hidden"]} for i in lay["order"]]
+
+    def homeview_cycle_seconds() -> int:
+        try:
+            return int(core.storage.get_setting("homeview.cycle_seconds") or HOMEVIEW_CYCLE_DEFAULT)
+        except ValueError:
+            return HOMEVIEW_CYCLE_DEFAULT
+    core.homeview_cycle_seconds = homeview_cycle_seconds
+
+    @app.post("/settings/homeview", include_in_schema=False)
+    async def save_homeview(request: Request):
+        form = await read_form(request)
+        if not admin_ok(form.get("token", "")):
+            return denied("homeview")
+        raw = str(form.get("cycle_seconds", "")).strip()
+        try:
+            seconds = int(raw)
+        except ValueError:
+            return settings_redirect(f"Not saved: '{raw}' is not a whole number of seconds.", False, "#homeview")
+        if not HOMEVIEW_CYCLE_MIN <= seconds <= HOMEVIEW_CYCLE_MAX:
+            return settings_redirect(f"Not saved: use {HOMEVIEW_CYCLE_MIN} to {HOMEVIEW_CYCLE_MAX} seconds.", False, "#homeview")
+        # Page order (pos_<id> = position, from the up / down buttons) and which pages show (show_<id>).
+        ids = [i for i, _ in HOMEVIEW_PAGES]
+        if any(f"pos_{i}" in form for i in ids):
+            def pos(i: str) -> float:
+                try:
+                    return float(form.get(f"pos_{i}", ""))
+                except ValueError:
+                    return 999 + ids.index(i)
+            order = sorted(ids, key=lambda i: (pos(i), ids.index(i)))
+            hidden = [i for i in ids if form.get(f"show_{i}") != "1"]
+            if len(hidden) == len(ids):
+                return settings_redirect("Not saved: keep at least one HomeView page shown.", False, "#homeview")
+            core.storage.set_setting("homeview.order", ",".join(order))
+            core.storage.set_setting("homeview.hidden", ",".join(hidden))
+        core.storage.set_setting("homeview.cycle_seconds", str(seconds))
+        return settings_redirect(f"Apple HomeView saved: Auto-cycle {seconds} seconds per page, page order and pages shown. "
+                                 "Open screens pick it up within a minute.", True, "#homeview")
 
     @app.post("/settings/apps", include_in_schema=False)
     async def save_apps(request: Request):

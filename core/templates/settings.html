@@ -6,6 +6,10 @@
   .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; margin-bottom: 16px; }
   .form-row { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 10px; align-items: center; margin-bottom: 10px; }
   .form-row label { font-size: 13px; color: var(--subtle); font-weight: 600; }
+  .hv-order { max-width: 420px; }
+  .hv-order td { padding-top: 4px; padding-bottom: 4px; vertical-align: middle; }
+  .hv-order .btn { padding: 2px 9px; min-width: 0; height: auto; line-height: 1.4; }
+  .hv-order tr:first-child .hv-up, .hv-order tr:last-child .hv-down { visibility: hidden; }
   .form-row input[type=text], .form-row input[type=password], .form-row input[type=number], .form-row input[type=time], .token-row input {
     font: inherit; font-size: 13px; padding: 6px 9px; border: 1px solid var(--border); border-radius: 3px;
     background: var(--surface); color: var(--text); width: 100%; box-sizing: border-box; }
@@ -218,6 +222,61 @@
     </form>
   </div>
 </section>
+
+{% if homeview %}
+<section class="card" id="homeview" style="margin-top:16px">
+  <div class="card-header">Apple HomeView</div>
+  <div class="card-block">
+    {{ card_msg('homeview') }}
+    <form method="post" action="/settings/homeview">
+      <div class="form-row">
+        <label for="hv-cycle">Auto-cycle: seconds per page</label>
+        <input id="hv-cycle" type="number" name="cycle_seconds" min="5" max="3600" step="1" required value="{{ homeview_cycle }}" style="max-width:120px">
+      </div>
+      <div class="hint">5 to 3600 seconds (default 20). Auto-cycle itself is switched on or off on each screen, in the menu under the home icon.</div>
+      <div class="form-row" style="align-items:start;margin-top:14px">
+        <label>Pages, in order</label>
+        <div>
+          <table class="datagrid hv-order" id="hv-order">
+            <thead><tr><th style="width:84px">Move</th><th>Page</th><th style="width:70px">Show</th></tr></thead>
+            <tbody>
+            {% for p in homeview_pages %}
+              <tr data-id="{{ p.id }}">
+                <td><button type="button" class="btn btn-sm hv-up" aria-label="Move {{ p.label }} up">&uarr;</button> <button type="button" class="btn btn-sm hv-down" aria-label="Move {{ p.label }} down">&darr;</button>
+                  <input type="hidden" name="pos_{{ p.id }}" value="{{ loop.index }}"></td>
+                <td>{{ p.label }}</td>
+                <td><input type="checkbox" name="show_{{ p.id }}" value="1" {{ 'checked' if p.shown }} aria-label="Show {{ p.label }}"></td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="hint">The order of the pages on the display, in its menu and in Auto-cycle. Untick a page to leave it out. Every open HomeView screen picks up these settings within a minute, when it reloads its data.</div>
+      {{ token_field() }}
+      <div class="form-actions"><button class="btn btn-primary">Save</button> <a class="btn" href="/homeview" target="_blank" rel="noopener">Open HomeView</a></div>
+    </form>
+  </div>
+</section>
+{% endif %}
+
+{% if homeview %}
+<script>
+  // Apple HomeView page order: the up / down buttons move a row and renumber the hidden positions.
+  (function () {
+    var table = document.getElementById('hv-order'); if (!table) return;
+    var body = table.tBodies[0];
+    function renumber() { Array.prototype.forEach.call(body.rows, function (tr, i) { tr.querySelector('input[type=hidden]').value = i + 1; }); }
+    table.addEventListener('click', function (e) {
+      var btn = e.target.closest('.hv-up, .hv-down'); if (!btn) return;
+      var tr = btn.closest('tr');
+      if (btn.classList.contains('hv-up') && tr.previousElementSibling) body.insertBefore(tr, tr.previousElementSibling);
+      else if (btn.classList.contains('hv-down') && tr.nextElementSibling) body.insertBefore(tr.nextElementSibling, tr);
+      renumber(); btn.focus();
+    });
+  })();
+</script>
+{% endif %}
 
 <section class="card" id="exports" style="margin-top:16px">
   <div class="card-header">Scheduled export</div>

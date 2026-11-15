@@ -70,9 +70,14 @@
         <button class="btn btn-outline" type="button" data-full="{{ s.name }}" title="Re-embed every document">Re-index all</button>
         <button class="btn btn-outline" type="button" data-edit="{{ s.name }}">Edit</button>
         <a class="btn btn-outline" href="/sources/{{ s.name }}">Documents</a>
-        <button class="btn btn-outline" type="button" data-delete="{{ s.name }}">Delete</button>
+        {% set used = (in_use or {}).get(s.name) or [] %}
+        <button class="btn btn-outline" type="button" data-delete="{{ s.name }}" data-used="{{ used|map(attribute='name')|join('\n') }}"
+          {% if used %}title="Used by a scheduled prompt"{% endif %}>Delete</button>
         <span class="form-msg" data-msg="{{ s.name }}"></span>
       </div>
+      {% if used %}<div class="hint">Used by scheduled prompt{{ 's' if used|length > 1 else '' }}:
+        {% for u in used %}<a href="/schedules?edit={{ u.id }}">{{ u.name }}</a>{{ ', ' if not loop.last else '' }}{% endfor %}.
+        Change {{ 'them' if used|length > 1 else 'it' }} to another source before deleting this one.</div>{% endif %}
     </div>
   </div>
 {% else %}
@@ -187,6 +192,13 @@
   });
   document.querySelectorAll('[data-delete]').forEach(function (b) {
     b.onclick = async function () {
+      if (b.dataset.used) {
+        var names = b.dataset.used.split('\n');
+        await vcoAlert('"' + b.dataset.delete + '" can\'t be deleted while ' + (names.length > 1 ? 'these scheduled prompts use' : 'this scheduled prompt uses')
+          + ' it: ' + names.map(function (n) { return '"' + n + '"'; }).join(', ')
+          + '. Change ' + (names.length > 1 ? 'them' : 'it') + ' to another source on the Scheduled prompts page first.');
+        return;
+      }
       if (await vcoConfirm('Delete source "' + b.dataset.delete + '" and its index? The files themselves are not touched.', { ok: 'Delete', danger: true }))
         act(b.dataset.delete, '/ui/sources/' + b.dataset.delete + '/delete', {}, 'Deleted');
     };

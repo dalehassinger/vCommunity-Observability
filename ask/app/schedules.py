@@ -435,6 +435,14 @@ class Schedules:
         d["when"], d["next"], d["running"] = describe(d), next_run(d), self.is_running(sid)
         return d
 
+    def using_source(self, name: str) -> list[dict[str, Any]]:
+        """Scheduled prompts that pick this knowledge source by name (All sources does not count).
+        A source they use can't be deleted until they are changed to another source."""
+        with self.db.conn() as c:
+            rows = c.execute("SELECT id, name, scope FROM schedules ORDER BY name COLLATE NOCASE").fetchall()
+        return [{"id": r["id"], "name": r["name"]} for r in rows
+                if name in [n.strip() for n in (r["scope"] or "").split(",")]]
+
     def save(self, body: dict[str, Any], sid: int | None = None) -> dict[str, Any]:
         s, errors = clean(body)
         if errors:

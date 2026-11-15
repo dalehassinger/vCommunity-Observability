@@ -65,6 +65,8 @@ class Storage:
                        "created_at TEXT, last_run TEXT, last_status TEXT, last_message TEXT, last_file TEXT)")
             db.execute("CREATE TABLE IF NOT EXISTS collector_settings (module TEXT, collector TEXT, "
                        "interval_minutes INTEGER, changed_at TEXT, PRIMARY KEY (module, collector))")
+            # Small key/value settings from the Settings page (e.g. homeview.cycle_seconds).
+            db.execute("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT, changed_at TEXT)")
             # UI-managed vCenter list. When any row exists, it wins over config.yaml for vCenter.
             db.execute("""CREATE TABLE IF NOT EXISTS vcenter_instances (
                 id TEXT PRIMARY KEY, label TEXT, host TEXT, "user" TEXT, password TEXT,
@@ -257,6 +259,17 @@ class Storage:
     def reset_vcenter_instances(self) -> None:
         with _lock, self._core() as db:
             db.execute("DELETE FROM vcenter_instances")
+
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        with self._core() as db:
+            row = db.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        with _lock, self._core() as db:
+            db.execute("INSERT INTO app_settings (key, value, changed_at) VALUES (?, ?, ?) "
+                       "ON CONFLICT(key) DO UPDATE SET value = excluded.value, changed_at = excluded.changed_at",
+                       (key, value, utcnow()))
 
     def collector_intervals(self) -> dict[tuple[str, str], int]:
         with self._core() as db:

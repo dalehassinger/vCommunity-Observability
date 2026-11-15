@@ -1,0 +1,24 @@
+# Apple HomeView: a full-screen, touch-friendly wall display of the lab, built from Dale's
+# "HomeView" design (github: Apple HomeView/homeview-display). The whole 1088 x 1088 canvas
+# scales to fit the screen (no scrolling), with the same VCF Operations-style dark palette.
+#
+# It has no collector of its own: it reads the data the other modules already collect.
+#   - dbh-insights        Lab overview, Clusters, Hosts, Virtual machines, Health pages
+#   - datastore-capacity  Storage page (used %, free, runway)
+#   - github-status       GitHub page (an example of a non-vCenter source)
+# A page is left out when its module is off or has no data yet. Lists that don't fit one
+# screen are split into several pages, and Auto-cycle shows every page in turn.
+#
+# Open it at /homeview (the "Apple HomeView" dashboard has the link and a preview).
+name: apple-homeview
+version: 0.1.0
+core_api: 1
+description: Full-screen 1088 x 1088 wall display (Apple HomeView design) with live lab data from DBH Insights, Datastore Capacity and GitHub Status, with auto-cycle.
+
+web: web.py
+
+dashboards:
+  - slug: display
+    title: Apple HomeView
+    description: Full-screen wall display of the lab, made for a 1088 x 1088 touch screen.
+    template: launcher.html

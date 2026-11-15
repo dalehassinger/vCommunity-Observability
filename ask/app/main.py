@@ -263,7 +263,9 @@ def create_app() -> FastAPI:
 
     def scope_list(scope: Any) -> list[str] | None:
         """Source names a question may use. "All sources" leaves spreadsheet sources and
-        disabled sources out: those are used only when picked by name."""
+        disabled sources out: those are used only when picked by name. When every source picked
+        by name is gone (deleted or renamed), the answer is [] = No sources (just the model),
+        not All sources, so a question never searches sources nobody picked."""
         srcs = db.list_sources()
         if isinstance(scope, str):          # "isvara" or "isvara,vcrocs" (saved chats, /api/search)
             scope = [n.strip() for n in scope.split(",") if n.strip()]
@@ -272,7 +274,7 @@ def create_app() -> FastAPI:
             return [s["name"] for s in srcs if s["plugin"] != "spreadsheet" and s.get("enabled", True)] or ["-"]
         names = [str(n) for n in scope]
         known = {s["name"] for s in srcs}
-        return [n for n in names if n in known] or scope_list("all")
+        return [n for n in names if n in known]
 
     def split_scope(scope: Any) -> tuple[list[str] | None, list[str]]:
         """The Sources menu value as (knowledge sources, MCP servers). "mcp:<server>" entries
@@ -331,7 +333,8 @@ def create_app() -> FastAPI:
         pl = plugins()
         return page(request, "sources.html", "/sources", plugins=pl, stats=db.stats(), sources=srcs,
                     plugins_json={n: p.options for n, p in pl.items()}, weekdays=sched.WEEKDAYS,
-                    sync_frequencies=sched.SYNC_FREQUENCIES, default_tz=sched.DEFAULT_TZ)
+                    sync_frequencies=sched.SYNC_FREQUENCIES, default_tz=sched.DEFAULT_TZ,
+                    in_use={s["name"]: schedules.using_source(s["name"]) for s in srcs})
 
     @app.get("/sources/{name}", response_class=HTMLResponse, include_in_schema=False)
     def source_docs(request: Request, name: str):
@@ -869,6 +872,12 @@ def create_app() -> FastAPI:
     def ui_source_delete(name: str):
         if indexer.is_running(name):
             raise HTTPException(409, "A sync is running; try again when it finishes")
+        used = schedules.using_source(name)
+        if used:
+            raise HTTPException(409, f'"{name}" is used by the scheduled prompt' + ("s " if len(used) > 1 else " ")
+                                + ", ".join(f'"{u["name"]}"' for u in used)
+                                + (". Change them" if len(used) > 1 else ". Change it")
+                                + " to another source on the Scheduled prompts page, then delete the source.")
         db.delete_source(name)
         indexer.remove_workdir(name)
         refresh_sync_jobs()
@@ -1010,7 +1019,9 @@ def create_app() -> FastAPI:
         `sources`: "all" (every source except spreadsheets), a name, or names separated by commas."""
         try:
             info: dict[str, Any] = {}
-            items = rag.retrieve(db, settings(), q, scope_list(sources), info)
+            scope = scope_list(sources)
+            # [] = the picked sources are gone: nothing is searched (not every source).
+            items = rag.retrieve(db, settings(), q, scope, info) if scope else []
         except OllamaError as e:
             raise HTTPException(502, str(e))
         return {"query": q, "fts": rag.fts_query(q), "results": rag.source_cards(items),
