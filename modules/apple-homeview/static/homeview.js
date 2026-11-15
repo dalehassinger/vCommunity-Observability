@@ -147,6 +147,43 @@
     return out;
   }
 
+  // A small stack of three mini PCs (MS-01 style) on the clock card. Each unit's status light is
+  // one of the lab's hosts (by name): green online, amber maintenance, red not connected, dark = no host.
+  function miniStack(d) {
+    var hosts = (d.dbh.available ? d.dbh.hosts || [] : []).slice().sort(byName).slice(0, 3);
+    var W = 380, H = 58, GAP = 8, DX = 22, DY = 16, units = [];
+    for (var i = 0; i < 3; i++) {
+      var h = hosts[i], y = DY + i * (H + GAP);
+      var st = !h ? 'off' : h.state !== 'connected' ? 'crit' : h.maintenance ? 'warn' : 'ok';
+      var label = h ? esc(String(h.name).split('.')[0]) : '';
+      var vents = '';
+      for (var r = 0; r < 4; r++) for (var c = 0; c < 15; c++)
+        vents += '<rect x="' + (22 + c * 11 + (r % 2) * 5) + '" y="' + (20 + r * 8) + '" width="7" height="3" rx="1.5"/>';
+      units.push(
+        '<g class="mp-unit mp-' + st + '" transform="translate(0 ' + y + ')">' +
+        '<path class="mp-top" d="M0 0 L' + DX + ' ' + (-DY) + ' L' + (W + DX) + ' ' + (-DY) + ' L' + W + ' 0 Z"/>' +
+        '<path class="mp-side" d="M' + W + ' 0 L' + (W + DX) + ' ' + (-DY) + ' L' + (W + DX) + ' ' + (H - DY) + ' L' + W + ' ' + H + ' Z"/>' +
+        '<rect class="mp-front" width="' + W + '" height="' + H + '" rx="5"/>' +
+        '<rect class="mp-bezel" x="4" y="4" width="' + (W - 8) + '" height="' + (H - 8) + '" rx="3"/>' +
+        '<g class="mp-vents">' + vents + '</g>' +
+        (label ? '<text class="mp-label" x="22" y="14">' + label + '</text>' : '') +
+        '<rect class="mp-port" x="214" y="23" width="17" height="9" rx="1.5"/><rect class="mp-port" x="238" y="23" width="17" height="9" rx="1.5"/>' +
+        '<rect class="mp-port" x="262" y="24" width="15" height="7" rx="3.5"/><rect class="mp-port" x="284" y="24" width="15" height="7" rx="3.5"/>' +
+        '<circle class="mp-port" cx="312" cy="27.5" r="3.5"/>' +
+        '<circle class="mp-btn" cx="345" cy="27.5" r="10"/><circle class="mp-led" cx="345" cy="27.5" r="5.5"/>' +
+        '<rect class="mp-act" x="364" y="25" width="4" height="5" rx="1" style="animation-delay:' + (i * 0.7) + 's"/>' +
+        '<rect class="mp-foot" x="24" y="' + H + '" width="30" height="3" rx="1"/><rect class="mp-foot" x="' + (W - 54) + '" y="' + H + '" width="30" height="3" rx="1"/>' +
+        '</g>');
+    }
+    var vbH = DY + 3 * H + 2 * GAP + 4;
+    return '<div class="hv-rack" aria-hidden="true"><svg viewBox="-2 -2 ' + (W + DX + 4) + ' ' + (vbH + 4) + '">' +
+      '<defs><linearGradient id="mpFront" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3a444c"/><stop offset="1" stop-color="#262e34"/></linearGradient>' +
+      '<linearGradient id="mpTop" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#46525b"/><stop offset="1" stop-color="#36414a"/></linearGradient>' +
+      '<filter id="mpGlow" x="-2" y="-2" width="5" height="5"><feGaussianBlur stdDeviation="3"/></filter></defs>' +
+      // drawn bottom unit first, so each unit sits on top of the one below
+      units.reverse().join('') + '</svg></div>';
+  }
+
   function homePage(d) {
     var db = d.dbh, t = db.available ? db.totals : null, vc = (db.vcenters || [])[0];
     var items = attention(d), shown = items.slice(0, 3);
@@ -155,8 +192,8 @@
     }).join('');
     return '<section class="page" data-section="home">' + heading('WELCOME HOME', 'Good morning, ' + OWNER + '.', 'home') +
       '<div class="home-grid">' +
-      '<article class="clock-card card"><div class="card-top"><span class="eyebrow">MAKE TIME FOR TODAY</span><span class="live"><span class="dot"></span> Live clock</span></div>' +
-      '<div class="time-row"><time class="hv-clock">--:--</time><span class="hv-period">AM</span></div><div class="clock-bottom"><span class="hv-weekday">Sunday</span></div><div class="clock-art" aria-hidden="true"></div></article>' +
+      '<article class="clock-card card"><div class="card-top"><span class="eyebrow">MAKE TIME FOR TODAY</span></div>' +
+      '<div class="time-row"><time class="hv-clock">--:--</time><span class="hv-period">AM</span></div><div class="clock-bottom"><span class="hv-weekday">Sunday</span></div><div class="clock-art" aria-hidden="true"></div>' + miniStack(d) + '</article>' +
       '<article class="card weather hv-vcenter"><div class="card-top"><h2>vCenter</h2><span class="tag live-tag">LIVE</span></div>' +
       (t ? '<div class="hv-vc-name">' + esc(vc ? vc.name : 'vCenter') + '</div><p class="hv-vc-ver">' + esc(vc ? 'vCenter ' + vc.version + ' · build ' + vc.build : '') + '</p>' +
         '<div class="hv-mini-stats"><div><strong>' + t.hosts_connected + '<small>/' + t.hosts + '</small></strong><span>Hosts connected</span></div>' +
@@ -408,13 +445,12 @@
   }
 
   // The page title and page count sit in the top row, beside "HomeView" (the in-page heading is hidden).
-  var headTitle = document.getElementById('hv-page-title'), headCount = document.getElementById('hv-count');
+  var headTitle = document.getElementById('hv-page-title');
   function syncHeader() {
     var node = main.children[current]; if (!node) return;
     var h = node.querySelector('.page-heading h1');
     var text = h ? h.textContent : '';
     if (headTitle.textContent !== text) headTitle.textContent = text;
-    headCount.innerHTML = pages.length > 1 ? '<b>' + pad2(current + 1) + '</b> / ' + pad2(pages.length) : '';
   }
 
   // Show menu (in each long list's header row): rows per page for that section.
@@ -537,7 +573,7 @@
   });
 
   // -- data ---------------------------------------------------------------------------
-  var edition = document.getElementById('edition'), editionText = document.getElementById('edition-text');
+  var edition = document.getElementById('edition');
   function load() {
     fetch('/ui/homeview/data', { cache: 'no-store' }).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -549,12 +585,10 @@
       rotate.title = 'Show every page in turn, ' + ms / 1000 + ' seconds each';
       if (ms !== CYCLE_MS) { CYCLE_MS = ms; if (!first) resetCycle(); }
       render(!first);
-      edition.classList.remove('offline');
-      editionText.textContent = (d.mock ? 'SAMPLE DATA · ' : 'LIVE · ') + new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', timeZone: TIMEZONE }).format(new Date());
+      edition.hidden = true; // the status shows only when the data can't load
       if (first) resetCycle();
     }).catch(function (e) {
-      edition.classList.add('offline');
-      editionText.textContent = 'OFFLINE · RETRYING';
+      edition.hidden = false;
       if (!data) document.getElementById('data-note').textContent = 'Could not load the lab data (' + e.message + '). Retrying every minute.';
     });
   }

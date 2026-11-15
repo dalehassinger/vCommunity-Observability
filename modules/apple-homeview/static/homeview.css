@@ -302,3 +302,33 @@ main { padding-top: 18px; }
   .hv-unavailable { height: auto; padding: 10px 14px; gap: 4px; }
   .hv-unavailable p { font-size: 10px; }
 }
+
+/* Home clock card: a stack of three MS-01 style mini PCs. Each status light follows a lab host. */
+.hv-rack { position: absolute; right: 56px; top: 50%; transform: translateY(-46%); width: 420px; z-index: 1; pointer-events: none;
+  filter: drop-shadow(0 18px 24px #0007); }
+.hv-rack svg { width: 100%; height: auto; display: block; fill: none; stroke: none; }
+.mp-top { fill: url(#mpTop); stroke: #56636d; stroke-width: 1; }
+.mp-side { fill: #20272c; stroke: #3d474f; stroke-width: 1; }
+.mp-front { fill: url(#mpFront); stroke: #4d5963; stroke-width: 1; }
+.mp-bezel { fill: none; stroke: #ffffff10; stroke-width: 1; }
+.mp-vents rect { fill: #161c20; }
+.mp-label { fill: #8fa0ab; font-size: 9px; letter-spacing: .8px; font-family: inherit; }
+.mp-port { fill: #12171a; stroke: #59656e; stroke-width: 1; }
+.mp-btn { fill: #1b2226; stroke: #5c6973; stroke-width: 1.2; }
+.mp-led { fill: #3a444b; }
+.mp-ok .mp-led { fill: var(--success); filter: url(#mpGlow); }
+.mp-warn .mp-led { fill: var(--warn); filter: url(#mpGlow); }
+.mp-crit .mp-led { fill: var(--crit); filter: url(#mpGlow); }
+.mp-ok .mp-btn { stroke: var(--success); } .mp-warn .mp-btn { stroke: var(--warn); } .mp-crit .mp-btn { stroke: var(--crit); }
+.mp-act { fill: #2d363c; }
+.mp-ok .mp-act, .mp-warn .mp-act { fill: var(--accent); animation: mp-blink 2.4s steps(1, end) infinite; }
+.mp-foot { fill: #11161a; }
+@keyframes mp-blink { 0%, 100% { opacity: 1; } 8% { opacity: .2; } 12% { opacity: 1; } 47% { opacity: .25; } 51% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .mp-act { animation: none !important; } }
+.clock-card .clock-art { right: 80px; }
+@media (min-width: 360px) and (max-height: 520px) and (min-aspect-ratio: 11/10) {
+  .hv-rack { right: 10px; width: min(46%, 230px); transform: translateY(-44%); filter: drop-shadow(0 8px 12px #0007); }
+}
+@media (min-width: 360px) and (max-height: 520px) and (min-aspect-ratio: 11/10) and (max-width: 760px) {
+  .hv-rack { width: 36%; top: auto; bottom: 10px; transform: none; }
+}
