@@ -4,6 +4,9 @@ numbered source.
 
 - Ollama (scope "web:ollama"): Ollama's web search and web fetch APIs, tools web_search
   and web_fetch (https://docs.ollama.com/capabilities/web-search). Key: OLLAMA_API_KEY.
+- Ollama web fetch only (scope "web:fetch"): just the web_fetch tool, so the model reads the
+  pages named in the question and cannot search (one paid call per page). Same key and
+  setting as Ollama web search.
 - Brave (scope "web:brave"): the Brave Search API, tool brave_search
   (https://api-dashboard.search.brave.com). Key: BRAVE_API_KEY.
 
@@ -26,7 +29,9 @@ from . import webusage
 
 SCOPE = "web:ollama"          # the value of the Sources menu entry (Ollama)
 BRAVE_SCOPE = "web:brave"     # the value of the Sources menu entry (Brave)
-SCOPES = (SCOPE, BRAVE_SCOPE)
+FETCH_SCOPE = "web:fetch"     # Ollama web_fetch only: read named pages, no search
+SEARCH_SCOPES = (SCOPE, BRAVE_SCOPE)
+SCOPES = (SCOPE, BRAVE_SCOPE, FETCH_SCOPE)
 SERVER = "web"                # tool index marker: rag.run_tool sends these here
 DEFAULT_URL = "https://ollama.com"
 BRAVE_DEFAULT_URL = "https://api.search.brave.com"
@@ -91,13 +96,16 @@ def status_of(cfg: dict[str, Any], scope: str) -> dict[str, Any]:
 
 
 def label(scope_or_tool: str) -> str:
-    return "Brave web search" if scope_or_tool in (BRAVE_SCOPE, BRAVE_TOOL) else "Ollama web search"
+    if scope_or_tool in (BRAVE_SCOPE, BRAVE_TOOL):
+        return "Brave web search"
+    return "Ollama web fetch" if scope_or_tool in (FETCH_SCOPE, "web_fetch") else "Ollama web search"
 
 
 def ollama_tools(scope: str = SCOPE) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Tools for /api/chat plus the name -> (server, tool) index rag.run_tool uses."""
     tools, index = [], {}
-    for t in (BRAVE_TOOLS if scope == BRAVE_SCOPE else TOOLS):
+    pick = BRAVE_TOOLS if scope == BRAVE_SCOPE else [t for t in TOOLS if t["name"] == "web_fetch"] if scope == FETCH_SCOPE else TOOLS
+    for t in pick:
         index[t["name"]] = (SERVER, {**t, "annotations": {"readOnlyHint": True}})
         tools.append({"type": "function", "function": {"name": t["name"], "description": t["description"],
                                                         "parameters": t["inputSchema"]}})

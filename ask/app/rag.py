@@ -445,13 +445,19 @@ are not good enough, call {second} ({second_name}) with a short, specific query.
 {second_name} is searched for you automatically. Each result starts with its source number, for example [5]: cite it,
 and name the web site."""
 
+FETCH_NOTE = """You can read web pages with the web_fetch tool (one page per call; each call costs money). Fetch each
+page the question names once, by its exact full URL, and answer from what it returns; you cannot search the web. Do not
+fetch other pages, other page numbers or variants of the same URL. If the question names no page, fetch only a page a
+fetched page links to when the question needs it. Each result starts with its source number, for example [5]: cite it,
+and name the web site."""
+
 WEB_ORDERS = {"ollama_first": ("web_search", "brave_search"), "brave_first": ("brave_search", "web_search")}
 
 
 def web_order(cfg: dict[str, Any], servers: list[str]) -> tuple[str, str] | None:
     """(first, second) search tool when both providers are ticked and a fixed order is set
     (Settings "Web search order"); None lets the model pick. Unknown values mean Ollama first."""
-    if not all(s in (servers or []) for s in websearch.SCOPES):
+    if not all(s in (servers or []) for s in websearch.SEARCH_SCOPES):
         return None
     value = str(cfg.get("web_order") or "ollama_first").strip().lower()
     return None if value == "model" else WEB_ORDERS.get(value, WEB_ORDERS["ollama_first"])
@@ -473,6 +479,8 @@ def tool_messages(cfg: dict[str, Any], items: list[dict[str, Any]], question: st
                                        second_name=websearch.label(order[1])))
     else:
         notes += ([WEB_NOTE] if websearch.SCOPE in servers else []) + ([BRAVE_NOTE] if websearch.BRAVE_SCOPE in servers else [])
+    if websearch.FETCH_SCOPE in servers and websearch.SCOPE not in servers:
+        notes.append(FETCH_NOTE)
     note = "\n\n".join(notes)
     if items:
         msgs = build_messages(cfg, items, question, history)
@@ -518,7 +526,8 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
                 why = info["error"] or next((s["error"] for s in info["servers"] if s["name"] in servers and s.get("error")), "")
                 raise OllamaError("The MCP tools are not available" + (f": {why}" if why else
                                   " (no tools, or every tool is turned off on the MCP tools page)."))
-        for scope in [s for s in websearch.SCOPES if s in (tools or [])]:
+        for scope in [s for s in websearch.SCOPES if s in (tools or [])
+                      and not (s == websearch.FETCH_SCOPE and websearch.SCOPE in (tools or []))]:  # web:ollama has web_fetch too
             ws = websearch.status_of(cfg, scope)
             if not ws["available"]:
                 raise OllamaError(f"{websearch.label(scope)} is not available: " + ws["why"])
@@ -528,6 +537,8 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
         order = web_order(cfg, tools or [])
         if order:   # state of this answer, not a tool (names starting with _ are never tools)
             mcp_index["_web_order"] = {"first": order[0], "second": order[1], "searched": False}
+        if "web_fetch" in mcp_index:
+            mcp_index["_fetch"] = fetch_state(question, tools or [])
         plain = sources == [] and not tools    # "No sources (just the model)"
         if db.stats()["chunks"] == 0 and not (tools and not sources) and not plain:
             raise OllamaError("Nothing is indexed yet. Open Knowledge sources and press Sync now.")
@@ -696,7 +707,7 @@ def run_tool(cfg: dict[str, Any], chat_id: str, call: dict[str, Any], card: dict
         return
     server, tool = index[name]
     if server == websearch.SERVER:
-        yield from run_web_tool(cfg, card, tool["name"], args, index.get("_web_order"))
+        yield from run_web_tool(cfg, card, tool["name"], args, index.get("_web_order"), index.get("_fetch"))
         return
     card.update(tool=tool["name"], server=server, read_only=mcp.read_only(tool))
     pol = mcp.policy_of(mcp.load_policy(cfg.get("mcp_tools")), server, tool)
@@ -740,8 +751,29 @@ def run_tool(cfg: dict[str, Any], chat_id: str, call: dict[str, Any], card: dict
     yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
 
 
+URL_IN_TEXT = re.compile(r"https?://[^\s<>\"')\]]+")
+
+
+def norm_url(url: str) -> str:
+    """For comparing pages: no #fragment, no trailing slash or punctuation, host in lower case."""
+    url = str(url or "").strip().split("#", 1)[0].rstrip(".,;:!?")
+    head, sep, rest = url.partition("://")
+    host, slash, path = rest.partition("/")
+    return (head.lower() + sep + host.lower() + slash + path).rstrip("/")
+
+
+def fetch_state(question: str, tools: list[str]) -> dict[str, Any]:
+    """web_fetch state for one answer. "seen": pages already fetched (asked again, the result is
+    reused, not fetched and paid again). "only": with Web fetch (Ollama) alone (no web search)
+    and pages named in the question, only those pages may be fetched, so the model can't add
+    paid calls for pages nobody asked for (for example "?page=2" of the same forecast)."""
+    named = [norm_url(u) for u in URL_IN_TEXT.findall(question or "")]
+    strict = websearch.FETCH_SCOPE in tools and websearch.SCOPE not in tools and bool(named)
+    return {"only": set(named) if strict else None, "seen": {}}
+
+
 def run_web_tool(cfg: dict[str, Any], card: dict[str, Any], tool: str, args: dict[str, Any],
-                 order: dict[str, Any] | None = None) -> Iterator[str]:
+                 order: dict[str, Any] | None = None, fetch: dict[str, Any] | None = None) -> Iterator[str]:
     """web_search / web_fetch / brave_search: read-only, so they run without a Run / Cancel question.
 
     `order` is set when both providers are ticked with a fixed order ({"first", "second",
@@ -754,9 +786,25 @@ def run_web_tool(cfg: dict[str, Any], card: dict[str, Any], tool: str, args: dic
         card["note"] = f"Fixed order: {websearch.label(order['first'])} searches first."
         tool = order["first"]
     card.update(tool=tool, server=websearch.label(tool), read_only=True, status="running")
-    yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
+    key = norm_url(args.get("url")) if tool == "web_fetch" and fetch is not None else ""
+    if key and key in fetch["seen"]:
+        # The same page again: reuse the first result (no second paid call).
+        first_n, text = fetch["seen"][key]
+        card.update(status="ok", ms=0, result=text[:20000], chars=len(text), note=f"Same page as [{first_n}]: not fetched again (no cost).")
+        card["_for_model"] = f"[{n}] This page was already fetched as [{first_n}]; use that result. It is not fetched again."
+        yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
+        return
+    if key and fetch["only"] is not None and key not in fetch["only"]:
+        allowed = ", ".join(sorted(fetch["only"]))
+        card.update(status="refused", ms=0, note="Not fetched (no cost): Web fetch reads only the pages named in the question.")
+        card["_for_model"] = (f"[{n}] Not fetched: only the pages named in the question may be read ({allowed}). "
+                              "Answer from the pages already fetched; do not fetch other pages.")
+        yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
+        return
     res = websearch.call(cfg, tool, args)
     ms = res["ms"]
+    if key and res["ok"]:
+        fetch["seen"][key] = (n, res["text"])
     if order is not None and tool == order["first"]:
         order["searched"] = True
         if not res["ok"] or not res["links"]:

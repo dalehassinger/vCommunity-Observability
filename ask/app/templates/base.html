@@ -90,6 +90,10 @@
 
 <div class="layout">
   <nav class="sidenav">
+    <a class="nav-link new-chat saved-link {{ 'active' if active == '/saved' else '' }}" href="/saved">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 3h12v18l-6-4-6 4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      Saved prompts
+    </a>
     <a class="nav-link new-chat {{ 'active' if active == '/chat' else '' }}" href="/chat">
       <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       New chat
@@ -129,6 +133,7 @@
       <svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="13" r="8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 9v4l3 2M9 2h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Scheduled prompts
     </a>
+
     <a class="nav-link {{ 'active' if active == '/tools' else '' }}" href="/tools">
       <svg viewBox="0 0 24 24" width="18" height="18"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3.5 17.5a1.4 1.4 0 0 0 2 2l5.8-5.8a4 4 0 0 0 5.4-5.4l-2.5 2.5-2-.5-.5-2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
       MCP tools

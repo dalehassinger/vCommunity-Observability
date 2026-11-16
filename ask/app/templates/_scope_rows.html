@@ -34,6 +34,7 @@
           <span class="scope-chips">
             {% if web_search and web_search.available %}
             <label class="scope-chip" title="The model may search the web (Ollama web search) when the sources don't answer"><input type="checkbox" value="web:ollama" data-plugin="web" {{ 'checked' if 'web:ollama' in sel else '' }}><span>Web search (Ollama)</span></label>
+            <label class="scope-chip" title="The model may read the pages your question names (Ollama web fetch, one call per page). It cannot search"><input type="checkbox" value="web:fetch" data-plugin="web" {{ 'checked' if 'web:fetch' in sel else '' }}><span>Web fetch (Ollama)</span></label>
             {% endif %}
             {% if brave_search and brave_search.available %}
             <label class="scope-chip" title="The model may search the web (Brave Search) when the sources don't answer"><input type="checkbox" value="web:brave" data-plugin="web" {{ 'checked' if 'web:brave' in sel else '' }}><span>Web search (Brave)</span></label>

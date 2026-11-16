@@ -35,6 +35,7 @@ from . import control, mcp, rag, syslog_out, websearch, webusage
 from .reports import Reports
 from .perf import SAMPLE_SECONDS, Sampler
 from .evalrun import MAX_PROMPTS, EvalRunner
+from . import saved as saved_mod
 from . import schedules as sched
 
 HERE = Path(__file__).resolve().parent
@@ -281,7 +282,7 @@ def create_app() -> FastAPI:
         are MCP tools; with only those picked, no knowledge source is searched (an empty list)."""
         items = [n.strip() for n in scope.split(",")] if isinstance(scope, str) else [str(n) for n in (scope or [])]
         tools = [n[4:] for n in items if n.startswith("mcp:") and n[4:]]
-        # "web:ollama" / "web:brave" = web search tools, passed on with the MCP servers.
+        # "web:ollama" / "web:brave" / "web:fetch" = web tools, passed on with the MCP servers.
         tools += [s for s in websearch.SCOPES if s in items]
         rest = [n for n in items if n and n != "none" and not n.startswith(("mcp:", "web:"))]
         # "none" = No sources (just the model): no search at all ([] sources, no tools).
@@ -295,6 +296,8 @@ def create_app() -> FastAPI:
     evaluator = EvalRunner(db, settings, scope_list)
     # Scheduled prompts: answered on a schedule and emailed (Scheduled prompts page).
     schedules = sched.Schedules(db, settings, split_scope, indexer, reports, scheduler)
+    # Saved prompts: a prompt with its sources, asked again with one click.
+    saved = saved_mod.Saved(db)
 
     # -- pages ----------------------------------------------------------------
     @app.get("/", include_in_schema=False)
@@ -659,9 +662,18 @@ def create_app() -> FastAPI:
         chat_id = body.get("chat_id") or ""
         scope = body.get("scope") or "all"
         if not chat_id or not db.get_chat(chat_id):
-            chat_id = db.new_chat(question, ",".join(map(str, scope)) if isinstance(scope, list) else str(scope))
+            title = str(body.get("title") or "").strip() or question     # a saved prompt's name
+            chat_id = db.new_chat(title, ",".join(map(str, scope)) if isinstance(scope, list) else str(scope))
         docs, tools = split_scope(scope)
-        return StreamingResponse(rag.answer_stream(db, settings(), chat_id, question, docs, tools),
+        cfg_now = settings()
+        if str(body.get("model") or "").strip():    # a saved prompt's own model, for this answer only
+            cfg_now = {**cfg_now, "chat_model": str(body["model"]).strip()}
+        if body.get("saved_id"):
+            try:
+                saved.used(int(body["saved_id"]))
+            except (TypeError, ValueError):
+                pass
+        return StreamingResponse(rag.answer_stream(db, cfg_now, chat_id, question, docs, tools),
                                  media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -966,6 +978,97 @@ def create_app() -> FastAPI:
             raise HTTPException(502, str(e))
         return {"ok": True, "result": result}
 
+    # -- Saved prompts ----------------------------------------------------------
+    def saved_or_404(pid: int) -> dict[str, Any]:
+        s = saved.get(pid)
+        if not s:
+            raise HTTPException(404, "No such saved prompt")
+        return s
+
+    def save_saved(body: dict, pid: int | None = None):
+        try:
+            return saved.save(body, pid)
+        except ValueError as e:
+            return JSONResponse({"errors": e.args[0]}, status_code=400)
+        except KeyError:
+            raise HTTPException(404, "No such saved prompt")
+
+    @app.get("/saved", response_class=HTMLResponse, include_in_schema=False)
+    def saved_page(request: Request, edit: int | None = None, new: bool = False):
+        s = settings()
+        current = saved.get(edit) if edit else None
+        return page(request, "saved.html", "/saved", items=saved.list(), current=current, all_tags=saved.all_tags(),
+                    show_form=bool(current) or new, mcp_servers=mcp.quick_servers(s["agent_url"]),
+                    web_search=websearch.status(s), brave_search=websearch.brave_status(s))
+
+    @app.get("/ui/saved", include_in_schema=False)
+    def ui_saved():
+        return {"items": saved.list()}
+
+    @app.get("/ui/saved/{pid}", include_in_schema=False)
+    def ui_saved_one(pid: int):
+        return saved_or_404(pid)
+
+    @app.post("/ui/saved/save", include_in_schema=False, dependencies=[Depends(require_admin)])
+    def ui_saved_save(body: dict = Body(...)):
+        pid = body.get("id")
+        return save_saved(body, int(pid) if pid else None)
+
+    @app.post("/ui/saved/delete", include_in_schema=False, dependencies=[Depends(require_admin)])
+    def ui_saved_delete(body: dict = Body(...)):
+        try:
+            ids = [int(i) for i in body.get("ids") or []]
+        except (TypeError, ValueError):
+            raise HTTPException(400, "ids must be numbers")
+        return {"ok": True, "deleted": saved.delete_many(ids)}
+
+    STAG = ["saved prompts"]
+
+    @app.get("/api/saved", tags=STAG, dependencies=[Depends(require_token)])
+    def api_saved():
+        """Every saved prompt: name, prompt, scope, model, pages to fetch, how often used.
+        `question` is what Run sends (the prompt plus the pages to read)."""
+        return {"items": saved.list()}
+
+    @app.post("/api/saved", tags=STAG, dependencies=[Depends(require_token)])
+    def api_saved_create(body: dict = Body(..., examples=[{
+            "name": "VCF release notes", "prompt": "List the newest fixes in these release notes.",
+            "scope": "web:fetch", "urls": ["https://example.com/release-notes"], "tags": "vcf, news"}])):
+        """Create a saved prompt. scope: like the chat ("all", source names, "web:fetch",
+        "web:ollama", "web:brave", "mcp:<server>", "none"; comma-separated or a list).
+        Optional: name (default: the start of the prompt), model, urls (pages to fetch, at most
+        10; needs web:fetch or web:ollama), tags (comma-separated or a list, for example
+        "sports, news"; at most 10)."""
+        return save_saved(body)
+
+    @app.get("/api/saved/{pid}", tags=STAG, dependencies=[Depends(require_token)])
+    def api_saved_one(pid: int):
+        return saved_or_404(pid)
+
+    @app.put("/api/saved/{pid}", tags=STAG, dependencies=[Depends(require_token)])
+    def api_saved_update(pid: int, body: dict = Body(...)):
+        """Replace a saved prompt (same fields as create)."""
+        return save_saved(body, pid)
+
+    @app.delete("/api/saved/{pid}", tags=STAG, dependencies=[Depends(require_token)])
+    def api_saved_delete(pid: int):
+        saved_or_404(pid)
+        return {"ok": saved.delete(pid)}
+
+    @app.post("/api/saved/{pid}/run", tags=STAG, dependencies=[Depends(require_token)])
+    def api_saved_run(pid: int):
+        """Ask the saved prompt in a new chat and wait for the whole answer (like POST /api/ask)."""
+        paused()
+        s = saved_or_404(pid)
+        q = s["question"]
+        chat_id = db.new_chat(s["name"], s["scope"])
+        docs, tools = split_scope(s["scope"])
+        cfg_now = settings()
+        if s["model"]:
+            cfg_now = {**cfg_now, "chat_model": s["model"]}
+        saved.used(pid)
+        return rag.answer(db, cfg_now, chat_id, q, docs, tools)
+
     TAG = ["scheduled prompts"]
 
     @app.get("/api/schedules", tags=TAG, dependencies=[Depends(require_token)])
@@ -979,7 +1082,7 @@ def create_app() -> FastAPI:
             "scope": "vcrocs", "frequency": "weekly", "weekday": "mon", "at_time": "07:00",
             "timezone": "America/New_York", "recipients": "you@example.com"}])):
         """Create a scheduled prompt. scope: "all", source names (comma-separated or a list),
-        "web:ollama", "web:brave", "mcp:<server>" or "none". frequency: daily, weekdays, weekly
+        "web:ollama", "web:brave", "web:fetch", "mcp:<server>" or "none". frequency: daily, weekdays, weekly
         (weekday mon..sun), monthly (monthday 1-28 or last) or hours (every_hours). Optional: model,
         sync_first, attach_report (default true), only_changed, enabled (default true),
         send_email (default true; recipients needed then) and send_webhook (default false: posts to

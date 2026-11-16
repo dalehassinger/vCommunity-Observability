@@ -27,6 +27,39 @@ body { height: auto; min-height: 100%; }
 .model-msg { padding: 8px 10px; font-size: 13px; color: var(--subtle); }
 .model-msg.err { color: var(--crit); }
 .model-foot { display: block; border-top: 1px solid var(--border); margin-top: 4px; padding: 7px 10px 4px; font-size: 12px; }
+/* Saved prompts menu (beside the model menu) and the Save prompt link under a question. */
+.saved-menu .model-list { min-width: 340px; max-width: min(520px, 90vw); }
+.saved-item { display: flex; align-items: stretch; }
+.saved-item[hidden], .saved-menu .model-msg[hidden] { display: none; }
+.saved-item .model-item { flex: 1; min-width: 0; flex-direction: column; align-items: flex-start; gap: 2px; }
+.saved-item .model-tags { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.saved-edit { flex: none; border: 0; background: none; color: var(--primary); font-size: 12px; padding: 0 10px; cursor: pointer; border-radius: 4px; }
+.saved-edit:hover, .saved-edit:focus-visible { background: var(--hover, rgba(0,114,163,.08)); outline: none; }
+.msg.user { flex-wrap: wrap; }
+.msg.user .save-prompt { flex-basis: 100%; text-align: right; font-size: 12px; margin-top: -6px; opacity: 0; transition: opacity .15s; }
+.msg.user:hover .save-prompt, .msg.user .save-prompt:focus-visible { opacity: 1; }
+@media (hover: none) { .msg.user .save-prompt { opacity: 1; } }
+.saved-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.saved-bar-end { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.saved-search { font: inherit; font-size: 13px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 4px;
+  background: var(--surface); color: var(--text); width: 240px; max-width: 100%; }
+.saved-search:focus { outline: 2px solid var(--primary); outline-offset: 0; border-color: var(--primary); }
+.saved-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag-chip { font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 12px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); cursor: pointer; }
+.tag-chip:hover { border-color: var(--primary); }
+.tag-chip.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+[data-theme="dark"] .tag-chip.on { color: #0f1a20; }
+.tag-pill { display: inline-block; font-size: 11px; font-weight: 400; padding: 1px 7px; border-radius: 10px; margin-left: 4px;
+  background: var(--hover, rgba(0,114,163,.1)); color: var(--primary); vertical-align: 1px; }
+.saved-none { padding: 12px 16px; margin: 0; }
+.saved-head { position: sticky; top: -4px; background: var(--surface); padding: 6px 6px 8px; margin: -4px -4px 4px;
+  border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; z-index: 1; }
+.saved-head .saved-search { width: 100%; }
+.saved-table .saved-check { width: 1%; padding-right: 4px; }
+.sched-table.saved-table td.saved-check { min-width: 0; }
+.sched-table.saved-table td:nth-child(2) { min-width: 200px; }
+.saved-table .btn-run { padding: 3px 12px; margin-right: 6px; }
 .badge-warn { background: var(--warn-bg); color: var(--warn); }
 .nav-link.new-chat { font-weight: 600; color: var(--primary); }
 .nav-link.chat-link { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; padding-top: 5px; padding-bottom: 5px; }

@@ -140,6 +140,9 @@ class H(BaseHTTPRequestHandler):
                 props = (t.get("parameters") or {}).get("properties") or {}
                 req = (t.get("parameters") or {}).get("required") or []
                 args = {k: ("dale@example.com" if k.lower() == "to" else "test") for k in req}
+                if "url" in req:   # web_fetch: the first URL in the question
+                    m = re.search(r"https?://\S+", body["messages"][-1]["content"])
+                    args["url"] = m.group(0) if m else "test"
                 if "Cluster" in props and "cl02" in q:
                     args["Cluster"] = "cl02"
                 calls.append({"function": {"name": t["name"], "arguments": args}})

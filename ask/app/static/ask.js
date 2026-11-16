@@ -671,6 +671,15 @@
   function addUser(text) {
     var row = el('div', 'msg user');
     row.appendChild(el('div', 'bubble', text));
+    // "Save prompt": a new saved prompt from this question and the sources picked now.
+    var save = el('button', 'link-btn save-prompt', 'Save prompt');
+    save.type = 'button';
+    save.title = 'Keep this question with the sources picked below, to ask it again with one click (Saved menu)';
+    save.onclick = function () {
+      try { sessionStorage.setItem('ask.saved.draft', JSON.stringify({ prompt: text, scope: scopeValue() })); } catch (e) { /* private window */ }
+      location.href = '/saved?new=1&from=chat';
+    };
+    row.appendChild(save);
     thread.appendChild(row);
     return row;
   }
@@ -755,6 +764,8 @@
     if (sel && document.getElementById('chat-bar').hidden) sel.hidden = false;
   }
 
+  // Saved prompts: a run may use its own model (for this chat only) and counts as a use.
+  var run = { model: '', savedId: 0, title: '' };
   async function ask(question) {
     var empty = document.getElementById('empty-state');
     if (empty) empty.remove();
@@ -790,7 +801,8 @@
     try {
       var res = await fetch('/ui/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-        body: JSON.stringify({ chat_id: chatId, question: question, scope: scopeValue() })
+        body: JSON.stringify({ chat_id: chatId, question: question, scope: scopeValue(), model: run.model || undefined,
+                               saved_id: run.savedId || undefined, title: (!chatId && run.title) || undefined })
       });
       if (!res.ok) throw new Error((await res.text()) || res.statusText);
       var reader = res.body.getReader(), dec = new TextDecoder(), buf = '';
@@ -812,9 +824,10 @@
             if (isNew && payload.chat_id) {
               chatId = payload.chat_id;
               history.replaceState(null, '', '/chat/' + chatId);
-              document.getElementById('chat-title').textContent = question.slice(0, 120);
+              var t = (run.title || question).slice(0, 120);
+              document.getElementById('chat-title').textContent = t;
               document.getElementById('delete-chat').hidden = false;
-              addSidebarChat(chatId, question.slice(0, 120));
+              addSidebarChat(chatId, t);
             }
             sourceCards(a.sources, payload.sources, a.prefix, a.strip);
             a.text.innerHTML = '<span class="typing"><i></i><i></i><i></i></span> <span class="subtle">' +
@@ -920,7 +933,118 @@
     location.href = '/chat';
   });
 
+  // -- Saved prompts: the Saved menu under the prompt, and /chat?saved=<id>[&edit=1] ------
+  function useSaved(item, edit) {
+    // Tick the saved prompt's sources (not remembered as the last pick).
+    var want = item.scope && item.scope !== 'all' ? item.scope.split(',') : [];
+    scopeBoxes.forEach(function (b) { b.checked = want.indexOf(b.value) >= 0; });
+    scopeRefresh(false);
+    run = { model: item.model || '', savedId: item.id, title: item.name || '' };
+    var cur = document.querySelector('#model-menu .model-current');
+    if (cur && item.model) { cur.textContent = item.model; cur.title = 'Model of the saved prompt "' + item.name + '", for this chat only'; }
+    if (edit) { input.value = item.question; autosize(); input.focus(); return; }
+    ask(item.question);
+  }
+  function openSaved(id, edit) {
+    // A chat with messages starts a new chat; an empty one runs here.
+    if (chatId || controller) { location.href = '/chat?saved=' + id + (edit ? '&edit=1' : ''); return; }
+    fetch('/ui/saved/' + id, { cache: 'no-store' }).then(function (r) {
+      if (!r.ok) throw new Error(r.status === 404 ? 'That saved prompt was deleted.' : r.statusText);
+      return r.json();
+    }).then(function (item) { useSaved(item, edit); }).catch(function (e) { vcoAlert(e.message); });
+  }
+  var savedMenu = document.getElementById('saved-menu');
+  if (savedMenu) {
+    var savedList = savedMenu.querySelector('.model-list');
+    // Search box and tag chips at the top of the menu; the tag pick is shared with the Saved prompts page.
+    var menuTag = '';
+    try { menuTag = localStorage.getItem('ask.saved.tag') || ''; } catch (e) { /* private window */ }
+    savedMenu.addEventListener('toggle', async function () {
+      if (!savedMenu.open) return;
+      savedList.innerHTML = '';
+      savedList.appendChild(el('div', 'model-msg', 'Loading…'));
+      try {
+        var d = await (await fetch('/ui/saved', { cache: 'no-store' })).json();
+        savedList.innerHTML = '';
+        if (!d.items.length) savedList.appendChild(el('div', 'model-msg', 'No saved prompts yet. Use Save prompt under a question, or add one on the Saved prompts page.'));
+        var tags = [];
+        d.items.forEach(function (it) { (it.tag_list || []).forEach(function (t) { if (tags.indexOf(t) < 0) tags.push(t); }); });
+        tags.sort();
+        if (tags.indexOf(menuTag) < 0) menuTag = '';
+        var rowsEl = [], search = null, noMatch = el('div', 'model-msg', 'No saved prompt matches.');
+        function filterMenu() {
+          var words = (search ? search.value : '').toLowerCase().split(/\s+/).filter(Boolean), shown = 0;
+          rowsEl.forEach(function (r) {
+            var ok = (!menuTag || r.tags.indexOf(menuTag) >= 0) && words.every(function (w) { return r.text.indexOf(w) >= 0; });
+            r.el.hidden = !ok; if (ok) shown++;
+          });
+          noMatch.hidden = shown > 0;
+        }
+        if (d.items.length) {
+          var head = el('div', 'saved-head');
+          search = el('input', 'saved-search');
+          search.type = 'search'; search.placeholder = 'Search saved prompts'; search.setAttribute('aria-label', 'Search saved prompts');
+          search.addEventListener('input', filterMenu);
+          search.addEventListener('keydown', function (e) {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            var first = rowsEl.filter(function (r) { return !r.el.hidden; })[0];
+            if (first) { savedMenu.open = false; openSaved(first.id, e.shiftKey); }
+          });
+          head.appendChild(search);
+          if (tags.length) {
+            var chips = el('div', 'saved-tags');
+            [''].concat(tags).forEach(function (t) {
+              var c = el('button', 'tag-chip' + (t === menuTag ? ' on' : ''), t || 'All');
+              c.type = 'button'; c.setAttribute('aria-pressed', t === menuTag ? 'true' : 'false');
+              c.addEventListener('click', function () {
+                menuTag = t;
+                try { localStorage.setItem('ask.saved.tag', t); } catch (e) { /* private window */ }
+                chips.querySelectorAll('.tag-chip').forEach(function (x) { var on = x === c; x.classList.toggle('on', on); x.setAttribute('aria-pressed', on ? 'true' : 'false'); });
+                filterMenu(); search.focus();
+              });
+              chips.appendChild(c);
+            });
+            head.appendChild(chips);
+          }
+          savedList.appendChild(head);
+        }
+        d.items.forEach(function (it) {
+          var row = el('div', 'saved-item');
+          var b = el('button', 'model-item');
+          b.type = 'button'; b.setAttribute('role', 'menuitem');
+          b.title = 'Run in a new chat: ' + it.prompt.slice(0, 200);
+          b.appendChild(el('span', 'model-name', it.name));
+          var names = {};
+          scopeBoxes.forEach(function (x) { names[x.value] = x.parentNode.textContent.trim(); });
+          var info = [it.scope === 'all' ? 'All sources' : it.scope.split(',').map(function (v) { return names[v] || v; }).join(', ')];
+          if (it.model) info.push(it.model);
+          if ((it.tag_list || []).length) info.push('#' + it.tag_list.join(' #'));
+          b.appendChild(el('span', 'model-tags', info.join(' · ')));
+          b.addEventListener('click', function () { savedMenu.open = false; openSaved(it.id, false); });
+          var e2 = el('button', 'saved-edit', 'Edit first');
+          e2.type = 'button'; e2.title = 'Put it in the box with its sources picked, to change it before sending';
+          e2.addEventListener('click', function () { savedMenu.open = false; openSaved(it.id, true); });
+          row.appendChild(b); row.appendChild(e2);
+          savedList.appendChild(row);
+          rowsEl.push({ el: row, id: it.id, tags: it.tag_list || [],
+                        text: [it.name, it.prompt, it.urls, it.tags, it.scope].join(' ').toLowerCase() });
+        });
+        if (d.items.length) { noMatch.hidden = true; savedList.appendChild(noMatch); filterMenu(); }
+        savedList.appendChild(el('a', 'model-foot', 'Manage saved prompts')).href = '/saved';
+        if (search) search.focus();
+      } catch (e) { savedList.innerHTML = ''; savedList.appendChild(el('div', 'model-msg err', e.message)); }
+    });
+    document.addEventListener('click', function (e) { if (savedMenu.open && !savedMenu.contains(e.target)) savedMenu.open = false; });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && savedMenu.open) { savedMenu.open = false; savedMenu.querySelector('summary').focus(); } });
+  }
+  // Picking a model in the model menu ends a saved prompt's own model.
+  var modelBox = document.getElementById('model-menu');
+  if (modelBox) modelBox.addEventListener('click', function (e) { if (e.target.closest('.model-item')) run.model = ''; });
+
   (window.ASK.messages || []).forEach(renderSaved);
   if (window.ASK.messages && window.ASK.messages.length) scrollDown();
   input.focus();
+  var qs = new URLSearchParams(location.search);
+  if (qs.get('saved') && !chatId) openSaved(qs.get('saved'), qs.get('edit') === '1');
 })();
