@@ -10,31 +10,10 @@
   // -- form ----------------------------------------------------------------------
   var form = $('#sched-form');
   if (form) {
-    var scope = $('#f-scope'), label = $('#f-scope-label'), allBtn = $('[data-scope-all]', scope);
-    function boxes() { return $$('input[type=checkbox]', scope); }
-    function picked() { return boxes().filter(function (b) { return b.checked; }).map(function (b) { return b.value; }); }
-    function showScope() {
-      var p = picked();
-      allBtn.setAttribute('aria-pressed', p.length ? 'false' : 'true');
-      boxes().forEach(function (b) { b.closest('.scope-chip').classList.toggle('on', b.checked); });
-      if (!p.length) { label.textContent = 'All sources (not spreadsheets)'; return; }
-      label.textContent = p.indexOf('none') >= 0 ? 'No sources (just the model)'
-        : boxes().filter(function (b) { return b.checked; }).map(function (b) { return b.nextElementSibling.textContent; }).join(', ');
-    }
-    scope.addEventListener('change', function (e) {
-      var b = e.target;
-      if (b.value === 'none' && b.checked) boxes().forEach(function (x) { if (x !== b) x.checked = false; });
-      else if (b.checked) boxes().forEach(function (x) { if (x.value === 'none') x.checked = false; });
-      showScope();
-    });
-    allBtn.addEventListener('click', function () { boxes().forEach(function (b) { b.checked = false; }); showScope(); });
-    $$('[data-scope-only]', scope).forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        boxes().forEach(function (b) { b.checked = b.dataset.plugin === btn.dataset.scopeOnly; });
-        showScope();
-      });
-    });
-    showScope();
+    // Sources pick: the rules are in static/scope.js (the same as the chat).
+    var scope = AskScope.bind($('#f-scope'), { label: $('#f-scope-label') });
+    function picked() { return scope.picked(); }
+    scope.refresh(false);
 
     // Schedule fields: show the ones the frequency needs.
     var freq = form.elements.frequency;
@@ -66,7 +45,8 @@
         recipients: f.recipients.value, sync_first: f.sync_first.checked, attach_report: f.attach_report.checked,
         only_changed: f.only_changed.checked, enabled: f.enabled.checked,
         include_prompt: f.include_prompt.checked, include_sources: f.include_sources.checked,
-        avoid_repeats: f.avoid_repeats.checked, send_email: f.send_email.checked, send_webhook: f.send_webhook.checked
+        avoid_repeats: f.avoid_repeats.checked, send_email: f.send_email.checked, send_webhook: f.send_webhook.checked,
+        webhook_name: f.webhook_name ? f.webhook_name.value : '', homeview: f.homeview.checked
       };
     }
     form.addEventListener('submit', async function (e) {
@@ -103,7 +83,7 @@
       var m = $('#f-hook-msg');
       say(m, 'Sending…', true);
       try {
-        var r = await AskAdmin.post('/ui/schedules/test-webhook', {});
+        var r = await AskAdmin.post('/ui/schedules/test-webhook', { webhook_name: form.elements.webhook_name ? form.elements.webhook_name.value : '' });
         say(m, r.result || 'Sent.', true);
       } catch (err) { say(m, err.message, false); }
     });
@@ -143,7 +123,7 @@
       catch (err) { vcoAlert(err.message); }
     });
   });
-  var LABELS = { ok: 'sent', unchanged: 'no change', email_failed: 'not sent', error: 'failed', running: 'running' };
+  var LABELS = { ok: 'sent', unchanged: 'no change', not_sent: 'not sent', error: 'failed', running: 'running' };
   $$('[data-history]').forEach(function (b) {
     b.addEventListener('click', async function () {
       var row = document.getElementById('hist-' + b.dataset.history);

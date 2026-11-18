@@ -1,8 +1,10 @@
-"""Alert notifications: email (SMTP, standard library) and a webhook (JSON POST).
+"""Alert notifications: email (SMTP, standard library) and webhooks (JSON POST).
 
 Both are optional and work at dark sites with a local mail relay or chat server. The
 webhook body has a "text" field, which Slack, Mattermost, Rocket.Chat and most chat
-incoming webhooks show as the message, plus the alert details for scripts.
+incoming webhooks show as the message, plus the alert details for scripts. Discord gets
+embeds. Besides the default webhook there can be named ones (for example "daily"), picked
+per alert rule or per Ask scheduled prompt.
 """
 
 from __future__ import annotations
@@ -94,31 +96,70 @@ def send_message(settings: dict[str, Any], to: list[str], subject: str, text: st
     return f"email sent to {', '.join(to)}"
 
 
-def send_webhook(settings: dict[str, Any], subject: str, body: str, event: dict[str, Any]) -> str:
-    url = (settings.get("webhook_url") or "").strip()
+def send_webhook(settings: dict[str, Any], subject: str, body: str, event: dict[str, Any], name: str = "") -> str:
+    url = resolve_webhook(settings, name)
     alert = {k: v for k, v in event.items() if k != "fired_at_text"}
-    return post_webhook(url, subject, body, {"alert": alert}, username="vCommunity Logs", parts=1)
+    return post_webhook(url, subject, body, {"alert": alert}, username="vCommunity Logs", parts=1, color="fail")
 
 
-DISCORD_LIMIT = 2000      # characters in one Discord message
+def webhook_names(settings: dict[str, Any]) -> list[str]:
+    """The named webhooks (Log alerts → Notifications), besides the default one."""
+    return [str(w.get("name")) for w in settings.get("webhooks") or [] if isinstance(w, dict) and w.get("name")]
+
+
+def resolve_webhook(settings: dict[str, Any], name: str = "") -> str:
+    """The URL of a webhook by name: "" or "default" is the Webhook URL field, any other name
+    one of the named webhooks."""
+    name = str(name or "").strip()
+    if not name or name.lower() == "default":
+        return str(settings.get("webhook_url") or "").strip()
+    for w in settings.get("webhooks") or []:
+        if isinstance(w, dict) and str(w.get("name", "")).lower() == name.lower():
+            return str(w.get("url") or "").strip()
+    raise ValueError(f"no webhook named '{name}': add it under Log alerts → Notifications, or pick another")
+
+
+def mask_url(url: str) -> str:
+    """What the settings page shows for a saved webhook: the site only (the rest works like a password)."""
+    url = str(url or "").strip()
+    if not url:
+        return ""
+    head, sep, rest = url.partition("://")
+    host = rest.split("/", 1)[0]
+    return f"{head}{sep}{host}/…" if sep else "…"
+
+
+DISCORD_LIMIT = 2000      # characters in one Discord message (plain content)
+DISCORD_EMBED_LIMIT = 4000  # characters in one Discord embed description (Discord allows 4,096)
 DISCORD_PARTS = 5         # a long text goes out as at most this many Discord messages
+COLORS = {"fail": 0xD93025, "warn": 0xE37400, "ok": 0x2E7D32, "info": 0x0072A3}
 
 
 def post_webhook(url: str, title: str, text: str, extra: dict[str, Any] | None = None, *,
-                 username: str = "vCommunity", parts: int = DISCORD_PARTS) -> str:
-    """POST text to a chat webhook. Discord URLs get Discord messages ("content", split on
-    paragraph lines into at most `parts` messages of 2,000 characters, no @mentions); any
-    other URL gets one JSON {"text", "title", **extra} (Slack, Mattermost, Rocket.Chat, scripts)."""
+                 username: str = "vCommunity", parts: int = DISCORD_PARTS, color: str = "info", link: str = "") -> str:
+    """POST text to a chat webhook. Discord URLs get Discord embeds (a title, a color bar: red
+    for failures, green for ok, blue for information; a link; the text split on paragraph
+    lines into at most `parts` messages, no @mentions); any other URL gets one JSON
+    {"text", "title", **extra} (Slack, Mattermost, Rocket.Chat, scripts)."""
     url = (url or "").strip()
     if not url:
         raise ValueError("no webhook URL is set: enter one under Log alerts → Notifications and click Save")
     if not url.lower().startswith(("http://", "https://")):
         raise ValueError("the webhook needs an http:// or https:// URL (Log alerts → Notifications)")
     if DISCORD_RE.match(url):
-        payloads = [{"content": chunk, "username": username, "allowed_mentions": {"parse": []}}
-                    for chunk in split_text(text, DISCORD_LIMIT, parts)]
+        chunks = split_text(text, DISCORD_EMBED_LIMIT, parts)
+        payloads = []
+        for i, chunk in enumerate(chunks):
+            embed: dict[str, Any] = {"description": chunk, "color": COLORS.get(color, COLORS["info"])}
+            if i == 0 and title:
+                embed["title"] = title[:256]
+                if link.lower().startswith(("http://", "https://")):
+                    embed["url"] = link
+            if len(chunks) > 1:
+                embed["footer"] = {"text": f"Part {i + 1} of {len(chunks)}"}
+            payloads.append({"embeds": [embed], "username": username, "allowed_mentions": {"parse": []}})
     else:
-        payloads = [{"text": text, "title": title, **(extra or {})}]
+        payloads = [{"text": text, "title": title, **({"link": link} if link else {}), **(extra or {})}]
     status = 0
     for payload in payloads:
         req = urllib.request.Request(url, data=json.dumps(payload, default=str).encode(),
@@ -160,12 +201,12 @@ def split_text(text: str, limit: int, parts: int) -> list[str]:
 DISCORD_RE = re.compile(r"^https://(?:\w+\.)?discord(?:app)?\.com/api/webhooks/", re.I)
 
 
-def notify(settings: dict[str, Any], event: dict[str, Any], email: bool, webhook: bool) -> str:
+def notify(settings: dict[str, Any], event: dict[str, Any], email: bool, webhook: bool, webhook_name: str = "") -> str:
     """Send what the rule asks for. Returns a short result line for the alert history."""
     subject, body = describe(event)
     results = []
     for wanted, name, fn in ((email, "email", lambda: send_email(settings, subject, body)),
-                             (webhook, "webhook", lambda: send_webhook(settings, subject, body, event))):
+                             (webhook, "webhook", lambda: send_webhook(settings, subject, body, event, webhook_name))):
         if not wanted:
             continue
         try:

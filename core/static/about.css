@@ -47,3 +47,6 @@
   .about-side { position: static; max-height: 260px; }
   .about-hero { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Table first column with a code name (for example the MCP tool list): keep the name on one line */
+.about-md td:first-child > code:only-child { white-space: nowrap; }

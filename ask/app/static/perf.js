@@ -243,6 +243,12 @@
     box.appendChild(kpi('Brave · ' + w.month, b.requests + (b.requests === 1 ? ' request' : ' requests'),
       money(b.cost) + ' estimated' + (b.failed ? ' · ' + b.failed + ' failed' : ''), b.limited ? 'warn' : 'ok'));
     box.appendChild(kpi('Web search cost · ' + w.month, money(w.total_cost), 'estimated, both providers', 'ok'));
+    if (w.budget) {
+      var pct = Math.round(w.budget.used * 100);
+      box.appendChild(kpi('Monthly web budget', pct + ' % used', money(w.budget.spent) + ' of ' + money(w.budget.limit) +
+        (w.budget.stopped ? ' · web calls stopped until next month' : w.budget.warn ? ' · over 80 %' : ''),
+        w.budget.stopped ? 'crit' : w.budget.warn ? 'warn' : 'ok'));
+    }
     if (q && q.remaining != null) {
       var used = q.limit ? 100 - q.remaining / q.limit * 100 : null;
       box.appendChild(kpi('Brave quota left', q.remaining.toLocaleString(), (q.limit ? 'of ' + q.limit.toLocaleString() + ' this month' : '') +

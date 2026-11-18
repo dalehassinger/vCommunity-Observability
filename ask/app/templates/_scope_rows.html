@@ -2,7 +2,7 @@
    Needs: sources, sel (picked values), mcp_servers, web_search, brave_search. #}
 {% set enabled = sources | selectattr('enabled') | list %}
 {% set groups = [('web-site', 'Blogs and web sites'), ('markdown-repo', 'Markdown repositories'), ('pdf', 'PDF documents'), ('openapi', 'API specs'), ('x-posts', 'X posts'), ('spreadsheet', 'Spreadsheets')] %}
-{% set web_on = (web_search and web_search.available) or (brave_search and brave_search.available) %}
+{% set web_on = (web_search and web_search.available) or (brave_search and brave_search.available) or (local_fetch and local_fetch.available) %}
         {% for plugin, label in groups %}
         {% set items = enabled | selectattr('plugin', 'equalto', plugin) | list %}
         {% if items %}
@@ -38,6 +38,9 @@
             {% endif %}
             {% if brave_search and brave_search.available %}
             <label class="scope-chip" title="The model may search the web (Brave Search) when the sources don't answer"><input type="checkbox" value="web:brave" data-plugin="web" {{ 'checked' if 'web:brave' in sel else '' }}><span>Web search (Brave)</span></label>
+            {% endif %}
+            {% if local_fetch and local_fetch.available %}
+            <label class="scope-chip" title="The model may read the pages your question names. Ask downloads them itself: free, and it reads internal pages too. It cannot search"><input type="checkbox" value="web:local" data-plugin="web" {{ 'checked' if 'web:local' in sel else '' }}><span>Web fetch (local)</span></label>
             {% endif %}
           </span>
         </div>

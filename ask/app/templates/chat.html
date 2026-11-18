@@ -53,7 +53,7 @@
         </summary>
         <div class="model-list" role="menu" aria-label="Saved prompts"></div>
       </details>
-        <span class="composer-hint">Enter to send · Shift+Enter for a new line</span>
+        <span class="composer-hint">Enter to send · Shift+Enter for a new line · ↑ last question</span>
         <button class="btn btn-primary" id="send" type="submit">Send</button>
         <button class="btn btn-outline" id="stop" type="button" hidden>Stop</button>
       </div>
@@ -62,7 +62,7 @@
     {% set sel = chat.scope.split(',') if chat and chat.scope and chat.scope != 'all' else [] %}
     {% set enabled = sources | selectattr('enabled') | list %}
     {% set groups = [('web-site', 'Blogs and web sites'), ('markdown-repo', 'Markdown repositories'), ('pdf', 'PDF documents'), ('openapi', 'API specs'), ('x-posts', 'X posts'), ('spreadsheet', 'Spreadsheets')] %}
-    {% set web_on = (web_search and web_search.available) or (brave_search and brave_search.available) %}
+    {% set web_on = (web_search and web_search.available) or (brave_search and brave_search.available) or (local_fetch and local_fetch.available) %}
     <div class="scope-panel" id="scope-pick" role="group" aria-label="Sources to search">
       <div class="scope-head">
         <span class="scope-title">Sources</span>
@@ -92,5 +92,6 @@
   };
 </script>
 <script src="/static/charts.js?v={{ asset_v }}"></script>
+<script src="/static/scope.js?v={{ asset_v }}"></script>
 <script src="/static/ask.js?v={{ asset_v }}"></script>
 {% endblock %}

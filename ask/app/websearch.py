@@ -30,8 +30,11 @@ from . import webusage
 SCOPE = "web:ollama"          # the value of the Sources menu entry (Ollama)
 BRAVE_SCOPE = "web:brave"     # the value of the Sources menu entry (Brave)
 FETCH_SCOPE = "web:fetch"     # Ollama web_fetch only: read named pages, no search
+LOCAL_SCOPE = "web:local"     # local_fetch: Ask itself downloads the page (free, works at dark sites)
+LOCAL_TOOL = "local_fetch"
 SEARCH_SCOPES = (SCOPE, BRAVE_SCOPE)
-SCOPES = (SCOPE, BRAVE_SCOPE, FETCH_SCOPE)
+FETCH_SCOPES = (FETCH_SCOPE, LOCAL_SCOPE)     # read named pages, no search
+SCOPES = (SCOPE, BRAVE_SCOPE, FETCH_SCOPE, LOCAL_SCOPE)
 SERVER = "web"                # tool index marker: rag.run_tool sends these here
 DEFAULT_URL = "https://ollama.com"
 BRAVE_DEFAULT_URL = "https://api.search.brave.com"
@@ -63,6 +66,16 @@ BRAVE_TOOLS = [
          "max_results": {"type": "integer", "description": "How many results (1-10, default 5)"}},
          "required": ["query"]}},
 ]
+LOCAL_TOOLS = [
+    {"name": LOCAL_TOOL,
+     "description": ("Read one web page by URL. vCommunity Ask downloads it itself (it works for internal pages "
+                     "such as wikis and documentation mirrors) and returns its text and links."),
+     "inputSchema": {"type": "object", "properties": {
+         "url": {"type": "string", "description": "The full http(s) URL"}},
+         "required": ["url"]}},
+]
+TOOL_NAMES = ("web_search", "web_fetch", BRAVE_TOOL, LOCAL_TOOL)   # the web tools (for the per-answer web cost)
+FETCH_TOOLS = ("web_fetch", LOCAL_TOOL)                            # read one page by URL
 
 
 def api_key() -> str:
@@ -91,20 +104,32 @@ def brave_status(cfg: dict[str, Any]) -> dict[str, Any]:
     return {"available": True, "why": ""}
 
 
+def local_status(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Same as status() for the local fetch (no key: only the Settings switch)."""
+    if not cfg.get("local_fetch"):
+        return {"available": False, "why": "Web fetch (local) is off (Settings)."}
+    return {"available": True, "why": ""}
+
+
 def status_of(cfg: dict[str, Any], scope: str) -> dict[str, Any]:
+    if scope == LOCAL_SCOPE:
+        return local_status(cfg)
     return brave_status(cfg) if scope == BRAVE_SCOPE else status(cfg)
 
 
 def label(scope_or_tool: str) -> str:
     if scope_or_tool in (BRAVE_SCOPE, BRAVE_TOOL):
         return "Brave web search"
+    if scope_or_tool in (LOCAL_SCOPE, LOCAL_TOOL):
+        return "Local web fetch"
     return "Ollama web fetch" if scope_or_tool in (FETCH_SCOPE, "web_fetch") else "Ollama web search"
 
 
 def ollama_tools(scope: str = SCOPE) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Tools for /api/chat plus the name -> (server, tool) index rag.run_tool uses."""
     tools, index = [], {}
-    pick = BRAVE_TOOLS if scope == BRAVE_SCOPE else [t for t in TOOLS if t["name"] == "web_fetch"] if scope == FETCH_SCOPE else TOOLS
+    pick = (BRAVE_TOOLS if scope == BRAVE_SCOPE else LOCAL_TOOLS if scope == LOCAL_SCOPE
+            else [t for t in TOOLS if t["name"] == "web_fetch"] if scope == FETCH_SCOPE else TOOLS)
     for t in pick:
         index[t["name"]] = (SERVER, {**t, "annotations": {"readOnlyHint": True}})
         tools.append({"type": "function", "function": {"name": t["name"], "description": t["description"],
@@ -179,9 +204,77 @@ def call(cfg: dict[str, Any], tool: str, args: dict[str, Any]) -> dict[str, Any]
     return res
 
 
+LOCAL_MAX_BYTES = 3 * 1024 * 1024
+LOCAL_TYPES = ("text/html", "application/xhtml", "text/plain", "text/markdown", "application/json", "text/xml", "application/xml")
+
+
+def host_allowed(cfg: dict[str, Any], url: str) -> bool:
+    """Settings → Local fetch hosts: empty = any host; else host names or *.domain patterns."""
+    import fnmatch
+    from urllib.parse import urlparse
+    pats = [p.strip().lower() for p in str(cfg.get("local_fetch_hosts") or "").replace("\n", ",").split(",") if p.strip()]
+    host = (urlparse(url).hostname or "").lower()
+    return not pats or any(fnmatch.fnmatch(host, p) for p in pats)
+
+
+def _local_fetch(cfg: dict[str, Any], args: dict[str, Any]) -> tuple[str, list[dict[str, str]]]:
+    """Download one page from the Ask container (no cloud service, no cost) and return its main
+    text (trafilatura, like the web-site source) and links."""
+    import html as html_mod
+    from urllib.parse import urljoin
+    url = str(args.get("url") or "").strip()
+    if not url.lower().startswith(("http://", "https://")):
+        raise ValueError("local_fetch needs a full http(s) URL")
+    if not host_allowed(cfg, url):
+        raise ValueError("This host is not in Settings → Local fetch hosts")
+    with requests.get(url, timeout=20, stream=True, allow_redirects=True,
+                      headers={"User-Agent": "vCommunity-Ask/1 (local fetch)", "Accept": "text/html,text/plain,*/*;q=0.5"},
+                      verify=not cfg.get("local_fetch_insecure")) as r:
+        if not host_allowed(cfg, r.url):
+            raise ValueError("The page redirected to a host that is not in Settings → Local fetch hosts")
+        if r.status_code >= 400:
+            raise RuntimeError(f"The page answered {r.status_code} {r.reason}")
+        kind = (r.headers.get("Content-Type") or "text/html").split(";")[0].strip().lower()
+        if not kind.startswith(LOCAL_TYPES):
+            raise RuntimeError(f"Not a text page ({kind}); local fetch reads HTML and text only")
+        body = b""
+        for part in r.iter_content(65536):
+            body += part
+            if len(body) > LOCAL_MAX_BYTES:
+                raise RuntimeError("The page is larger than 3 MB")
+        text = body.decode(r.encoding or "utf-8", "replace")
+        final = r.url
+    links: list[dict[str, str]] = [{"title": final, "url": final}]
+    if "html" in kind:
+        import trafilatura
+        main = trafilatura.extract(text, url=final, output_format="markdown", include_tables=True,
+                                   include_formatting=True, include_links=False, favor_recall=True) or ""
+        title = re.search(r"<title[^>]*>(.*?)</title>", text, re.S | re.I)
+        name = html_mod.unescape(title.group(1).strip()) if title else final
+        links = [{"title": name[:200], "url": final}]
+        for href, label_ in re.findall(r'<a\s[^>]*href="([^"#]+)"[^>]*>(.*?)</a>', text, re.S | re.I)[:400]:
+            full = urljoin(final, html_mod.unescape(href))
+            label_ = re.sub(r"<[^>]+>|\s+", " ", label_).strip()
+            if full.startswith(("http://", "https://")) and label_ and len(links) < 40:
+                links.append({"title": label_[:120], "url": full})
+        text = f"# {name}\n{final}\n\n{main or re.sub(r'<[^>]+>', ' ', text)}"
+        if len(links) > 1:
+            text += "\n\nLinks on the page:\n" + "\n".join(f"- {l['title']}: {l['url']}" for l in links[1:30])
+    return text.strip(), links
+
+
 def _call(cfg: dict[str, Any], tool: str, args: dict[str, Any]) -> dict[str, Any]:
     """{"ok", "text" (what the model reads), "result" (for the card), "links", "error", "ms"}."""
     t0 = time.time()
+    if tool == LOCAL_TOOL:
+        try:
+            text, links = _local_fetch(cfg, args)
+        except requests.RequestException as e:
+            return {"ok": False, "error": f"Cannot reach the page: {e.__class__.__name__}", "text": "", "links": [],
+                    "ms": int((time.time() - t0) * 1000)}
+        except (RuntimeError, ValueError, UnicodeError) as e:
+            return {"ok": False, "error": str(e), "text": "", "links": [], "ms": int((time.time() - t0) * 1000)}
+        return {"ok": True, "text": text, "links": links, "error": "", "ms": int((time.time() - t0) * 1000)}
     if tool == BRAVE_TOOL:
         try:
             if not brave_key():

@@ -21,7 +21,8 @@
 {% set c = current or {} %}
 {% set sel = c.scope.split(',') if c.scope and c.scope != 'all' else [] %}
 <form class="card sched-form" id="sched-form" novalidate>
-  <div class="card-header">{{ 'Edit: ' ~ c.name if current else 'New scheduled prompt' }}</div>
+  <div class="card-header">{{ 'Edit: ' ~ c.name if c.id else 'New scheduled prompt' }}</div>
+  {% if from_saved %}<div class="alert alert-info sched-from-saved">Filled from the saved prompt <b>{{ from_saved }}</b>. Pick when it runs and where it is sent, then Save.</div>{% endif %}
   <div class="card-block">
     <input type="hidden" name="id" value="{{ c.id or '' }}">
     <div class="field"><label for="f-name">Name</label>
@@ -61,9 +62,15 @@
       <div><div class="sched-sendto">
           <label class="switch"><input type="checkbox" role="switch" name="send_email" {{ 'checked' if c.send_email is not defined or c.send_email else '' }}><span></span>Email</label>
           <label class="switch"><input type="checkbox" role="switch" name="send_webhook" {{ 'checked' if c.send_webhook else '' }}><span></span>Webhook</label>
+          <select name="webhook_name" id="f-webhook" data-hook aria-label="Which webhook">
+            <option value="">Default webhook</option>
+            {% for w in webhooks or [] %}<option value="{{ w }}" {{ 'selected' if c.webhook_name == w else '' }}>{{ w }}</option>{% endfor %}
+            {% if c.webhook_name and c.webhook_name not in (webhooks or []) %}<option value="{{ c.webhook_name }}" selected>{{ c.webhook_name }}{{ ' (missing)' if webhooks is not none else '' }}</option>{% endif %}
+          </select>
           <button class="btn btn-outline" type="button" id="f-test-webhook" data-hook>Send a test to the webhook</button></div>
-        <div class="hint" data-hook>Posts the answer to the webhook URL on <b>Log alerts → Notifications</b> in vCommunity Observability.
-          Discord gets up to 5 messages of 2,000 characters (a longer answer is cut; <b>Open in Ask</b> has all of it). The HTML report is not attached.</div>
+        <div class="hint" data-hook>Posts the answer to a webhook on <b>Log alerts → Notifications</b> in vCommunity Observability: the default one or a named one (for example <i>daily</i>), added there.
+          Discord gets an embed with a green bar (red when the prompt failed), up to 5 messages of 4,000 characters (a longer answer is cut; the title links to all of it in Ask). The HTML report is not attached.
+          {% if webhooks is none %}<br><b>The list of named webhooks could not be read</b> (vCommunity Observability not reachable).{% endif %}</div>
         <div class="field-err" data-err="send_to"></div>
         <div class="sched-msg" id="f-hook-msg" aria-live="polite"></div></div></div>
     <div class="field" data-email><label for="f-recipients">Email to</label>
@@ -81,6 +88,8 @@
         <label class="switch"><input type="checkbox" role="switch" name="include_sources" {{ 'checked' if c.include_sources is not defined or c.include_sources else '' }}><span></span>List the sources in the message</label>
         <label class="switch"><input type="checkbox" role="switch" name="avoid_repeats" {{ 'checked' if c.avoid_repeats else '' }}><span></span>Don't repeat recent answers</label>
         <div class="hint sched-opt-hint">Sends the answers of the last 30 runs along with the prompt and tells the model not to repeat them. Good for a daily quote, tip or idea. Leave it off for reports and status checks.</div>
+        <label class="switch"><input type="checkbox" role="switch" name="homeview" {{ 'checked' if c.homeview else '' }}><span></span>Show the latest answer on the Apple HomeView</label>
+        <div class="hint sched-opt-hint">The wall display in vCommunity Observability gets an <b>Ask</b> page with the newest answer of each prompt that has this on (for example today's weather or the X posts digest).</div>
         <label class="switch"><input type="checkbox" role="switch" name="only_changed" {{ 'checked' if c.only_changed else '' }}><span></span>Send only when the answer changed since the last run</label>
         <label class="switch"><input type="checkbox" role="switch" name="enabled" {{ 'checked' if c.enabled is not defined or c.enabled else '' }}><span></span>On (runs on its schedule)</label>
       </div></div>
@@ -108,14 +117,16 @@
           {% if s.running %}<span class="badge badge-info">running…</span>
           {% elif s.last %}
             {% set st = s.last.status %}
-            <span class="label {{ 'label-ok' if st == 'ok' else ('label-warn' if st in ('unchanged', 'email_failed') else ('label-crit' if st == 'error' else '')) }}">{{ {'ok': 'sent', 'unchanged': 'no change', 'email_failed': 'not sent', 'error': 'failed'}.get(st, st) }}</span>
+            <span class="label {{ 'label-ok' if st == 'ok' else ('label-warn' if st in ('unchanged', 'not_sent') else ('label-crit' if st == 'error' else '')) }}">{{ {'ok': 'sent', 'unchanged': 'no change', 'not_sent': 'not sent', 'error': 'failed'}.get(st, st) }}</span>
             <div class="subtle sched-meta">{{ s.last.started | ago }}{% if s.last.seconds %} · {{ s.last.seconds | round | int }} s{% endif %}
               {% if s.last.chat_id %} · <a href="/chat/{{ s.last.chat_id }}">answer</a>{% endif %}</div>
             {% if s.last.error %}<div class="sched-err">{{ s.last.error | truncate(160) }}</div>
             {% elif st != 'ok' and s.last.email %}<div class="sched-err">{{ s.last.email | truncate(160) }}</div>{% endif %}
           {% else %}<span class="subtle">never</span>{% endif %}
         </td>
-        <td class="sched-meta">{% if s.send_email is not defined or s.send_email %}{{ s.recipients }}{% endif %}{% if s.send_webhook %}{% if s.send_email %}<br>{% endif %}Webhook{% endif %}</td>
+        <td class="sched-meta sched-sendto-cell">
+          {% if s.send_email is not defined or s.send_email %}<span class="sendto" title="Email to {{ s.recipients }}"><svg class="sendto-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v12H3z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3 7l9 6 9-6" fill="none" stroke="currentColor" stroke-width="1.8"/></svg><span class="sendto-text">{{ s.recipients | truncate(40) }}</span></span>{% endif %}
+          {% if s.send_webhook %}<span class="sendto" title="Webhook: {{ s.webhook_name or 'default' }}"><svg class="sendto-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span class="sendto-text">{{ s.webhook_name or 'Webhook' }}</span></span>{% endif %}</td>
         <td><label class="switch"><input type="checkbox" role="switch" data-enable="{{ s.id }}" aria-label="Run {{ s.name }} on its schedule" {{ 'checked' if s.enabled else '' }}><span></span></label></td>
         <td class="sched-acts">
           <button class="link-btn" type="button" data-run="{{ s.id }}" {{ 'disabled' if s.running else '' }}>Run now</button> ·
@@ -136,5 +147,6 @@
 {% endblock %}
 {% block scripts %}
 <script src="/static/admin.js?v={{ asset_v }}"></script>
+<script src="/static/scope.js?v={{ asset_v }}"></script>
 <script src="/static/schedules.js?v={{ asset_v }}"></script>
 {% endblock %}

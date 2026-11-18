@@ -8,12 +8,21 @@ Routes (no token needed, read-only, like the dashboards):
 The data comes from the other modules' SQLite tables (dbh-insights, datastore-capacity,
 github-status) through the core's read-only storage. A module that is off or has never
 collected is reported as unavailable, and the display leaves its pages out.
+
+The Ask page shows the latest answers of vCommunity Ask scheduled prompts that have "Show the
+latest answer on the Apple HomeView" on. They are read from Ask's GET /api/homeview at
+VCO_ASK_INTERNAL_URL (default http://vco-ask:8081) with ASK_API_TOKEN (or VCO_ASK_TOKEN),
+at most once a minute.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -200,6 +209,31 @@ def register(app, ctx) -> None:
                               "FROM maintenances ORDER BY scheduled_for LIMIT 2"),
         }
 
+    # -- vCommunity Ask: latest answers of scheduled prompts --------------------------------
+    ask_cache: dict[str, Any] = {"at": 0.0, "value": None}
+
+    def ask() -> dict[str, Any]:
+        if time.time() - ask_cache["at"] < 60 and ask_cache["value"] is not None:
+            return ask_cache["value"]
+        base = (os.environ.get("VCO_ASK_INTERNAL_URL") or "http://vco-ask:8081").rstrip("/")
+        tok = os.environ.get("VCO_ASK_TOKEN") or os.environ.get("ASK_API_TOKEN") or ""
+        req = urllib.request.Request(base + "/api/homeview", headers={"Authorization": f"Bearer {tok}"} if tok else {})
+        try:
+            with urllib.request.urlopen(req, timeout=3) as r:
+                items = json.loads(r.read().decode("utf-8")).get("items") or []
+            value = ({"available": True, "collected_at": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
+                      "items": [{"name": str(i.get("name") or ""), "answer": str(i.get("answer") or ""),
+                                 "finished": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(i["finished"])) if i.get("finished") else None}
+                                for i in items[:6]]}
+                     if items else {"available": False, "why": "No Ask scheduled prompt has Show on the Apple HomeView on"})
+        except urllib.error.HTTPError as e:
+            value = {"available": False, "why": "vCommunity Ask refused the token (set ASK_API_TOKEN)" if e.code == 401
+                     else f"vCommunity Ask answered {e.code}"}
+        except (OSError, ValueError):
+            value = {"available": False, "why": "vCommunity Ask is not reachable"}
+        ask_cache.update(at=time.time(), value=value)
+        return value
+
     @app.get("/ui/homeview/data", include_in_schema=False)
     def data() -> dict[str, Any]:
         ctx.check_available()
@@ -207,7 +241,7 @@ def register(app, ctx) -> None:
         return {"generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "mock": bool(core.cfg.mock),
                 "cycle_seconds": cycle() if cycle else 20,
                 "layout": core.homeview_layout() if hasattr(core, "homeview_layout") else None,
-                "dbh": dbh(), "storage": storage(), "github": github()}
+                "dbh": dbh(), "storage": storage(), "github": github(), "ask": ask()}
 
     @app.get("/homeview", response_class=HTMLResponse, include_in_schema=False)
     def display():

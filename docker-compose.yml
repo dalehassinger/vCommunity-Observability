@@ -28,6 +28,7 @@ services:
       VCO_CONFIG: /app/config/config.yaml
       VCO_EXPORT_DIR: /app/exports
       VCO_ASK_URL: ${VCO_ASK_URL:-http://localhost:8081}   # sidebar link to vCommunity Ask (empty = hide)
+      VCO_ASK_INTERNAL_URL: http://vco-ask:8081           # Apple HomeView's Ask page reads answers here (with ASK_API_TOKEN)
       VCO_SYSLOG_HOST_PORT: ${SYSLOG_PORT:-514}             # shown in the Logs setup examples
       # TZ: America/New_York                              # default time zone offered for scheduled exports
     restart: unless-stopped

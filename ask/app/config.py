@@ -92,6 +92,14 @@ SETTINGS: dict[str, dict[str, Any]] = {
     "web_price_ollama_search": {"default": 0.01, "type": "float"},
     "web_price_ollama_fetch":  {"default": 0.001, "type": "float"},
     "web_price_brave_search":  {"default": 0.005, "type": "float"},
+    # Web fetch (local): Ask downloads a page itself (no cloud service, no cost; for internal
+    # pages and dark sites). Off by default. Hosts: empty = any, else names or *.domain patterns.
+    "local_fetch":          {"default": False, "env": "ASK_LOCAL_FETCH", "type": "bool"},
+    "local_fetch_hosts":    {"default": "", "env": "ASK_LOCAL_FETCH_HOSTS", "type": "str"},
+    "local_fetch_insecure": {"default": False, "env": "ASK_LOCAL_FETCH_INSECURE", "type": "bool"},
+    # Monthly web budget (US$, 0 = none): a warning at 80 %, and no more web calls at 100 %
+    # until the next calendar month (UTC). Counted with the prices above.
+    "web_budget":              {"default": 0.0, "env": "ASK_WEB_BUDGET", "type": "float"},
 }
 
 

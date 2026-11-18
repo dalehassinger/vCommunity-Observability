@@ -1,5 +1,5 @@
 """Scheduled prompts (ask/app/schedules.py): form checks, schedules, the email, runs
-(answer saved as a chat, email sent, "only when changed", failures) and the mailer's errors.
+(answer saved as a chat, email sent, "only when changed", failures) and the notifier's errors.
 
 Run from the ask/ folder:      python -m unittest discover -s tests -v
 """
@@ -23,7 +23,7 @@ GOOD = {"name": "Weekly blog", "prompt": "What is new?", "scope": ["vcrocs"], "f
 CFG = {"chat_model": "qwen", "public_url": "http://ask.local:8081"}
 
 
-class FakeMailer:
+class FakeNotifier:
     def __init__(self, fail: str = ""):
         self.sent: list[dict] = []
         self.fail = fail
@@ -36,11 +36,14 @@ class FakeMailer:
 
     hook_fail = ""
 
-    def webhook(self, title, text):
+    def webhook(self, title, text, *, name="", color="info", link=""):
         if self.hook_fail:
             raise RuntimeError(self.hook_fail)
-        self.posted = getattr(self, "posted", []) + [{"title": title, "text": text}]
+        self.posted = getattr(self, "posted", []) + [{"title": title, "text": text, "name": name, "color": color, "link": link}]
         return "webhook answered 204"
+
+    def webhooks(self):
+        return ["daily"]
 
 
 class FakeIndexer:
@@ -87,6 +90,9 @@ class Checks(unittest.TestCase):
                                    model="qwen", seconds=1)
         self.assertIn("> What is new?", text)
         self.assertIn("failed", text)
+        _, text = sched.build_chat({**s, "include_prompt": 1, "prompt": "Line one\n\nLine two"},
+                                   {"chat_id": "", "answer": "ok"}, public="", when=when, model="qwen", seconds=1)
+        self.assertIn("> Line one\n>\n> Line two", text)
 
     def test_clean_accepts_a_good_schedule(self):
         s, errors = sched.clean(GOOD)
@@ -171,11 +177,11 @@ class Runs(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.db = DB(Path(self.tmp.name) / "ask.db")
-        self.mailer = FakeMailer()
+        self.notifier = FakeNotifier()
         self.indexer = FakeIndexer()
         (Path(self.tmp.name) / "r1.html").write_text("<html>report</html>")
         self.s = sched.Schedules(self.db, lambda: CFG, lambda scope: (["vcrocs"], []), self.indexer,
-                                 FakeReports(Path(self.tmp.name)), None, self.mailer)
+                                 FakeReports(Path(self.tmp.name)), None, self.notifier)
         self.answers = []
 
     def tearDown(self):
@@ -199,7 +205,7 @@ class Runs(unittest.TestCase):
         self.assertEqual(self.cfg_seen["chat_model"], "gemma")
         self.assertEqual(self.indexer.started, ["vcrocs"])
         self.assertTrue(self.db.get_chat(out["chat_id"])["title"].startswith("Scheduled: Weekly blog"))
-        mail = self.mailer.sent[0]
+        mail = self.notifier.sent[0]
         self.assertEqual(mail["to"], ["a@example.com", "b@example.com"])
         self.assertEqual(mail["attachments"][0]["filename"], "VM report.html")
         runs = self.s.runs(item["id"])
@@ -212,7 +218,7 @@ class Runs(unittest.TestCase):
         with mock.patch.object(sched.rag, "answer", self.fake_answer), mock.patch.object(sched.control, "is_on", return_value=True):
             statuses = [self.s.run(item["id"])["status"] for _ in range(3)]
         self.assertEqual(statuses, ["ok", "unchanged", "ok"])
-        self.assertEqual(len(self.mailer.sent), 2)
+        self.assertEqual(len(self.notifier.sent), 2)
 
     def test_failed_answer_is_emailed_and_email_failure_is_recorded(self):
         item = self.s.save(GOOD)
@@ -220,31 +226,33 @@ class Runs(unittest.TestCase):
         with mock.patch.object(sched.rag, "answer", self.fake_answer), mock.patch.object(sched.control, "is_on", return_value=True):
             out = self.s.run(item["id"])
             self.assertEqual(out["status"], "error")
-            self.assertIn("failed", self.mailer.sent[0]["subject"])
-            self.mailer.fail = "The Logs module is switched off"
+            self.assertIn("failed", self.notifier.sent[0]["subject"])
+            self.notifier.fail = "The Logs module is switched off"
             out = self.s.run(item["id"])
-        self.assertEqual(out["status"], "email_failed")
+        self.assertEqual(out["status"], "not_sent")
         self.assertIn("not sent: The Logs module", self.s.runs(item["id"])[0]["email"])
 
     def test_webhook_only_needs_no_recipients(self):
-        item = self.s.save({**GOOD, "recipients": "", "send_email": False, "send_webhook": True})
-        self.assertEqual((item["send_email"], item["send_webhook"]), (0, 1))
+        item = self.s.save({**GOOD, "recipients": "", "send_email": False, "send_webhook": True, "webhook_name": "daily"})
+        self.assertEqual((item["send_email"], item["send_webhook"], item["webhook_name"]), (0, 1, "daily"))
         with mock.patch.object(sched.rag, "answer", self.fake_answer), mock.patch.object(sched.control, "is_on", return_value=True):
             out = self.s.run(item["id"])
         self.assertEqual(out["status"], "ok")
-        self.assertEqual(self.mailer.sent, [])
-        post = self.mailer.posted[0]
+        self.assertEqual(self.notifier.sent, [])
+        post = self.notifier.posted[0]
         self.assertIn("**Weekly blog**", post["text"])
         self.assertIn("Open in Ask: <http://ask.local:8081/chat/", post["text"])
         self.assertEqual(out["email"], "webhook answered 204")
+        self.assertEqual((post["name"], post["color"]), ("daily", "ok"))
+        self.assertTrue(post["link"].startswith("http://ask.local:8081/chat/"))
 
     def test_email_and_webhook_and_a_failed_webhook(self):
         item = self.s.save({**GOOD, "send_webhook": True})
-        self.mailer.hook_fail = "Webhook not sent: no webhook URL is set"
+        self.notifier.hook_fail = "Webhook not sent: no webhook URL is set"
         with mock.patch.object(sched.rag, "answer", self.fake_answer), mock.patch.object(sched.control, "is_on", return_value=True):
             out = self.s.run(item["id"])
-        self.assertEqual(out["status"], "email_failed")
-        self.assertEqual(len(self.mailer.sent), 1)
+        self.assertEqual(out["status"], "not_sent")
+        self.assertEqual(len(self.notifier.sent), 1)
         self.assertIn("email sent to a@example.com", out["email"])
         self.assertIn("webhook not sent: Webhook not sent: no webhook URL", out["email"])
 
@@ -348,9 +356,9 @@ class PublicAddress(unittest.TestCase):
         hv.assert_not_called()
 
 
-class MailerErrors(unittest.TestCase):
+class NotifierErrors(unittest.TestCase):
     def test_clear_messages(self):
-        m = sched.Mailer()
+        m = sched.Notifier()
         for code, text in ((401, "refused the API token"), (404, "Logs module is switched off")):
             resp = mock.Mock(status_code=code)
             with mock.patch.object(sched.requests, "post", return_value=resp):

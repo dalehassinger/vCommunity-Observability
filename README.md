@@ -387,6 +387,11 @@ Open **Apple HomeView** in the sidebar for a live preview and the **Open full sc
 | Clusters | dbh-insights (Cluster Capacity) | Hosts available, VMs on, running vCPU : core, running vRAM % of DRAM, N+1, datastore free %. 7 per page |
 | Health | dbh-insights (vHealth) | Findings by type and every finding, 12 per page |
 | GitHub | github-status | Overall status, components, active incidents or coming maintenance (an example of a source outside the lab) |
+| Ask | vCommunity Ask | The newest answer of each Ask [scheduled prompt](#scheduled-prompts) that has **Show the latest answer on the Apple HomeView** on (for example a daily weather or X posts digest), 2 per page, as plain text without citation marks |
+
+**The Ask page** reads `GET /api/homeview` on Ask (inside the compose network at `VCO_ASK_INTERNAL_URL`, default `http://vco-ask:8081`, at most once a minute) with `ASK_API_TOKEN` from the shared `.env` (or `VCO_ASK_TOKEN`). It is left out while no scheduled prompt has the switch on, or Ask can't be reached.
+
+**Offline dimming.** When the data can't load (vco stopped, network down), the top right shows **OFFLINE · RETRYING**. After 5 minutes without fresh data the pages are dimmed and grey, and it says **OFFLINE · DATA N MIN OLD**, so old numbers on the wall don't look current. Everything comes back at the next good load.
 
 The pages show in the order above (default). The **Apple HomeView** card on the Settings page reorders them with up / down buttons and can hide a page (saved as `homeview.order` and `homeview.hidden` in `app_settings`; `/ui/homeview/data` returns them as `layout`). The sort menus (the green tag in a list header, on VMs, Hosts and Storage) are remembered per section on each screen (`localStorage` `homeview.sort`).
 
@@ -443,7 +448,7 @@ Open the three pages from the **Logs** menu in the top-right toolbar (left of th
 | Page | What it does |
 | --- | --- |
 | **Logs** (`/dash/logs/search`) | Status cards (messages and errors in the last hour, sources sending, unacknowledged alerts, storage used against the cap). A search box with time range (15 min to 7 days, or everything kept), severity, **source** and **app** pickers, and **Quick** searches (Errors, vCommunity Ask activity, Ask prompts, Ask thinking, Ask tool calls, Clear). A chart of messages over time, colored by severity (click a bar to zoom into that slice; **Reset zoom** goes back). The results newest first, the search words highlighted, the message ID under the app; a message longer than 500 characters (a prompt, the model's thinking) is cut in the list. Click a row for the whole message and every field (time in the message, sender IP, facility, process and message ID, RFC 5424 structured data) and **Only this source**, **Hide this source**, **Only this app**, **Messages around this one**. **Load older messages** pages back. **Live tail** adds new matching messages at the top every 2 seconds. **Export CSV** downloads the current search (up to 100,000 rows). The search is kept in the URL, so it can be bookmarked or shared |
-| **Log alerts** (`/dash/logs/alerts`) | Alert rules you define in the page: a name, a search, a severity, "fire when N or more messages in M minutes", a wait before it can fire again, and whether to send email and/or a webhook. **Test against current logs** shows how many messages match now and whether it would fire. Fired alerts are listed with the count, the five newest matching messages, what was sent, and **Show messages** (opens Logs at that time window). Acknowledge or delete them one by one, selected, or all. **Notifications** holds the SMTP server (port, no TLS / STARTTLS / SSL, optional user and password, From, To) and the webhook URL (Slack-style `text` JSON with `title` and `alert` for scripts; Discord webhook URLs get a Discord `content` message), with **Send test email** and **Send test webhook**, and **Check alert rules**, the master switch for every rule (shown On or Off; saving it off asks first, and while it is off a yellow banner at the top of the page says so, with **Turn alert checking on**) |
+| **Log alerts** (`/dash/logs/alerts`) | Alert rules you define in the page: a name, a search, a severity, "fire when N or more messages in M minutes", a wait before it can fire again, and whether to send email and/or a webhook. **Test against current logs** shows how many messages match now and whether it would fire. Fired alerts are listed with the count, the five newest matching messages, what was sent, and **Show messages** (opens Logs at that time window). Acknowledge or delete them one by one, selected, or all. **Notifications** holds the SMTP server (port, no TLS / STARTTLS / SSL, optional user and password, From, To) the default webhook URL and **Named webhooks** (Slack-style `text` JSON with `title` and `alert` for scripts; Discord webhook URLs get Discord embeds, red for alerts and failures). A saved URL is shown masked as its site only (`https://discord.com/…`), because it works like a password: leave the box blank to keep it, or tick **Clear**. **Add webhook** adds a named one (for example *daily*) with its own **Test** and **Remove**; each alert rule and each Ask scheduled prompt picks one (empty = the default). With **Send test email** and **Send test webhook**, and **Check alert rules**, the master switch for every rule (shown On or Off; saving it off asks first, and while it is off a yellow banner at the top of the page says so, with **Turn alert checking on**) |
 | **Log settings** (`/dash/logs/settings`) | **Keep logs for** (days, default **5**) and **Size cap** (GB, default **5**), **Idle source after** (minutes, default 15; only a label, because apps such as Ask send only when used; make a log alert to be told a host stopped sending). Listener status (running, ports, messages received and dropped, rate, TCP connections, recent problems), disk use, every **source** (name, IP, its apps in the last 24 h, last message, messages and errors in 24 h, idle or sending), and copy-and-paste setup for ESXi, PowerCLI, vCenter, vCommunity Ask, and your own PowerShell or Python scripts, using the address you opened the page with |
 
 **Point hosts and apps at it.** Use the address of the computer that runs the containers, port 514, or the port you set as `SYSLOG_PORT` in `.env` (containers in the same compose project use `vco:5514`). The Log settings page fills that port into every example; the examples below use 514:
@@ -513,10 +518,10 @@ vCenter: VAMI (`https://<vcenter>:5480`) → **Syslog** → **Configure**. `tcp:
 - Rows are written in batches every second to **`data/syslog.db`**, a SQLite file of its own (WAL, FTS5 full-text index), so log traffic never slows the dashboards. In tests it took 5,000 messages per second over UDP and TCP with none dropped, using about 35 MB of memory. A message takes about 400 bytes with its index, so the default 5 GB holds roughly 12 million messages.
 - **Checkpoints:** the housekeeping pass every 5 minutes runs a `PASSIVE` WAL checkpoint, which never waits for readers or blocks the writer. `TRUNCATE`, which also shrinks the `-wal` file, runs only on a size-cap pass. An `app` index (`logs_app_ts`, case-insensitive) serves the App picker and `app:` searches.
 - **Retention:** every 5 minutes, messages older than **Keep logs for** are deleted, then, if the data is still above **Size cap**, the oldest 5% at a time until it fits. Freed space is given back to the disk (incremental vacuum). Changes on the Log settings page apply at the next cleanup.
-- **Alerts** are checked every 30 seconds. A rule fires when its search finds at least its threshold of new messages in its window, then waits its cooldown before it can fire again. A message counts for a rule only once, so a cooldown of 0 is safe (every new match alerts right away, no repeats). For a rule with threshold 1, matches that arrive during the wait are sent together when it is over. Every fired alert is listed on Log alerts (and counted on the Logs page); email and webhook are optional per rule. The webhook is a JSON POST with a `text` field (Slack, Mattermost, Rocket.Chat style) plus the alert details (rule, count, window, search, newest messages). Both work at a dark site with a local mail relay or chat server.
+- **Alerts** are checked every 30 seconds. A rule fires when its search finds at least its threshold of new messages in its window, then waits its cooldown before it can fire again. A message counts for a rule only once, so a cooldown of 0 is safe (every new match alerts right away, no repeats). For a rule with threshold 1, matches that arrive during the wait are sent together when it is over. Every fired alert is listed on Log alerts (and counted on the Logs page); email and webhook are optional per rule. The webhook (the rule's named webhook, or the default) is a JSON POST with a `text` field (Slack, Mattermost, Rocket.Chat style) plus the alert details (rule, count, window, search, newest messages); Discord gets a red embed. Both work at a dark site with a local mail relay or chat server.
 - The **Performance** dashboard (on Ask) has a **Logs** panel: logs per second, per minute and per hour, log disk space used (against the cap) and disk space available, with charts. See [Performance](#performance).
 
-**REST API** (token required, in Swagger under `logs`): `GET /api/logs/search?q=...&range=1h&sev=err&host=...&limit=200&before=<id>` (or `since`/`until` as epoch seconds), `app=` filters by app name too. `GET /api/logs/summary`, `GET /api/logs/hosts` (every source with its top apps; `quiet: true` = idle), `GET /api/logs/apps` (every app name: last seen, messages and errors in 24 h, how many sources), `GET /api/logs/alerts`. `POST /api/logs/notify/email` sends an email through the mail server set under **Notifications**, for other apps (Ask's [scheduled prompts](#scheduled-prompts)): `{"to": "a@x.com, b@x.com", "subject": "...", "text": "...", "html": "...", "attachments": [{"filename": "r.html", "content_type": "text/html", "data_base64": "..."}], "sender_name": "vCommunity Ask"}` (at most 20 addresses and 15 MB of attachments; 400 when no mail server is set or an address is wrong, 502 when the mail server refuses). `POST /api/logs/notify/webhook` posts `{"title": "...", "text": "Markdown"}` to the webhook URL under **Notifications** (or to `url` when given; `username` is the name Discord shows). Discord URLs get Discord messages (split into up to 5 of 2,000 characters); others get `{"text", "title"}`. 400 when no URL is set or the service refuses, 502 when it can't be reached.
+**REST API** (token required, in Swagger under `logs`): `GET /api/logs/search?q=...&range=1h&sev=err&host=...&limit=200&before=<id>` (or `since`/`until` as epoch seconds), `app=` filters by app name too. `GET /api/logs/summary`, `GET /api/logs/hosts` (every source with its top apps; `quiet: true` = idle), `GET /api/logs/apps` (every app name: last seen, messages and errors in 24 h, how many sources), `GET /api/logs/alerts`. `POST /api/logs/notify/email` sends an email through the mail server set under **Notifications**, for other apps (Ask's [scheduled prompts](#scheduled-prompts)): `{"to": "a@x.com, b@x.com", "subject": "...", "text": "...", "html": "...", "attachments": [{"filename": "r.html", "content_type": "text/html", "data_base64": "..."}], "sender_name": "vCommunity Ask"}` (at most 20 addresses and 15 MB of attachments; 400 when no mail server is set or an address is wrong, 502 when the mail server refuses). `POST /api/logs/notify/webhook` posts `{"title": "...", "text": "Markdown"}` to the default webhook under **Notifications**, to a named one with `"webhook": "daily"`, or to `url` when given (`username` is the name Discord shows; `color` is `fail`, `warn`, `ok` or `info`; `link` makes the Discord title a link). Discord URLs get embeds (split into up to 5 of 4,000 characters, the title on the first, "Part 2 of 3" footers); others get `{"text", "title", "link"}`. `GET /api/logs/notify/webhooks` lists the webhook names (never the URLs). 400 when no URL is set or the service refuses, 502 when it can't be reached.
 
 **Limits.** It is sized for a lab or a small site, not for a whole data center (use a dedicated log platform there). No TLS syslog (port 6514) yet. Syslog itself has no authentication: anyone who can reach port 514 can send messages, so keep it on the management network. The SMTP password is stored unencrypted in `data/syslog.db`, like the vCenter passwords in `_core.db`.
 
@@ -593,7 +598,7 @@ ASK_OLLAMA_URL=http://127.0.0.1:11434 uvicorn app.main:create_app --factory --po
 - **No sources (just the model)** is a button at the top of the Sources list. Use it to work with text you paste: rephrase, fix grammar and spelling, shorten, change the tone, summarize or translate. Nothing is searched (no sources, no citations); the model gets your message, the recent turns of the chat and the **System prompt without sources** from the Settings page, which tells it to keep your meaning and voice and to give the edited text first, then a short list of changes. It still runs on your local Ollama, so the text stays on your machine. Ticking a source unticks it (and the other way round); web search and MCP tools can be ticked with it. The REST API takes `"sources": ["none"]`.
 - **A picked source that is gone.** When every source a chat or scheduled prompt picked by name no longer exists (deleted or renamed), the question is answered as **No sources (just the model)**, not with **All sources**. If some of the picked sources still exist, only those are searched.
 - **Switch the chat model under the prompt.** The model button at the left under the question box (for example `qwen3.8:27b-mlx`) is a menu: click it to list the chat models installed in Ollama, with their size and a **no tools** tag for models that can't call tools (web search and MCP tools need them). Picking one saves the **Chat model** setting, the same one as on the Settings page, and it is used from the next question. When `ASK_API_TOKEN` is set, enter the token once on the Settings page first; the menu uses it from this browser.
-- **New chat** shows example questions (set per source) and how much is indexed. Type a question; **Enter** sends, **Shift+Enter** adds a line. The **Sources** list under the question box shows every source as a button, one row per type (blogs and web sites, markdown repositories, PDF documents, API specs, spreadsheets, web, MCP tools). Click buttons to pick one or more (a picked one turns blue with a check mark), or use **only these** on a row (for example only the blog sites). **All sources** clears the picks, which searches every enabled source except spreadsheets (a source switched off on Knowledge sources is left out until you pick it by name); the line at the top says what is picked. **Hide list** folds the rows to that one line (remembered in this browser; folded by default on a phone). A mouse click or tap in the question box also folds the list, so it gets out of the way while you type; **Show list** opens it again. A chat keeps the sources it started with, and a new chat starts with your last selection (remembered in this browser). **Stop** ends an answer early (what was written so far is kept).
+- **New chat** shows example questions (set per source) and how much is indexed. Type a question; **Enter** sends, **Shift+Enter** adds a line. In a chat, **Up arrow** in the empty box puts your last question back in it to change and send again; press it again for earlier questions and **Down arrow** to come forward (past the newest gives back what you had typed). Once you type in it, the arrows move the cursor as usual. The **Sources** list under the question box shows every source as a button, one row per type (blogs and web sites, markdown repositories, PDF documents, API specs, spreadsheets, web, MCP tools). Click buttons to pick one or more (a picked one turns blue with a check mark), or use **only these** on a row (for example only the blog sites). **All sources** clears the picks, which searches every enabled source except spreadsheets (a source switched off on Knowledge sources is left out until you pick it by name); the line at the top says what is picked. **Hide list** folds the rows to that one line (remembered in this browser; folded by default on a phone). A mouse click or tap in the question box also folds the list, so it gets out of the way while you type; **Show list** opens it again. A chat keeps the sources it started with, and a new chat starts with your last selection (remembered in this browser). **Stop** ends an answer early (what was written so far is kept).
 - Each answer starts with a compact **Sources** strip: one numbered pill per matching section (title · heading), plus a **+N linked** pill for files added by link expansion. It stays small while the answer streams, so the answer is what you read.
 - Numbered **citation chips** `[n]` in the answer, and the pills in the strip, open **Source details** and jump to the matching card. **Source details** (folded by default) holds the full cards: title, section, file id, `draft`/`reviewed` badge, a snippet, linked diagrams, **Open** (the full file in the app, with its images and metadata) and **View on GitHub**, then a **Linked files** group showing what link expansion added and why.
 - While an answer streams the page follows it to the bottom. Scroll up to read something and it stops following, and a **Jump to latest** button appears above the question box; click it, or scroll back to the bottom, and it follows again. The answer is redrawn at most 10 times a second while it streams, so long answers with tables and code stay smooth.
@@ -682,14 +687,17 @@ A prompt Ask answers on a schedule and emails to you, posts to your chat webhook
 | Prompt | Written exactly as you would type it in the chat. Words like *report* or *dashboard* make an HTML report when a spreadsheet source is picked |
 | Model | Empty uses the **Chat model** from Settings. Another model can be picked for this prompt only (web search and MCP tools need one that can call tools) |
 | Schedule | **Every day**, **Weekdays (Mon–Fri)**, **Every week** (day), **Every month** (day 1–28 or **last**) or **Every N hours**, at a time, in a time zone (default `America/New_York`, or `ASK_SCHEDULE_TZ`) |
-| Send to | **Email** (on by default), **Webhook** (off by default), or both. Webhook posts the answer to the webhook URL set on **Log alerts → Notifications** in vCommunity Observability (the same one alerts use); **Send a test to the webhook** checks it right away |
+| Send to | **Email** (on by default), **Webhook** (off by default), or both. Webhook posts the answer to a webhook set on **Log alerts → Notifications** in vCommunity Observability: pick **Default** or one of the **Named webhooks** (for example *daily*); **Send a test to the webhook** checks it right away. The list shows Send to as icons (envelope, webhook) |
 | Email to | Shown with Email on. One or more addresses, separated by commas (at most 20). **Send a test email** checks the mail path right away |
 | Sync the picked sources first | Starts a sync of each picked source and waits for it (up to 30 minutes) before asking |
 | Attach the HTML report | When the answer made a report or dashboard, the `.html` file is attached (up to 12 MB) |
 | Show the prompt in the message | On by default. Off leaves the prompt out of the email's header and the webhook message (a failure still shows it) |
 | List the sources in the message | On by default. Off leaves out the Sources list and the `[1]` citation marks in the answer, for example for an X posts digest where the answer already has the links |
 | Send only when the answer changed | Skips the email and webhook when the answer is the same as the last run's (ignoring citation numbers, case and spacing). The run shows **no change** |
+| Show the latest answer on the Apple HomeView | Off by default. On adds this prompt's newest answer to the **Ask** page of the [Apple HomeView](#apple-homeview) wall display |
 | On | Off keeps the prompt but stops its schedule; **Run now** still works |
+
+**Schedule this.** Each saved prompt has a **Schedule** link (Saved prompts page) that opens a new scheduled prompt filled with its name, prompt (with its pages), sources and model (`/schedules?saved=<id>`). A `{variable}` uses its default; one without a default stays as written, so give it a default first.
 
 **What a run does.** It asks the question exactly like the chat (same retrieval, tools and system prompt) and saves it as a new chat called *Scheduled: name · date*, so the answer is in **Recent chats** and you can ask follow-up questions there. Then it emails:
 
@@ -698,7 +706,7 @@ A prompt Ask answers on a schedule and emails to you, posts to your chat webhook
 - an **Open in Ask** button for the chat and a link to change or stop the schedule,
 - the report as an attachment when there is one.
 
-**The webhook message** is Markdown: the name, time, model and seconds in bold, the prompt as a quote, the answer, up to 10 sources with their URLs and **Open in Ask**. Discord webhook URLs get Discord messages: a long answer is split at paragraph breaks into up to 5 messages of 2,000 characters, and anything beyond that is cut (the full answer is in Ask). Other URLs (Slack, Mattermost, Rocket.Chat, your own script) get one JSON `{"text": ..., "title": ...}`. The HTML report is not attached to the webhook. Ask never stores the webhook URL: it posts through the Logs module's `POST /api/logs/notify/webhook` on vco, with the same token as email.
+**The webhook message** is Markdown: the name, time, model and seconds in bold, the prompt as a quote, the answer, up to 10 sources with their URLs and **Open in Ask**. Discord webhook URLs get Discord embeds (blue, red when the run failed, the title links to the chat in Ask): a long answer is split at paragraph breaks into up to 5 embeds of 4,000 characters, and anything beyond that is cut (the full answer is in Ask). Other URLs (Slack, Mattermost, Rocket.Chat, your own script) get one JSON `{"text": ..., "title": ...}`. The HTML report is not attached to the webhook. Ask never stores the webhook URL: it posts through the Logs module's `POST /api/logs/notify/webhook` on vco, with the same token as email.
 
 When the answer fails (for example Ollama can't be reached), an email saying so is sent instead (subject ends in *failed*). With MCP tools or web search picked, the email holds only the model's final answer, written after its tool calls, not the "Let me check ..." lines in between (those stay in the saved chat). The sources list names each tool call and says which ones failed. If a model never writes an answer, the email shows what it said and a note to raise **Tool turns per answer** or make the prompt more specific.
 
@@ -721,7 +729,7 @@ $s = Invoke-RestMethod -Method Post -Uri http://localhost:8081/api/schedules -He
 Invoke-RestMethod -Method Post -Uri "http://localhost:8081/api/schedules/$($s.id)/run" -Headers $h
 ```
 
-Code: `ask/app/schedules.py`, `ask/app/templates/schedules.html`, `ask/app/static/schedules.js`; the email endpoint is in `modules/logs/web.py` and `modules/logs/notify.py`. Tests: `ask/tests/test_schedules.py` (no Ollama, no mail server) and the email part of `scripts/smoke_test.py`, which uses `scripts/fake_smtp.py` (a stand-in mail server that saves each message as a `.eml` file: `python scripts/fake_smtp.py 2525 ./fake-mail`).
+Code: `ask/app/schedules.py` (scheduling and sending, class `Notifier`), `ask/app/routes_schedules.py` (the web routes), `ask/app/templates/schedules.html`, `ask/app/static/schedules.js`; the email endpoint is in `modules/logs/web.py` and `modules/logs/notify.py`. Tests: `ask/tests/test_schedules.py` (no Ollama, no mail server) and the email part of `scripts/smoke_test.py`, which uses `scripts/fake_smtp.py` (a stand-in mail server that saves each message as a `.eml` file: `python scripts/fake_smtp.py 2525 ./fake-mail`).
 
 ### Saved prompts
 
@@ -730,9 +738,9 @@ A prompt that works, kept with its sources so you can ask it again with one clic
 | Field | What it does |
 | --- | --- |
 | Name | Shown in the **Saved** menu and as the new chat's title. Empty uses the start of the prompt |
-| Sources | The same grouped buttons as the chat: knowledge sources, **Web fetch (Ollama)**, **Web search (Ollama)**, **Web search (Brave)**, MCP tools, **No sources** or **All sources**. Each saved prompt keeps its own pick |
-| Pages to fetch | Optional, one full URL per line (at most 10). They are added under the prompt as *Read these pages with web_fetch: - url*. Needs **Web fetch (Ollama)** or **Web search (Ollama)** picked. Each page is one Ollama web fetch call |
-| Prompt | Written exactly as you would type it in the chat |
+| Sources | The same grouped buttons as the chat: knowledge sources, **Web fetch (Ollama)**, **Web fetch (local)**, **Web search (Ollama)**, **Web search (Brave)**, MCP tools, **No sources** or **All sources**. Each saved prompt keeps its own pick |
+| Pages to fetch | Optional, one full URL per line (at most 10). They are added under the prompt as *Read these pages with web_fetch: - url*. Needs **Web fetch (Ollama)**, **Web fetch (local)** or **Web search (Ollama)** picked. Each page is one Ollama web fetch call (free with Web fetch (local)) |
+| Prompt | Written exactly as you would type it in the chat. A value that changes can be a variable: `{city}`, or `{city=Dillsburg}` with a default (letters, digits and `_`, at most 8 per prompt). Variables work in the pages too, for example `https://example.com/weather/{city}` (the value is URL-encoded there) |
 | Model | Empty uses the chat model in use. Another model is used for that chat only; the **Chat model** setting is not changed |
 | Tags | Optional words such as *sports, weather, news* (commas between, at most 10; stored in lower case). Used to filter the list and the Saved menu |
 
@@ -740,7 +748,17 @@ A prompt that works, kept with its sources so you can ask it again with one clic
 
 **Running one.** The **Saved** button beside the model button under the chat box lists every saved prompt with its sources and tags. Click one to ask it in a new chat (an empty new chat runs it in place), with its sources ticked and its model used. **Edit first** puts the prompt in the box with its sources ticked so you can change it before sending. The Saved prompts page has the same as **Run** and **Edit before sending**, plus **Edit**, **Delete** and **Delete selected** (tick boxes, Shift-click for a range). The list shows how many times each was run and when last. The links `/chat?saved=<id>` and `/chat?saved=<id>&edit=1` do the same, so a saved prompt can be bookmarked.
 
-Saved prompts are kept in `ask.db` (table `saved_prompts`). Saving and deleting need the API token when `ASK_API_TOKEN` is set; running does not. REST API: `GET/POST /api/saved`, `GET/PUT/DELETE /api/saved/{id}` and `POST /api/saved/{id}/run` (asks it in a new chat and returns the whole answer, like `POST /api/ask`).
+**Pinned and most used first.** The ☆ star beside a saved prompt (on the page and in the **Saved** menu) pins it to the top; ★ unpins. The rest are listed most used first, then by name.
+
+**Variables.** Running a prompt with `{variables}` first opens a small form with one box per variable, filled with the last values used for that prompt in this browser, else the defaults. A variable without a default must be filled. The list shows *Asks for: city*.
+
+**Unavailable sources** are flagged before you run: the list and the Saved menu say *Not available now: Web search (Brave)* and whether Run leaves it out or answers with No sources.
+
+**Export and import.** **Export** downloads every saved prompt as `saved-prompts-<date>.json` (name, prompt, pages, sources, model, tags, pinned). **Import** adds the prompts from such a file, here or in another Ask; a prompt with the same name is replaced, and the page says how many were added, replaced or skipped (with the reason). REST API: `GET /api/saved/export`, `POST /api/saved/import` (the same JSON, or `{"items": [...]}`).
+
+Saved prompts are kept in `ask.db` (table `saved_prompts`). Saving and deleting need the API token when `ASK_API_TOKEN` is set; running does not. REST API: `GET/POST /api/saved`, `GET/PUT/DELETE /api/saved/{id}`, `PUT /api/saved/{id}/pin` (`{"on": true}`) and `POST /api/saved/{id}/run` (asks it in a new chat and returns the whole answer, like `POST /api/ask`; `{"values": {"city": "York"}}` fills its variables).
+
+When a saved prompt's sources can't be used now (a source deleted or turned off, a web search without its key, the MCP server down), they are left out. When none is left, the prompt runs with **No sources (just the model)**, never All sources. The chat shows a *Not available now* note under Sources, and `POST /api/saved/{id}/run` adds `scope_used` and `unavailable` to its answer.
 
 ### Ask activity log
 
@@ -1226,7 +1244,7 @@ Ask (container) --HTTP + token--> Ask host agent (Mac) --stdio JSON-RPC--> pwsh 
 | Policy | What happens in a chat |
 | --- | --- |
 | **Allowed** | The model calls it whenever it decides to. The default for read-only tools |
-| **Ask first** | The chat shows the tool and its arguments with **Run** and **Cancel**; nothing runs until you press Run (it waits up to 15 minutes). The default for tools that change things (`Send-Email`, `Create-DNS-ARecord`, `Save-HTML-Report`) |
+| **Ask first** | The chat shows the tool and its arguments with **Run** and **Cancel**; nothing runs until you press Run (it waits up to 15 minutes). The default for tools that change things (`Send-Email`, `Create-DNS-ARecord`, `Save-HTML-Report`, and `Get-ESX-Switch-Port-Map`, which writes an HTML file) |
 | **Off** | The model never sees the tool |
 
 Below that: **Tool turns per answer** (default 6: how many times the model may call tools before it must answer; on the last turn Ask tells the model it can't call more tools and must answer from the results it has, and any tool call it still makes is ignored. Between turns, what the model says ("I'll check the hosts ...") is kept as its own paragraph) and **Result size the model reads** (default 16,000 characters of one tool result; keep it well under the Model context). Changing them needs the API token, like Settings.
@@ -1234,6 +1252,79 @@ Below that: **Tool turns per answer** (default 6: how many times the model may c
 **In the chat:** the Sources strip gets one pill per tool call, and a folded **Tool calls** box under the answer holds a card per call: tool, server, status (done, failed, needs your OK, cancelled), time, the arguments, and the **Result** (formatted JSON; PowerShell results are shown without their `{"data": ...}` wrapper). Tools can be combined with knowledge sources: tick a blog and the tools, and the answer can use both. "Nothing ticked" never includes tools.
 
 **Notes.** The chat model must support tools (Ollama marks it with the `tools` capability; `qwen3.8:27b-mlx` does, `gemma3:27b` does not). Tool results go to the model as text, so a tool that returns thousands of rows uses up the context: give such tools filter parameters. The REST API can use tools too (`"sources": ["mcp:powershell-mcp"]` on `POST /api/ask`), but there a tool set to **Ask first** is refused, because nobody can press Run. Tool calls are not saved in the chat history the model sees on follow-ups, only the answers are.
+
+#### The tools in Dale's PowerShell MCP server
+
+`powershell-mcp` runs `MCP-Server-vCommunity-Ask.ps1` from the `PS-TAM-Lab/MCP` folder on the Mac. It exposes the 39 PowerShell functions named in `$FunctionsToExpose`. Their code is in `MCP-Server-vCommunity-Ask.ps1`, `MCP-vCommunity-Tools.ps1`, `MCP-Salt-Tools.ps1` and `MCP-Salt-Guest-Tools.ps1`. Each tool's description is the function's `.SYNOPSIS`, and each argument's description is its `.PARAMETER` help, so the model reads exactly what the comment-based help says. Connection details (vCenter, VCF Operations, the switch, the Salt master, the mail account and the DNS server) come from `Home-Lab-Config.yaml` beside the folder and never pass through Ask.
+
+This list is the server as of 2026-11-17. The **MCP tools** page always shows the live list, with each tool's arguments and policy. In the tables, **bold** arguments are required, `= x` is the default, and every other argument is optional. All tools return JSON.
+
+**vCenter (PowerCLI)**
+
+| Tool | What it returns | Arguments |
+| --- | --- | --- |
+| `Get-All-vCenter-VMs` | Every VM and its main properties | none |
+| `Get-vCenter-VM-Properties` | Full VM details: guest OS and version, VMware Tools, IPs, hardware, host and cluster, storage, reservations, limits, shares, uptime, notes, tags and custom attributes. Filters by OS, power state or cluster | `Name = *`, `VMId`, `GuestOS`, `PowerState` (PoweredOn, PoweredOff, Suspended), `Cluster`, `IncludeTags = $true`, `MaxVMs = 25` |
+| `Get-vCenter-VM-Stats` | Latest performance stats for one VM: CPU, memory, disk, network, uptime | **`VMName`** |
+| `Get-vCenter-Snapshot-Audit` | Old or large snapshots and VMs that need consolidation (nothing is removed) | `Name = *`, `VMId`, `MinAgeDays = 7`, `MaxVMs = 25`, `MaxResults = 100` |
+| `Get-vCenter-Change-Events` | vCenter event timeline for one VM or all of vCenter, with users and messages (up to 7 days) | `VMName`, `VMId`, `Hours = 24`, `StartTimeUtc`, `EndTimeUtc`, `MaxEvents = 100` |
+| `Get-vCenter-Datastore-Runway` | Each datastore's free space, growth (GB/day), days until full and thin-provisioning overcommit | `Name` (name or pattern), `Days = 30` |
+| `Get-VM-Diagnostics` | Evidence for one VM's problem: configuration, snapshots, events, Operations alerts, and performance compared with a baseline, plus its host and datastores (evidence, not a proven root cause) | `VMName`, `VMId`, `Hours = 4`, `MaxEvents = 50`, `BaselineHours = 24`, `IncludeInfrastructure = $true` |
+
+**VCF Operations**
+
+| Tool | What it returns | Arguments |
+| --- | --- | --- |
+| `Get-Operations-Alert-Details` | Active alerts for VMs, hosts, clusters or datastores, with their recommendations | `ResourceName = *`, `ResourceId`, `ResourceKind`, `Criticality = Information` (Information, Warning, Immediate, Critical), `MaxResources = 5`, `MaxAlerts = 25` |
+| `Get-Operations-Metric-History` | Lists the metrics a resource has (`ListMetrics`), or their history with units and interval statistics (up to 30 days) | `ResourceName`, `ResourceId`, `ResourceKind`, `ListMetrics`, `MetricPattern = *`, `Hours = 24`, `StartTimeUtc`, `EndTimeUtc`, `MaxSamples = 96`, `MaxMetrics = 100` |
+| `Get-Operations-VM-Rightsizing` | Operations sizing recommendations next to each VM's current vCenter CPU and memory (no VM is changed) | `Name = *`, `VMId`, `MaxVMs = 10` |
+| `Get-Operations-Cluster-Capacity` | Cluster capacity, headroom and time remaining | `ResourceName = *`, `ResourceId`, `MaxClusters = 5` |
+| `Get-vCenter-Host-Health` | The latest Operations health badge for each ESXi host | none |
+| `Get-vCenter-Host-Alerts` | Active Operations alerts for each ESXi host | `HostName` (name or pattern), `Criticality` (Info, Warning, Immediate, Critical) |
+
+**Lab network and the Mac**
+
+| Tool | What it returns | Arguments |
+| --- | --- | --- |
+| `Get-Network-Switch-Stats` | CPU and memory use and fan status of the TRENDnet TEG-7124WS switch (over SSH) | none |
+| `Get-ESX-Switch-Port-Map` | Which switch port each ESXi host NIC (vmnic) is cabled to, plus an HTML diagram of it. **Writes a file**, so it is set to Ask first | `OutputPath` (default `ESX-Switch-Port-Map.html` beside the script) |
+| `Get-HostUptime` | Uptime and boot time of the Mac that runs the MCP server | none |
+
+**Salt (the Salt master and its minions)**. A minion target is a minion ID, a glob such as `web*`, or a comma-separated list, and it defaults to all minions. Every Salt tool is read-only: `Get-Salt-Config-Drift` runs the states as a dry run (`test=True`), and no updates are downloaded or installed.
+
+| Tool | What it returns | Arguments |
+| --- | --- | --- |
+| `Get-Salt-Minion-Status` | Minions that are up, and minions that are down (key accepted but not answering) | `Target = *`, `TimeoutSeconds = 5` |
+| `Get-Salt-Minion-Grains` | Grains (OS, hardware, BIOS, CPU, memory, network, storage, Salt, security) by name or named set, or the list of grains each minion has | `Target = *`, `GrainSet` (OS, Hardware, Network, Storage, Salt, Security, All), `ListGrains`, `MaxMinions = 100` |
+| `Get-Salt-VM-Correlation` | Matches minions to vCenter VMs (BIOS UUID, then name, hostname or IP) and compares their OS, CPU and memory. Also lists VMs without a minion and minions without a VM | `VMName = *`, `Target = *`, `MaxItems = 200` |
+| `Get-Salt-Job-History` | Recent jobs in the job cache: function, target, user and start time (no arguments or results) | `Function`, `Target`, `MaxJobs = 50`, `IncludeMonitoringQueries = $false` |
+| `Get-Salt-Running-Jobs` | Jobs running now and the minions still working on them | `MaxJobs = 50` |
+| `Get-Salt-Job-Result` | One job's outcome: which minions returned, success and return codes, and a state summary. Output is optional, with secrets redacted | **`Jid`**, `IncludeOutput = $false`, `MaxOutputChars = 1000` |
+| `Get-Salt-Config-Drift` | Which assigned states would change or fail (a dry run) | `Target = *`, `MaxStatesPerMinion = 50`, `TimeoutSeconds = 100`, `MaxMinions = 100` |
+| `Get-Salt-Guest-Health` | Guest uptime and boot time, load or CPU, memory and swap (Linux and Windows) | `Target = *`, `MaxMinions = 100` |
+| `Get-Salt-Guest-Disk-Usage` | File systems and drives, flagging those above the threshold | `Target = *`, `ThresholdPct = 85`, `IncludePseudoFilesystems = $false`, `MaxMinions = 100` |
+| `Get-Salt-Guest-Network` | Interfaces with MAC and IP addresses, DNS servers, search domains and gateways | `Target = *`, `MaxMinions = 100` |
+| `Get-Salt-Installed-Software` | Installed packages and versions, with a version summary across VMs | `Target = *`, `Name = *` (for example `openssl*`), `MaxPackagesPerMinion = 200`, `MaxMinions = 100` |
+| `Get-Salt-Pending-Updates` | Pending updates: Linux packages (kernel too), and Windows Update with severity and reboot status | `Target = *`, `Refresh = $false`, `MaxUpdatesPerMinion = 100`, `TimeoutSeconds = 90`, `MaxMinions = 100` |
+| `Get-Salt-Service-Status` | Running and auto-start services, a named service across VMs, or auto-start services that are not running | `Target = *`, `Name`, `MaxServicesPerMinion = 300`, `MaxMinions = 100` |
+| `Get-Salt-VMware-Tools-Guest` | VMware Tools / open-vm-tools version and service state inside each VM, compared with what vCenter reports | `Target = *`, `IncludeVCenter = $true`, `MaxMinions = 100` |
+| `Get-Salt-Linux-Storage` | Linux block devices, mounted file systems and LVM (volume groups, logical and physical volumes, free space) | `Target = *`, `MaxMinions = 100` |
+| `Get-Salt-Linux-Security` | Linux SELinux mode, firewalld zones, login-capable accounts, extra UID 0 accounts and admin group members | `Target = *`, `MaxMinions = 100` |
+| `Get-Salt-Linux-Time` | Linux time zone, UTC offset, clock skew against the Mac, and whether chronyd or ntpd runs | `Target = *`, `MaxSkewSeconds = 5`, `MaxMinions = 100` |
+| `Get-Salt-Windows-System` | Windows OS name, version and build, install and boot dates, domain or workgroup, and activation status | `Target = *`, `MaxMinions = 100` |
+| `Get-Salt-Windows-Updates` | Missing Windows updates with KB, severity and category, and whether a reboot is pending | `Target = *`, `SecurityOnly = $false`, `IncludeDrivers = $false`, `MaxUpdatesPerMinion = 100`, `TimeoutSeconds = 100`, `MaxMinions = 100` |
+| `Get-Salt-Windows-Roles` | Installed Windows Server roles and features, Windows Firewall profiles, and hardening checks (RDP, NLA, UAC, SMB1, TLS 1.0, Windows Update policy) | `Target = *`, `MaxFeaturesPerMinion = 200`, `MaxMinions = 100` |
+
+**Tools that change things** (set to **Ask first**, so the chat shows **Run** / **Cancel** before they run)
+
+| Tool | What it does | Arguments |
+| --- | --- | --- |
+| `Send-Email` | Sends an HTML email through the mail account in the lab config | **`ToEmail`** (comma or semicolon separated), **`Subject`**, `Body` (HTML) |
+| `Create-DNS-ARecord` | Creates or updates an IPv4 A record in the lab DNS zone (over SSH with a key) | **`RecordName`** (one label, no zone), **`IPv4Address`**, `TTL` (default `01:00:00`) |
+| `Save-HTML-Report` | Saves an HTML page to the `Reports` folder beside the script, or another folder | **`Report`** (the HTML), **`WebPageName`** (no `.html`), `Path` |
+| `Get-ESX-Switch-Port-Map` | Read-only toward vCenter and the switch, but writes its diagram file (see above) | `OutputPath` |
+
+**Ideas for questions:** "Which VMs have snapshots older than 14 days?", "Why was app01 slow in the last 2 hours?" (`Get-VM-Diagnostics`), "Which Linux VMs have pending kernel updates?", "Compare VMware Tools versions inside the VMs with vCenter", "How many days until NFS-01 is full?". To add a tool, write the function with `.SYNOPSIS` and `.PARAMETER` help, add its name to `$FunctionsToExpose`, and press **Reload tools**. If it changes things, also add it to the write list in `MCP-StdioRuntime.ps1` (the `$writes` line), so it is marked as changing things and defaults to Ask first.
 
 ### Web search (Ollama)
 
@@ -1297,6 +1388,24 @@ Settings → **Web search (Brave)** shows whether the key is set and turns it on
 
 The order is enforced by Ask, not only asked of the model: if the model tries the second provider before the first one has searched, Ask runs the first one instead (the card notes "Fixed order"). Ollama's `web_fetch` (read one page in full) can be used at any time. Tool cards say **Ollama web search** or **Brave web search**. `ASK_WEB_ORDER` (`ollama_first`, `brave_first` or `model`) sets the default; the Settings page wins. The REST API takes `"sources": ["web:brave"]` (or `["web:brave", "web:ollama", …]`). The question's search queries are sent to Brave, so leave it off for private data and on dark sites. `ask/scripts/fake_websearch.py` also stands in for Brave (`GET /res/v1/web/search`).
 
+### Web fetch (local)
+
+A free page reader for dark sites and internal pages. With **Web fetch (local)** (scope `web:local`) ticked, the model gets one read-only tool, `local_fetch`, that reads the pages whose full URLs are in the question. Ask downloads each page itself from the `vco-ask` container with Python `requests` (no cloud service, no key, no cost) and keeps the main text with trafilatura, the same extractor the web-site source uses, plus the page's title and up to 40 links. It cannot search.
+
+- Turn it on under Settings → **Web fetch (local)** (`ASK_LOCAL_FETCH=1` sets the default). It is off by default.
+- **Allowed hosts** (`ASK_LOCAL_FETCH_HOSTS`): comma-separated host names, `*` patterns allowed, for example `wiki.corp.local, *.vcrocs.local`. Empty = any host the container can reach. A redirect to another host is refused too. Set it on a shared Ask, because the container can reach internal addresses.
+- **Accept self-signed certificates** (`ASK_LOCAL_FETCH_INSECURE=1`) for internal sites with their own CA. Off by default.
+- Pages: HTML, plain text, Markdown, JSON or XML only, at most 3 MB, 20 second timeout. The container's `HTTP(S)_PROXY` is used when set.
+- The same rules as Web fetch (Ollama) apply: only the pages the question names are fetched, and a page asked twice is reused. It is never counted against the [monthly web budget](#monthly-web-budget).
+
+It works in the chat, saved prompts (**Pages to fetch**) and scheduled prompts. The answer stats line shows *1 local fetch · $0.00*.
+
+### Monthly web budget
+
+Settings → **Monthly web budget (US$)** (`ASK_WEB_BUDGET`, default 0 = no budget) caps what Ollama and Brave web calls may cost in a calendar month (UTC), counted with the **Price per web call** settings, the same numbers as the Performance page. At 80 % each answer that uses the web shows a yellow *Monthly web budget 84 % used* note; at 100 % Ask stops making web calls until next month (the tool card says **not run**, and the model is told to answer without the web). The Performance page has a **Monthly web budget** card. `GET /api/perf` returns it under `web.budget`.
+
+**Answer stats.** Every answer that used the web shows its calls and their estimated cost in the stats line under it, for example *2 web searches, 1 web fetch · $0.021*. Pages reused or refused cost nothing and aren't counted.
+
 **Notes on both.** Web search needs internet access from the container and a chat model with the `tools` capability (`qwen3.8:27b-mlx` has it). The question and the model's search queries are sent to ollama.com, so leave it off for private data and on dark sites (it is off unless `ASK_WEB_SEARCH=1` or the Settings switch is on, and the menu entry only appears when a key is set). **Web results per search** (default 5) and **Web search API URL** (default `https://ollama.com`) are on the Settings page; the result size the model reads is the MCP tools page's **Result size the model reads**. For tests without internet, `ask/scripts/fake_websearch.py` is a stand-in API on port 11556.
 
 ### Ask configuration
@@ -1329,6 +1438,9 @@ The order is enforced by Ask, not only asked of the model: if the model tries th
 | `ASK_WEB_ORDER` | Which web search goes first when both are ticked: `ollama_first` (default), `brave_first` or `model` (the Settings page wins) |
 | `ASK_BRAVE_SEARCH`, `ASK_BRAVE_SEARCH_URL` | `1` turns Brave web search on by default (the Settings switch wins); API URL (default `https://api.search.brave.com`) |
 | `ASK_WEB_SEARCH`, `ASK_WEB_SEARCH_URL` | `1` turns web search on by default (the Settings switch wins); API URL (default `https://ollama.com`) |
+| `ASK_LOCAL_FETCH`, `ASK_LOCAL_FETCH_HOSTS`, `ASK_LOCAL_FETCH_INSECURE` | [Web fetch (local)](#web-fetch-local) on by default, its allowed hosts, and accepting self-signed certificates (the Settings page wins) |
+| `ASK_WEB_BUDGET` | [Monthly web budget](#monthly-web-budget) in US$ (default 0 = none; the Settings page wins) |
+| `VCO_ASK_INTERNAL_URL`, `VCO_ASK_TOKEN` | First container: where the Apple HomeView's Ask page reads answers (default `http://vco-ask:8081`) and with which token (default `ASK_API_TOKEN` from the shared `.env`) |
 | `VCO_ASK_URL` | First container: sidebar link to Ask (and the Performance link). A `localhost` / `127.0.0.1` address follows the host you opened the page with, so the link also works from another computer |
 | `ASK_VCO_INTERNAL_URL` | Where Ask reads the Observability container's numbers for its Performance page (default `http://vco:8080`) |
 
@@ -1745,7 +1857,8 @@ The core (`core/services.py`) starts every service of an available module with t
 ## Testing
 
 ```bash
-python scripts/smoke_test.py     # runs every module with sample data, checks every endpoint, page, export and Settings flow
+python scripts/smoke_test.py     # runs every module with sample data, checks every endpoint, page, export and Settings flow, then the unit tests in tests/
+python -m unittest discover -s tests -v   # only the unit tests in tests/ (Logs webhooks: Discord splitting and payloads; no network)
 ```
 
 vCommunity Ask can be tested without a GPU or model downloads, using a stand-in for Ollama (hashed bag-of-words embeddings and a canned answer that cites the sources it received):
@@ -1785,11 +1898,15 @@ modules/                built-in modules (one folder each)
   logs/                 syslog server: syslog_service.py (listener, retention, alerts), logstore.py (database, search, parser),
                         notify.py (email, webhook), web.py (search, alerts and settings routes, REST API), templates/, static/
 config/                 config.example.yaml
+tests/                  unit tests for the dashboards container (test_notify.py: Logs webhooks)
 scripts/                smoke_test.py, New-OfflineBundle.ps1, send_test_syslog.py (test syslog messages), Save-PwshVendor.ps1 (local PowerShell + PowerCLI copy)
 vendor/pwsh/            optional local PowerShell tarball and PowerCLI modules for the core-pwsh build (git-ignored except its README)
 docs/screenshots/       screenshots used in this README
 ask/                    vCommunity Ask (second container)
   app/main.py           routes: chat, sources, settings, document view, REST API
+  app/routes_schedules.py  Scheduled prompts routes (/schedules, /ui/schedules, /api/schedules)
+  app/routes_saved.py   Saved prompts routes (/saved, /ui/saved, /api/saved)
+  app/saved.py          Saved prompts store and checks (fit_scope: sources that can be used now)
   app/rag.py            hybrid retrieval, link expansion, prompt, streamed answers
   app/overview.py       whole-source questions: catalog of every post with exact counts
   app/data.py           data questions: table choice, model-written SQL, checks, read-only run, charts, dashboard plans
@@ -1799,7 +1916,7 @@ ask/                    vCommunity Ask (second container)
   app/ollama.py         Ollama client (version, models, embed, chat stream)
   app/config.py         ask.yaml + env + defaults (and the default system prompt)
   app/templates/        chat, sources, documents, settings, reports pages; report.html (the standalone report)
-  app/static/           ask.css, ask.js, admin.js, sidenav.js (select and delete recent chats), charts.js (chart options, shared by chat and reports), report.css/report.js (inlined into reports); marked, DOMPurify and ECharts come from core/static/vendor
+  app/static/           ask.css, ask.js, scope.js (the Sources picker rules, shared by the chat and the Saved and Scheduled prompts forms), admin.js, sidenav.js (select and delete recent chats), charts.js (chart options, shared by chat and reports), report.css/report.js (inlined into reports); marked, DOMPurify and ECharts come from core/static/vendor
   sources/markdown-repo/  built-in source plug-in (Git repo or folder of markdown)
   sources/web-site/     built-in source plug-in (blog/site crawler: sitemap, feed, links, date range)
   sources/spreadsheet/  built-in source plug-in (xlsx/csv from /exports or uploads, sheets into tables.db)
@@ -1810,7 +1927,7 @@ ask/                    vCommunity Ask (second container)
   app/mcp.py            MCP tools: client of the host agent's MCP bridge, tool policy, Run / Cancel approvals
   app/websearch.py      Web search: Ollama's web_search / web_fetch and Brave's brave_search as model tools
   app/webusage.py       counts web calls for the Performance page's usage and cost panel
-  app/schedules.py      scheduled prompts: APScheduler jobs, headless answers saved as chats, the email
+  app/schedules.py      scheduled prompts: APScheduler jobs, headless answers saved as chats, the email and webhook (Notifier)
   agent/ask-host-agent.py  Ask host agent for the Mac (standard library only; performance numbers and the MCP bridge), plus Install-AskAgent.ps1 and install.sh
   config/               ask.example.yaml
   scripts/fake_ollama.py  stand-in for Ollama, for tests (also answers with tool calls)
@@ -1842,6 +1959,11 @@ requirements.in/.txt    direct dependencies / hashed lock file
 
 | Date | Change |
 | --- | --- |
+| 2026-11-18 | README and About: the 39 tools of the PowerShell MCP server (`MCP-Server-vCommunity-Ask.ps1`), grouped by vCenter, VCF Operations, lab network, Salt and the tools that change things, with what each returns, its arguments and defaults, and how to add a tool. |
+| 2026-11-18 | Ask chat: **Up arrow** in the empty question box recalls this chat's earlier questions (Down comes forward), so a question can be changed and sent again quickly. The hint under the box says so. |
+| 2026-11-16 | Review doc UI changes and feature requests. **Saved prompts:** ☆ pin to the top, then most used first; *Not available now* warning for sources that can't be used; `{variable}` / `{variable=default}` in the prompt and pages, asked for in a small form before running; **Export** / **Import** as JSON; a **Schedule** link that fills a new scheduled prompt; the sidebar link is a normal link. **Scheduled prompts:** pick a named webhook, Send to shown as icons, **Show the latest answer on the Apple HomeView**. **Logs:** **Named webhooks** (alert rules and Ask pick one), the saved webhook URLs are masked (site only), Discord gets embeds (red for alerts and failures, links to the chat). **Ask web:** each answer's stats line shows its web calls and estimated cost, a **Monthly web budget** (warning at 80 %, no web calls at 100 %), and the free **Web fetch (local)** page reader for dark sites (off by default). **Apple HomeView:** a new **Ask** page and the pages dim after 5 minutes without fresh data. |
+| 2026-11-16 | Code review fixes. Scheduled prompt webhook messages quote every line of a multi-line prompt. A saved prompt's **Used** count goes up only when its answer finishes (not when it fails or is stopped). The Sources picker rules are in one shared file, `ask/app/static/scope.js`, used by the chat and the Saved and Scheduled prompts forms; the Scheduled prompts form now keeps web search, web fetch and MCP tools ticked with **No sources (just the model)**, like the chat. Scheduled and Saved prompts routes moved from `ask/app/main.py` to `routes_schedules.py` and `routes_saved.py` (same URLs). `Mailer` is now `Notifier`, and the run status `email_failed` is now `not_sent` (old runs are updated on start; still shown as **not sent**). New `tests/test_notify.py` (Discord splitting and webhook payloads), run by `scripts/smoke_test.py`. |
+| 2026-11-16 | Ask Saved prompts: when a saved prompt's sources can't be used now (source deleted or turned off, web search without its key, MCP server down), they are left out, and when none is left the prompt runs with **No sources (just the model)**, never All sources. The chat shows a *Not available now* note under Sources; `POST /api/saved/{id}/run` does the same and adds `scope_used` and `unavailable` to its answer. |
 | 2026-11-16 | Web fetch costs less: with **Web fetch (Ollama)** alone and pages named in the question, only those pages are fetched (other URLs, such as `?page=2`, are refused without an Ollama call and shown as **not run**), and a page fetched twice in one answer reuses the first result (also with Ollama web search). The web fetch note now tells the model to fetch each named page once. `rag.fetch_state` / `norm_url`; tests in `ask/tests/test_saved.py` |
 | 2026-11-16 | Saved prompts: **tags** (for example sports, weather, news) and a **search box** with tag buttons on the Saved prompts page and in the chat's **Saved** menu (Enter runs the first match). **Saved prompts** moved to the top of the sidebar, above New chat. New column `saved_prompts.tags` (added automatically); `/api/saved` takes and returns `tags` (plus `tag_list`). |
 | 2026-11-15 | Ask **Saved prompts**: keep a prompt with its own sources (knowledge sources, web fetch, Ollama or Brave web search, MCP tools), an optional model and optional **Pages to fetch**, and ask it again with one click from the new **Saved** menu under the chat box (or **Edit first**), the new Saved prompts page (Run, Edit before sending, Edit, Delete, Delete selected, use count), `/chat?saved=<id>` links, or REST `/api/saved`. **Save prompt** under a question in a chat starts one from it. New source pick **Web fetch (Ollama)** (`web:fetch`): only the `web_fetch` tool, so the model reads the named pages and cannot search (one Ollama call per page); it works in the chat and scheduled prompts too. `/ui/chat` takes an optional `model` (that answer only), `title` and `saved_id`. New `ask/app/saved.py`, `templates/saved.html`, `static/saved.js`, `ask/tests/test_saved.py`; table `saved_prompts` is created automatically. `scripts/fake_ollama.py` passes the question's URL to web_fetch. **Rebuild vco-ask.** |

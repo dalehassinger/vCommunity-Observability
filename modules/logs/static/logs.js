@@ -344,7 +344,7 @@
         kpi('Unacknowledged', '<a href="#fired">' + num(d.unacked) + '</a>', 'fired alerts to look at', d.unacked ? 'crit' : 'ok') +
         kpi('Checking', d.alerts_enabled ? 'On' : 'Off', d.alerts_enabled ? 'every 30 seconds' : 'turned off under Notifications', d.alerts_enabled ? 'ok' : 'warn') +
         kpi('Email', d.email_ready ? 'Ready' : 'Not set', d.email_ready ? 'SMTP server and To set' : 'set it under Notifications', d.email_ready ? 'ok' : '') +
-        kpi('Webhook', d.webhook_ready ? 'Ready' : 'Not set', d.webhook_ready ? 'URL set' : 'set it under Notifications', d.webhook_ready ? 'ok' : '');
+        kpi('Webhook', d.webhook_ready ? 'Ready' : 'Not set', d.webhook_ready ? (d.webhook_names && d.webhook_names.length ? 'default + ' + d.webhook_names.length + ' named' : 'URL set') : 'set it under Notifications', d.webhook_ready ? 'ok' : '');
     }
     function cond(r) {
       return '≥ ' + num(r.threshold) + ' in ' + r.window_minutes + ' min<div class="lg-meta">then wait ' + r.cooldown_minutes + ' min</div>';
@@ -352,11 +352,16 @@
     function load() {
       return api('GET', '/ui/logs/alerts').then(function (d) {
         data = d; cards(d);
+        // The rule editor's webhook list: the default one plus the named ones.
+        var pick = $('al-hook'), cur = pick.value;
+        pick.innerHTML = '<option value="">Default webhook</option>' + (d.webhook_names || []).map(function (n) {
+          return '<option value="' + esc(n) + '">' + esc(n) + '</option>'; }).join('');
+        pick.value = cur;
         $('al-rules').innerHTML = d.rules.map(function (r) {
           return '<tr><td><label class="switch" style="font-weight:400" title="On / off"><input type="checkbox" role="switch" data-toggle="' + r.id + '" ' + (r.enabled ? 'checked' : '') + ' aria-label="' + esc(r.name) + ' on"><span></span></label></td>' +
             '<td><b>' + esc(r.name) + '</b></td><td class="msg"><code>' + esc(r.query || '(every message)') + '</code></td>' +
             '<td>' + (r.min_severity_name ? sevPill(r.min_severity, r.min_severity_name) + (r.min_severity > 0 ? ' or worse' : '') : 'any') + '</td>' +
-            '<td>' + cond(r) + '</td><td>' + (['page'].concat(r.notify_email ? ['email'] : [], r.notify_webhook ? ['webhook'] : [])).join(', ') + '</td>' +
+            '<td>' + cond(r) + '</td><td>' + esc((['page'].concat(r.notify_email ? ['email'] : [], r.notify_webhook ? ['webhook' + (r.webhook_name ? ' ' + r.webhook_name : '')] : [])).join(', ')) + '</td>' +
             '<td>' + (r.last_fired ? ago(r.last_fired) + '<div class="lg-meta">' + num(r.last_count) + ' messages</div>' : 'never') + '</td>' +
             '<td style="white-space:nowrap"><a class="btn btn-outline" href="/dash/logs/search?' + new URLSearchParams({ q: r.query || '', sev: r.min_severity_name || '', range: '24h' }) + '">Logs</a> ' +
             '<button type="button" class="btn btn-outline" data-edit="' + r.id + '">Edit</button> ' +
@@ -389,6 +394,11 @@
       fill(aform, rule || { enabled: true, threshold: 1, window_minutes: 5, cooldown_minutes: 30, min_severity: '' });
       if (rule) aform.elements.id.value = rule.id; else aform.elements.id.value = '';
       if (rule) aform.elements.min_severity.value = rule.min_severity == null ? '' : String(rule.min_severity);
+      if (rule && rule.webhook_name && !Array.prototype.some.call(aform.elements.webhook_name.options, function (o) { return o.value === rule.webhook_name; })) {
+        var o = document.createElement('option'); o.value = rule.webhook_name; o.textContent = rule.webhook_name + ' (missing)';
+        aform.elements.webhook_name.appendChild(o);
+      }
+      aform.elements.webhook_name.value = (rule && rule.webhook_name) || '';
       editor.hidden = false; $('al-preview-out').innerHTML = ''; msg.textContent = '';
       $('rules').classList.add('lg-editing');
       $('al-name').focus();
@@ -452,20 +462,60 @@
       api('PUT', '/ui/logs/settings', { alerts_enabled: true }).then(function () { loadNotify(); load(); })
         .catch(function (e) { if (window.vcoAlert) vcoAlert(e.message); else alert(e.message); });
     });
+    // Named webhooks: one row each (name, URL, test, remove). A saved URL is never sent to the
+    // page; its box shows only the site and blank keeps it ("was" names the saved one).
+    var hooks = $('nt-hooks');
+    function hookRow(h) {
+      var row = document.createElement('div');
+      row.className = 'nt-hook-row';
+      row.dataset.was = h.name || '';
+      row.innerHTML = '<input class="nt-hook-name" maxlength="40" placeholder="daily" aria-label="Webhook name">' +
+        '<input class="nt-hook-url" autocomplete="off" aria-label="Webhook URL">' +
+        '<button type="button" class="btn btn-outline" data-hook-test>Test</button>' +
+        '<button type="button" class="btn btn-outline" data-hook-del>Remove</button>';
+      row.querySelector('.nt-hook-name').value = h.name || '';
+      row.querySelector('.nt-hook-url').placeholder = h.hint ? 'saved: ' + h.hint + ' (blank keeps it)' : 'https://discord.com/api/webhooks/...';
+      hooks.appendChild(row);
+      return row;
+    }
+    function hookList() {
+      return Array.prototype.map.call(hooks.querySelectorAll('.nt-hook-row'), function (r) {
+        return { name: r.querySelector('.nt-hook-name').value.trim(), url: r.querySelector('.nt-hook-url').value.trim(), was: r.dataset.was };
+      }).filter(function (h) { return h.name || h.url; });
+    }
+    $('nt-hook-add').addEventListener('click', function () { hookRow({}).querySelector('input').focus(); });
+    hooks.addEventListener('click', function (e) {
+      var row = e.target.closest('.nt-hook-row'); if (!row) return;
+      if (e.target.closest('[data-hook-del]')) row.remove();
+      if (e.target.closest('[data-hook-test]')) {
+        var name = row.querySelector('.nt-hook-name').value.trim(), url = row.querySelector('.nt-hook-url').value.trim();
+        if (!url && row.dataset.was && row.dataset.was !== name) { say(nmsg, 'Save the new name first, or enter the URL again.', true); return; }
+        say(nmsg, 'Sending…');
+        api('POST', '/ui/logs/notify/test', { kind: 'webhook', webhook: name || row.dataset.was, webhook_url: url })
+          .then(function (r) { say(nmsg, r.result || 'Sent.', !r.ok); })
+          .catch(function (err) { say(nmsg, err.message, true); });
+      }
+    });
     function loadNotify() {
       return api('GET', '/ui/logs/settings').then(function (s) {
         fill(nform, s);
         enabledText();
         nform.elements.smtp_password.placeholder = s.smtp_password_set ? 'saved (leave blank to keep)' : 'optional';
+        nform.elements.webhook_url.placeholder = s.webhook_url_set ? 'saved: ' + s.webhook_url_hint + ' (leave blank to keep)' : 'https://chat.lab.local/hooks/...';
+        nform.elements.clear_webhook_url.checked = false;
+        $('nt-hook-clear-wrap').hidden = !s.webhook_url_set;
+        hooks.innerHTML = '';
+        (s.webhooks || []).forEach(hookRow);
       });
     }
     $('nt-save').addEventListener('click', function () {
       var b = formData(nform);
+      b.webhooks = hookList();
       var go = b.alerts_enabled ? Promise.resolve(true) : (window.vcoConfirm ?
         vcoConfirm('Check alert rules is off: no rule will fire and no email or webhook will be sent. Save it off?', { ok: 'Save with checking off', danger: true }) :
         Promise.resolve(confirm('Check alert rules is off. Save it off?')));
       go.then(function (yes) { if (!yes) return;
-      api('PUT', '/ui/logs/settings', b).then(function () { say(nmsg, 'Saved.'); nform.elements.smtp_password.value = ''; loadNotify(); load(); })
+      api('PUT', '/ui/logs/settings', b).then(function () { say(nmsg, 'Saved.'); nform.elements.smtp_password.value = ''; nform.elements.webhook_url.value = ''; loadNotify(); load(); })
         .catch(function (e) { say(nmsg, e.message, true); });
       });
     });

@@ -59,7 +59,7 @@ HOMEVIEW_CYCLE_MAX = 3600
 # Apple HomeView pages in their default order (Settings page can reorder and hide them:
 # app_settings homeview.order = comma list of ids, homeview.hidden = comma list of ids).
 HOMEVIEW_PAGES = [("home", "Home"), ("lab", "Lab"), ("hosts", "Hosts"), ("vms", "VMs"), ("storage", "Storage"),
-                  ("clusters", "Clusters"), ("health", "Health"), ("github", "GitHub")]
+                  ("clusters", "Clusters"), ("health", "Health"), ("github", "GitHub"), ("ask", "Ask")]
 
 
 def find_readme() -> Path | None:

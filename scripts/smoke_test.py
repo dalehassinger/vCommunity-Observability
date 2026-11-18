@@ -442,4 +442,12 @@ if "logs" in runnable:
     finally:
         core.services.stop()
     print("  logs: ok")
+
+# Unit tests in tests/ (webhook splitting and payloads; no network).
+import unittest  # noqa: E402
+
+_tests = unittest.TestLoader().discover(str(root / "tests"), top_level_dir=str(root / "tests"))
+_res = unittest.TextTestRunner(verbosity=0).run(_tests)
+assert _res.wasSuccessful(), "unit tests in tests/ failed"
+print(f"  tests/: {_res.testsRun} ok")
 print("ALL OK")

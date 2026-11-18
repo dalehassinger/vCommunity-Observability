@@ -11,47 +11,22 @@
   // button). Nothing picked = "all" (every source except spreadsheets). A new chat starts with
   // the last selection, and the list can be folded (both kept in this browser only).
   var scopePick = document.getElementById('scope-pick');
-  var scopeLabel = document.getElementById('scope-label');
-  var scopeBoxes = scopePick ? Array.prototype.slice.call(scopePick.querySelectorAll('input[type=checkbox]')) : [];
-  function scopeTicked() { return scopeBoxes.filter(function (b) { return b.checked; }); }
-  function scopeValue() {
-    var v = scopeTicked().map(function (b) { return b.value; });
-    return v.length ? v : 'all';
-  }
-  function scopeRefresh(save) {
-    if (!scopeLabel) return;
-    var on = scopeTicked(), names = on.map(function (b) { return b.parentNode.textContent.trim(); });
-    scopeLabel.textContent = !on.length ? 'All sources (not spreadsheets)' : on.length <= 3 ? names.join(', ') : on.length + ' picked: ' + names.slice(0, 2).join(', ') + '…';
-    scopeLabel.title = on.length ? names.join(', ') : 'Every source except spreadsheets';
-    var allBtn = scopePick.querySelector('[data-scope-all]');
-    if (allBtn) allBtn.setAttribute('aria-pressed', on.length ? 'false' : 'true');
-    if (save) { try { localStorage.setItem('ask.scope', JSON.stringify(on.map(function (b) { return b.value; }))); } catch (e) { /* private window */ } }
-  }
+  // The picking rules live in static/scope.js (shared with the Saved and Scheduled prompts forms).
+  var scope = scopePick ? AskScope.bind(scopePick, {
+    label: document.getElementById('scope-label'),
+    onChange: function (byUser) {
+      // A pick by hand is remembered for the next new chat (a saved prompt's pick is not).
+      if (byUser) { try { localStorage.setItem('ask.scope', JSON.stringify(scope.picked())); } catch (e) { /* private window */ } }
+    }
+  }) : null;
+  var scopeBoxes = scope ? scope.boxes() : [];
+  function scopeValue() { return scope ? scope.value() : 'all'; }
+  function scopeRefresh(save) { if (scope) scope.refresh(save); }
   if (scopePick) {
-    if (!(window.ASK && window.ASK.chatId) && !scopeTicked().length) {
-      try {
-        var last = JSON.parse(localStorage.getItem('ask.scope') || '[]');
-        scopeBoxes.forEach(function (b) { b.checked = last.indexOf(b.value) >= 0; });
-      } catch (e) { /* nothing saved */ }
+    if (!(window.ASK && window.ASK.chatId) && !scope.picked().length) {
+      try { scope.set(JSON.parse(localStorage.getItem('ask.scope') || '[]')); } catch (e) { /* nothing saved */ }
     }
     scopeRefresh(false);
-    scopePick.addEventListener('change', function (e) {
-      // "No sources" and real sources exclude each other (web search and tools may go with it).
-      var t = e.target;
-      if (t && t.checked && t.value === 'none') {
-        scopeBoxes.forEach(function (b) { if (b !== t && b.getAttribute('data-plugin') !== 'web' && b.getAttribute('data-plugin') !== 'mcp') b.checked = false; });
-      } else if (t && t.checked && t.getAttribute('data-plugin') !== 'web' && t.getAttribute('data-plugin') !== 'mcp') {
-        scopeBoxes.forEach(function (b) { if (b.value === 'none') b.checked = false; });
-      }
-      scopeRefresh(true);
-    });
-    scopePick.addEventListener('click', function (e) {
-      var t = e.target.closest('[data-scope-all],[data-scope-only]');
-      if (!t) return;
-      var only = t.getAttribute('data-scope-only');
-      scopeBoxes.forEach(function (b) { b.checked = !!only && b.getAttribute('data-plugin') === only; });
-      scopeRefresh(true);
-    });
     var fold = document.getElementById('scope-fold');
     if (fold) {
       var setFold = function (folded, save) {
@@ -661,14 +636,32 @@
       var by = Object.keys(rt.sources || {}).map(function (k) { return k + ' ' + rt.sources[k]; });
       parts.push(rt.reserved + (rt.reserved === 1 ? ' section' : ' sections') + ' reserved (' + by.join(', ') + ')');
     }
+    var web = st.web;
+    if (web) {
+      // Web calls this answer made (pages reused or refused cost nothing) and their estimated cost.
+      var names = { web_fetch: ['web fetch', 'web fetches'], local_fetch: ['local fetch', 'local fetches'], web_search: ['web search', 'web searches'], brave_search: ['Brave search', 'Brave searches'] };
+      var bits = Object.keys(web.by_tool || {}).map(function (k) { var n = web.by_tool[k], w = names[k] || [k, k]; return n + ' ' + w[n === 1 ? 0 : 1]; });
+      parts.push((bits.length ? bits.join(', ') : 'no paid web calls') + ' · $' + (web.cost < 0.01 && web.cost > 0 ? web.cost.toFixed(3) : web.cost.toFixed(2)) +
+        (web.failed ? ' (' + web.failed + ' failed)' : ''));
+    }
     container.appendChild(el('span', null, parts.join(' · ')));
+    if (web && web.budget) {
+      var b = web.budget, warn = el('span', 'stats-budget' + (b.stopped ? ' stopped' : ''),
+        b.stopped ? 'Monthly web budget used up: no web calls until next month' : 'Monthly web budget ' + Math.round(b.used * 100) + ' % used');
+      warn.title = '$' + b.spent.toFixed(2) + ' of $' + b.limit.toFixed(2) + ' (Settings → Web)';
+      container.appendChild(warn);
+    }
     var copy = el('button', 'link-btn', 'Copy answer');
     copy.type = 'button';
     copy.onclick = function () { copyText(m.content || '').then(function () { flash(copy, 'Copy answer'); }, function () {}); };
     container.appendChild(copy);
   }
 
+  // This chat's questions, oldest first, for Up / Down arrow recall in the box.
+  var sentQs = [], histPos = -1, histDraft = '';
   function addUser(text) {
+    if (text && sentQs[sentQs.length - 1] !== text) sentQs.push(text);
+    histPos = -1;
     var row = el('div', 'msg user');
     row.appendChild(el('div', 'bubble', text));
     // "Save prompt": a new saved prompt from this question and the sources picked now.
@@ -908,10 +901,29 @@
     ask(q);
   });
   input.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); }
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); return; }
+    // Up arrow in an empty box puts this chat's last question back in it to change and send
+    // again; more Up presses go further back, Down comes forward (past the newest gives back
+    // what was typed). Typing in a recalled question stops browsing, so the arrows then move
+    // the cursor as usual. In a question of several lines, Up goes back only from the first
+    // line and Down forward only from the last.
+    if ((e.key !== 'ArrowUp' && e.key !== 'ArrowDown') || e.shiftKey || e.altKey || e.metaKey || e.ctrlKey || e.isComposing || !sentQs.length) return;
+    var v = input.value, up = e.key === 'ArrowUp';
+    if (input.selectionStart !== input.selectionEnd) return;
+    var edge = up ? v.lastIndexOf('\n', input.selectionStart - 1) < 0 : v.indexOf('\n', input.selectionEnd) < 0;
+    if (!edge) return;
+    if (histPos < 0 && (!up || v.trim())) return;   // not browsing: only Up from an empty box starts
+    e.preventDefault();
+    if (histPos < 0) { histDraft = v; histPos = sentQs.length; }
+    histPos += up ? -1 : 1;
+    if (histPos < 0) histPos = 0;
+    if (histPos >= sentQs.length) { histPos = -1; input.value = histDraft; }
+    else input.value = sentQs[histPos];
+    autosize();
+    input.setSelectionRange(input.value.length, input.value.length);
   });
   function autosize() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 220) + 'px'; }
-  input.addEventListener('input', autosize);
+  input.addEventListener('input', function () { histPos = -1; autosize(); });
   stopBtn.addEventListener('click', function () { if (controller) controller.abort(); });
   document.querySelectorAll('.example').forEach(function (b) {
     b.addEventListener('click', function () { input.value = b.dataset.q; form.requestSubmit(); });
@@ -934,16 +946,78 @@
   });
 
   // -- Saved prompts: the Saved menu under the prompt, and /chat?saved=<id>[&edit=1] ------
+  var WEB_NAMES = { 'web:fetch': 'Web fetch (Ollama)', 'web:local': 'Web fetch (local)', 'web:ollama': 'Web search (Ollama)', 'web:brave': 'Web search (Brave)' };
+  function scopeWarn(text) {
+    // A note under the Sources heading; it goes away when the sources are changed.
+    if (!scopePick) return;
+    var n = document.getElementById('scope-warn');
+    if (!text) { if (n) n.remove(); return; }
+    if (!n) {
+      n = el('div', 'scope-warn'); n.id = 'scope-warn'; n.setAttribute('role', 'status');
+      var head = scopePick.querySelector('.scope-head');
+      head.parentNode.insertBefore(n, head.nextSibling);
+    }
+    n.textContent = text;
+  }
+  if (scopePick) scopePick.addEventListener('change', function () { scopeWarn(''); });
   function useSaved(item, edit) {
-    // Tick the saved prompt's sources (not remembered as the last pick).
+    // Tick the saved prompt's sources (not remembered as the last pick). A source with no button
+    // now (deleted or turned off, web search without its key, MCP server down) is left out; when
+    // none is left, the prompt runs with No sources (just the model), never All sources.
     var want = item.scope && item.scope !== 'all' ? item.scope.split(',') : [];
-    scopeBoxes.forEach(function (b) { b.checked = want.indexOf(b.value) >= 0; });
+    var have = scopeBoxes.map(function (b) { return b.value; });
+    var missing = want.filter(function (v) { return v !== 'none' && have.indexOf(v) < 0; });
+    var keep = want.filter(function (v) { return have.indexOf(v) >= 0; });
+    if (want.length && !keep.length) keep = ['none'];
+    scopeBoxes.forEach(function (b) { b.checked = keep.indexOf(b.value) >= 0; });
     scopeRefresh(false);
+    scopeWarn(missing.length ? 'Not available now: ' + missing.map(function (v) {
+      return WEB_NAMES[v] || (v.indexOf('mcp:') === 0 ? v.slice(4) + ' (MCP)' : v);
+    }).join(', ') + '. ' + (keep.length === 1 && keep[0] === 'none' ? 'Running with No sources (just the model).' : 'Running with the rest.') : '');
     run = { model: item.model || '', savedId: item.id, title: item.name || '' };
     var cur = document.querySelector('#model-menu .model-current');
     if (cur && item.model) { cur.textContent = item.model; cur.title = 'Model of the saved prompt "' + item.name + '", for this chat only'; }
     if (edit) { input.value = item.question; autosize(); input.focus(); return; }
     ask(item.question);
+  }
+  function askValues(item) {
+    // A saved prompt with {variables}: ask for their values first (the last values used for this
+    // prompt are kept in this browser, else the defaults). Resolves to the values, or null.
+    return new Promise(function (resolve) {
+      var key = 'ask.saved.vars.' + item.id, last = {};
+      try { last = JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch (e) { /* private window */ }
+      var dlg = el('dialog', 'vars-dialog'), form = el('form', 'vars-form');
+      form.method = 'dialog';
+      form.appendChild(el('h2', null, item.name));
+      form.appendChild(el('p', 'subtle', 'This saved prompt has values to fill in.'));
+      item.variables.forEach(function (v, i) {
+        var lab = el('label', 'vars-field'), inp = el('input');
+        lab.appendChild(el('span', null, v.name));
+        inp.name = v.name; inp.type = 'text'; inp.autocomplete = 'off';
+        inp.value = last[v.name] != null ? last[v.name] : v.default || '';
+        inp.placeholder = v.default ? 'default: ' + v.default : 'required';
+        if (!v.default) inp.required = true;
+        if (i === 0) inp.autofocus = true;
+        lab.appendChild(inp);
+        form.appendChild(lab);
+      });
+      var bar = el('div', 'vars-actions'), ok = el('button', 'btn btn-primary', 'Run'), cancel = el('button', 'btn btn-outline', 'Cancel');
+      ok.type = 'submit'; ok.value = 'ok'; cancel.type = 'button';
+      bar.appendChild(ok); bar.appendChild(cancel); form.appendChild(bar);
+      dlg.appendChild(form); document.body.appendChild(dlg);
+      var done = false;
+      function finish(values) { if (done) return; done = true; dlg.close(); dlg.remove(); resolve(values); }
+      cancel.addEventListener('click', function () { finish(null); });
+      dlg.addEventListener('cancel', function () { finish(null); });
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var values = {};
+        item.variables.forEach(function (v) { values[v.name] = form.elements[v.name].value.trim(); });
+        try { localStorage.setItem(key, JSON.stringify(values)); } catch (err) { /* private window */ }
+        finish(values);
+      });
+      dlg.showModal();
+    });
   }
   function openSaved(id, edit) {
     // A chat with messages starts a new chat; an empty one runs here.
@@ -951,7 +1025,20 @@
     fetch('/ui/saved/' + id, { cache: 'no-store' }).then(function (r) {
       if (!r.ok) throw new Error(r.status === 404 ? 'That saved prompt was deleted.' : r.statusText);
       return r.json();
-    }).then(function (item) { useSaved(item, edit); }).catch(function (e) { vcoAlert(e.message); });
+    }).then(function (item) {
+      if (!(item.variables || []).length) { useSaved(item, edit); return; }
+      return askValues(item).then(function (values) {
+        if (!values) return;
+        return fetch('/ui/saved/' + id + '/question', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                         body: JSON.stringify({ values: values }) })
+          .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.detail || r.statusText); return d; }); })
+          .then(function (d) { item.question = d.question; useSaved(item, edit); });
+      });
+    }).catch(function (e) { vcoAlert(e.message); });
+  }
+  var WEB_LABELS = { 'web:fetch': 'Web fetch (Ollama)', 'web:local': 'Web fetch (local)', 'web:ollama': 'Web search (Ollama)', 'web:brave': 'Web search (Brave)' };
+  function missingText(list) {
+    return list.map(function (v) { return WEB_LABELS[v] || (v.indexOf('mcp:') === 0 ? v.slice(4) + ' (MCP)' : v); }).join(', ');
   }
   var savedMenu = document.getElementById('saved-menu');
   if (savedMenu) {
@@ -1021,11 +1108,28 @@
           if (it.model) info.push(it.model);
           if ((it.tag_list || []).length) info.push('#' + it.tag_list.join(' #'));
           b.appendChild(el('span', 'model-tags', info.join(' · ')));
+          if ((it.unavailable || []).length) {
+            var w = el('span', 'saved-warn', 'Not available now: ' + missingText(it.unavailable));
+            w.title = 'Run leaves these out' + (it.unavailable.length === it.scope.split(',').length ? ' and answers with No sources (just the model)' : '');
+            b.appendChild(w);
+          }
+          if ((it.variables || []).length) b.appendChild(el('span', 'model-tags', 'Asks for: ' + it.variables.map(function (v) { return v.name; }).join(', ')));
           b.addEventListener('click', function () { savedMenu.open = false; openSaved(it.id, false); });
+          var pin = el('button', 'saved-pin' + (it.pinned ? ' on' : ''), it.pinned ? '★' : '☆');
+          pin.type = 'button';
+          pin.title = it.pinned ? 'Unpin' : 'Pin to the top';
+          pin.setAttribute('aria-label', (it.pinned ? 'Unpin ' : 'Pin ') + it.name);
+          pin.setAttribute('aria-pressed', it.pinned ? 'true' : 'false');
+          pin.addEventListener('click', function (e) {
+            e.stopPropagation();
+            fetch('/ui/saved/' + it.id + '/pin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: !it.pinned }) })
+              .then(function (r) { if (!r.ok) throw new Error(r.statusText); savedMenu.dispatchEvent(new Event('toggle')); })
+              .catch(function (err) { vcoAlert(err.message); });
+          });
           var e2 = el('button', 'saved-edit', 'Edit first');
           e2.type = 'button'; e2.title = 'Put it in the box with its sources picked, to change it before sending';
           e2.addEventListener('click', function () { savedMenu.open = false; openSaved(it.id, true); });
-          row.appendChild(b); row.appendChild(e2);
+          row.appendChild(pin); row.appendChild(b); row.appendChild(e2);
           savedList.appendChild(row);
           rowsEl.push({ el: row, id: it.id, tags: it.tag_list || [],
                         text: [it.name, it.prompt, it.urls, it.tags, it.scope].join(' ').toLowerCase() });

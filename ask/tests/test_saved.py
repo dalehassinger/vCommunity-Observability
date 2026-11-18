@@ -44,6 +44,19 @@ class Checks(unittest.TestCase):
                          "p\n\nRead these pages with web_fetch:\n- https://a.example/x")
 
 
+class FitScope(unittest.TestCase):
+    """A saved prompt whose sources can't be used now runs with just the model, never All sources."""
+
+    def test_fit_scope(self):
+        have = {"vcrocs", "web:fetch"}
+        self.assertEqual(saved.fit_scope("all", have), ("all", []))
+        self.assertEqual(saved.fit_scope("vcrocs,web:fetch", have), ("vcrocs,web:fetch", []))
+        self.assertEqual(saved.fit_scope("web:brave", have), ("none", ["web:brave"]))
+        self.assertEqual(saved.fit_scope("mcp:powershell-mcp,gone", have), ("none", ["mcp:powershell-mcp", "gone"]))
+        self.assertEqual(saved.fit_scope("vcrocs,web:brave", have), ("vcrocs", ["web:brave"]))
+        self.assertEqual(saved.fit_scope("none,web:brave", have), ("none", ["web:brave"]))
+
+
 class Store(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -122,3 +135,60 @@ class WebFetchScope(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Features(unittest.TestCase):
+    """2026-11-16: {variables}, pin + most used first, export / import, Web fetch (local)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = saved.Saved(DB(Path(self.tmp.name) / "ask.db"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_variables_and_defaults(self):
+        item = {"prompt": "Weather in {city=Dillsburg} for {days}", "urls": "https://w.example/{city}"}
+        self.assertEqual(saved.variables(item), [{"name": "city", "default": "Dillsburg"}, {"name": "days", "default": ""}])
+        q = saved.question(item, {"city": "New York", "days": "3"})
+        self.assertIn("Weather in New York for 3", q)
+        self.assertIn("https://w.example/New%20York", q)
+        self.assertIn("https://w.example/Dillsburg", saved.question(item, {"days": "1"}))
+        with self.assertRaises(KeyError):
+            saved.question(item, {}, strict=True)
+
+    def test_pinned_first_then_most_used(self):
+        a = self.saved.save({"name": "a", "prompt": "p"})
+        b = self.saved.save({"name": "b", "prompt": "p"})
+        c = self.saved.save({"name": "c", "prompt": "p"})
+        self.saved.used(b["id"])
+        self.assertEqual([r["name"] for r in self.saved.list()], ["b", "a", "c"])
+        self.saved.pin(c["id"], True)
+        self.assertEqual([r["name"] for r in self.saved.list()], ["c", "b", "a"])
+        self.assertTrue(self.saved.list()[0]["pinned"])
+        self.assertTrue(a)
+
+    def test_export_import_replaces_same_name(self):
+        self.saved.save({"name": "Weather", "prompt": "old", "scope": "web:local", "urls": "https://w.example/x"})
+        data = self.saved.export()
+        self.assertEqual(data["kind"], "vcommunity-ask-saved-prompts")
+        data["items"][0]["prompt"] = "new"
+        data["items"].append({"name": "Bad"})            # no prompt: skipped
+        data["items"].append({"name": "Extra", "prompt": "hi"})
+        res = self.saved.import_items(data)
+        self.assertEqual((res["added"], res["replaced"], len(res["skipped"])), (1, 1, 1))
+        names = {r["name"]: r for r in self.saved.list()}
+        self.assertEqual(names["Weather"]["prompt"], "new")
+        with self.assertRaises(ValueError):
+            self.saved.import_items({"nope": 1})
+
+    def test_local_fetch_scope_and_hosts(self):
+        self.assertEqual([t["function"]["name"] for t in websearch.ollama_tools(websearch.LOCAL_SCOPE)[0]], ["local_fetch"])
+        self.assertFalse(websearch.local_status({})["available"])
+        cfg = {"local_fetch": True, "local_fetch_hosts": "wiki.corp.local, *.vcrocs.local"}
+        self.assertTrue(websearch.host_allowed(cfg, "https://vcsa91.vcrocs.local/ui"))
+        self.assertFalse(websearch.host_allowed(cfg, "https://example.com/"))
+        self.assertTrue(websearch.host_allowed({}, "https://example.com/"))
+        r = websearch.call(cfg, "local_fetch", {"url": "https://example.com/"})
+        self.assertFalse(r["ok"])
+        self.assertIn("Local fetch hosts", r["error"])

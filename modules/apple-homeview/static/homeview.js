@@ -343,6 +343,25 @@
       '</div></section>';
   }
 
+  // Ask: the latest answers of vCommunity Ask scheduled prompts (2 per page). Markdown is shown
+  // as plain text (no links, bold or headings markup) so it reads well on the wall.
+  function plain(md) {
+    return String(md || '').replace(/```[\s\S]*?```/g, '').replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/<(https?:[^>]+)>/g, '$1')
+      .replace(/^[ \t]*\|?[ \t:|-]*-[ \t:|-]*\|?[ \t]*$/gm, '')   // table separator rows
+      .replace(/^[ \t]*\|(.*)\|[ \t]*$/gm, function (m, row) { return row.split('|').map(function (c) { return c.trim(); }).filter(Boolean).join(' · '); })
+      .replace(/^#{1,6}\s*/gm, '').replace(/(\*\*|__|`)/g, '').replace(/(^|\s)_([^_\n]+)_(?=\s|[.,;:!?]|$)/g, '$1$2').replace(/^\s*[-*]\s+/gm, '• ').replace(/\n{3,}/g, '\n\n').trim();
+  }
+  function askPages(d) {
+    return chunk(d.ask.items, 2).map(function (part, i, all) {
+      return '<section class="page" data-section="ask">' + heading('VCOMMUNITY ASK · SCHEDULED PROMPTS', all.length > 1 ? 'Latest answers (' + (i + 1) + '/' + all.length + ').' : 'Latest answers.') +
+        '<div class="hv-stack hv-ask">' + part.map(function (it) {
+          return '<article class="card hv-ask-card"><div class="card-top"><h2>' + esc(it.name) + '</h2><span class="tag">' + esc(it.finished ? ago(it.finished).toUpperCase() : 'NO ANSWER YET') + '</span></div>' +
+            '<div class="hv-ask-text">' + (it.answer ? esc(plain(it.answer)) : '<span class="hv-empty">It has not run yet.</span>') + '</div></article>';
+        }).join('') + '</div></section>';
+    });
+  }
+
   function unavailablePage(section, title, why) {
     return '<section class="page" data-section="' + section + '">' + heading('NOT CONNECTED', title) +
       '<article class="card hv-unavailable"><h2>' + esc(why) + '</h2><p>Turn the module on, or wait for its first collection, on the Modules page.</p></article></section>';
@@ -358,7 +377,8 @@
     { id: 'storage', label: 'Storage', icon: 'disk' },
     { id: 'clusters', label: 'Clusters', icon: 'cluster' },
     { id: 'health', label: 'Health', icon: 'heart' },
-    { id: 'github', label: 'GitHub', icon: 'branch' }
+    { id: 'github', label: 'GitHub', icon: 'branch' },
+    { id: 'ask', label: 'Ask', icon: 'chat' }
   ];
   var SECTIONS = ALL_SECTIONS;
   function applyLayout(lay) {
@@ -384,6 +404,7 @@
     } else by.lab = [unavailablePage('lab', 'Home lab.', d.dbh.why)];
     if (d.storage.available) by.storage = storagePages(d);
     if (d.github.available) by.github = [githubPage(d)];
+    if (d.ask && d.ask.available) by.ask = askPages(d);
     var out = [];
     SECTIONS.forEach(function (s) { (by[s.id] || []).forEach(function (html, i) { out.push({ section: s.id, sub: i + 1, html: html }); }); });
     return out;
@@ -477,7 +498,7 @@
 
   function note() {
     if (!data) return;
-    var p = pages[current], src = p.section === 'storage' ? data.storage : p.section === 'github' ? data.github : p.section === 'home' ? null : data.dbh;
+    var p = pages[current], src = p.section === 'storage' ? data.storage : p.section === 'github' ? data.github : p.section === 'ask' ? data.ask : p.section === 'home' ? null : data.dbh;
     var text = p.section === 'home' ? 'Clock is live. Lab data refreshes every minute.' :
       src && src.available ? 'Live data · collected ' + ago(src.collected_at) + ' · refreshes every minute' : (src && src.why) || '';
     if (data.mock) text += ' · SAMPLE DATA (VCO_MOCK)';
@@ -574,6 +595,17 @@
 
   // -- data ---------------------------------------------------------------------------
   var edition = document.getElementById('edition');
+  // When the data can't load for more than 5 minutes the pages are dimmed, so old numbers on
+  // the wall don't look current. They come back as soon as a load works.
+  var STALE_MS = 5 * 60 * 1000, lastLoad = Date.now();
+  function stale() {
+    var old = Date.now() - lastLoad > STALE_MS;
+    display.classList.toggle('hv-stale', old);
+    if (old) {
+      var min = Math.round((Date.now() - lastLoad) / 60000);
+      document.getElementById('edition-text').textContent = 'OFFLINE · DATA ' + min + ' MIN OLD';
+    } else document.getElementById('edition-text').textContent = 'OFFLINE · RETRYING';
+  }
   function load() {
     fetch('/ui/homeview/data', { cache: 'no-store' }).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -585,10 +617,12 @@
       rotate.title = 'Show every page in turn, ' + ms / 1000 + ' seconds each';
       if (ms !== CYCLE_MS) { CYCLE_MS = ms; if (!first) resetCycle(); }
       render(!first);
+      lastLoad = Date.now(); stale();
       edition.hidden = true; // the status shows only when the data can't load
       if (first) resetCycle();
     }).catch(function (e) {
       edition.hidden = false;
+      stale();
       if (!data) document.getElementById('data-note').textContent = 'Could not load the lab data (' + e.message + '). Retrying every minute.';
     });
   }

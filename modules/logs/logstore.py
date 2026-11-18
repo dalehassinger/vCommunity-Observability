@@ -41,6 +41,7 @@ DEFAULTS: dict[str, Any] = {
     "smtp_host": "", "smtp_port": 25, "smtp_security": "none",  # none | starttls | ssl
     "smtp_user": "", "smtp_password": "", "smtp_from": "", "smtp_to": "",
     "webhook_url": "",
+    "webhooks": [],               # named webhooks: [{"name": "daily", "url": "https://..."}]
     "silent_minutes": 15,         # a sender is "quiet" after this many minutes
 }
 SECRET_KEYS = {"smtp_password"}
@@ -117,6 +118,9 @@ def _migrate(con: sqlite3.Connection) -> None:
         con.execute("ALTER TABLE alert_rules ADD COLUMN last_id INTEGER NOT NULL DEFAULT 0")
         # Existing rules: start after what is already stored, so an upgrade sends no burst of old alerts.
         con.execute("UPDATE alert_rules SET last_id = COALESCE((SELECT MAX(id) FROM logs), 0)")
+        con.commit()
+    if "webhook_name" not in cols:   # 2026-11-16: which webhook a rule posts to ("" = the default one)
+        con.execute("ALTER TABLE alert_rules ADD COLUMN webhook_name TEXT NOT NULL DEFAULT ''")
         con.commit()
 
 

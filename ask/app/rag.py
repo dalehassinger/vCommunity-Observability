@@ -23,7 +23,7 @@ import time
 from typing import Any, Iterator
 from urllib.parse import quote
 
-from . import data, mcp, overview, syslog_out, websearch
+from . import data, mcp, overview, syslog_out, websearch, webusage
 from . import reports as reports_mod
 from .db import DB
 from .indexer import embed_prefixes
@@ -451,6 +451,12 @@ fetch other pages, other page numbers or variants of the same URL. If the questi
 fetched page links to when the question needs it. Each result starts with its source number, for example [5]: cite it,
 and name the web site."""
 
+LOCAL_NOTE = """You can read web pages with the local_fetch tool (one page per call, free; it also reads internal
+pages). Pages listed under "Read these pages with web_fetch" are read with local_fetch when web_fetch is not offered. Fetch
+each page the question names once, by its exact full URL, and answer from what it returns; you cannot search the web. Do
+not fetch other pages, other page numbers or variants of the same URL. Each result starts with its source number, for
+example [5]: cite it, and name the web site."""
+
 WEB_ORDERS = {"ollama_first": ("web_search", "brave_search"), "brave_first": ("brave_search", "web_search")}
 
 
@@ -481,6 +487,8 @@ def tool_messages(cfg: dict[str, Any], items: list[dict[str, Any]], question: st
         notes += ([WEB_NOTE] if websearch.SCOPE in servers else []) + ([BRAVE_NOTE] if websearch.BRAVE_SCOPE in servers else [])
     if websearch.FETCH_SCOPE in servers and websearch.SCOPE not in servers:
         notes.append(FETCH_NOTE)
+    if websearch.LOCAL_SCOPE in servers:
+        notes.append(LOCAL_NOTE)
     note = "\n\n".join(notes)
     if items:
         msgs = build_messages(cfg, items, question, history)
@@ -537,7 +545,7 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
         order = web_order(cfg, tools or [])
         if order:   # state of this answer, not a tool (names starting with _ are never tools)
             mcp_index["_web_order"] = {"first": order[0], "second": order[1], "searched": False}
-        if "web_fetch" in mcp_index:
+        if "web_fetch" in mcp_index or websearch.LOCAL_TOOL in mcp_index:
             mcp_index["_fetch"] = fetch_state(question, tools or [])
         plain = sources == [] and not tools    # "No sources (just the model)"
         if db.stats()["chunks"] == 0 and not (tools and not sources) and not plain:
@@ -644,6 +652,12 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
                 syslog_out.tool(cfg, chat_id, card)
                 msgs.append({"role": "tool", "tool_name": card["tool"], "content": card.pop("_for_model")})
             stats["tool_calls"] = sum(1 for k in cards if k.get("kind") == "tool")
+            web_calls = [tuple(c) for k in cards for c in k.get("web_calls") or []]
+            if web_calls or any(k.get("tool") in websearch.TOOL_NAMES for k in cards):
+                stats["web"] = webusage.answer_cost(cfg, web_calls)
+                budget = webusage.budget_state(cfg)
+                if budget and budget["warn"]:
+                    stats["web"]["budget"] = budget
         page = reports_mod.page_in_answer(content) if REPORTS is not None and not (res and res.get("report")) else None
         if page:
             # The model wrote a whole web page ("return it as an html page"): save it as a report
@@ -768,7 +782,7 @@ def fetch_state(question: str, tools: list[str]) -> dict[str, Any]:
     and pages named in the question, only those pages may be fetched, so the model can't add
     paid calls for pages nobody asked for (for example "?page=2" of the same forecast)."""
     named = [norm_url(u) for u in URL_IN_TEXT.findall(question or "")]
-    strict = websearch.FETCH_SCOPE in tools and websearch.SCOPE not in tools and bool(named)
+    strict = any(s in tools for s in websearch.FETCH_SCOPES) and websearch.SCOPE not in tools and bool(named)
     return {"only": set(named) if strict else None, "seen": {}}
 
 
@@ -786,7 +800,7 @@ def run_web_tool(cfg: dict[str, Any], card: dict[str, Any], tool: str, args: dic
         card["note"] = f"Fixed order: {websearch.label(order['first'])} searches first."
         tool = order["first"]
     card.update(tool=tool, server=websearch.label(tool), read_only=True, status="running")
-    key = norm_url(args.get("url")) if tool == "web_fetch" and fetch is not None else ""
+    key = norm_url(args.get("url")) if tool in websearch.FETCH_TOOLS and fetch is not None else ""
     if key and key in fetch["seen"]:
         # The same page again: reuse the first result (no second paid call).
         first_n, text = fetch["seen"][key]
@@ -801,7 +815,17 @@ def run_web_tool(cfg: dict[str, Any], card: dict[str, Any], tool: str, args: dic
                               "Answer from the pages already fetched; do not fetch other pages.")
         yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
         return
+    budget = webusage.budget_state(cfg) if tool != websearch.LOCAL_TOOL else None   # the local fetch is free
+    if budget and budget["stopped"]:
+        card.update(status="refused", ms=0, note=f"Not run (no cost): the monthly web budget is used up "
+                                                 f"(${budget['spent']:.2f} of ${budget['limit']:.2f}; Settings → Web).")
+        card["_for_model"] = (f"[{n}] Not run: the monthly web budget is used up, so no web search or fetch can run "
+                              "until next month. Answer without the web and say so.")
+        yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
+        return
+    calls = card.setdefault("web_calls", [])
     res = websearch.call(cfg, tool, args)
+    calls.append([tool, bool(res["ok"])])
     ms = res["ms"]
     if key and res["ok"]:
         fetch["seen"][key] = (n, res["text"])
@@ -814,6 +838,7 @@ def run_web_tool(cfg: dict[str, Any], card: dict[str, Any], tool: str, args: dic
             card.update(tool=tool, server=f"{first}, then {second}", note=f"{first}: {why}. Searched {second} instead.")
             yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
             nxt = websearch.call(cfg, order["second"], args)
+            calls.append([order["second"], bool(nxt["ok"])])
             ms += nxt["ms"]
             if nxt["ok"]:
                 nxt = {**nxt, "text": f"{first}: {why}. {second} results instead:\n\n{nxt['text']}"}

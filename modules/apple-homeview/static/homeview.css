@@ -332,3 +332,12 @@ main { padding-top: 18px; }
 @media (min-width: 360px) and (max-height: 520px) and (min-aspect-ratio: 11/10) and (max-width: 760px) {
   .hv-rack { width: 36%; top: auto; bottom: 10px; transform: none; }
 }
+
+/* Ask page: the latest answers of vCommunity Ask scheduled prompts */
+.hv-ask-card { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; overflow: hidden; padding: 20px 26px; }
+.hv-ask-card .card-top { margin-bottom: 10px; }
+@media (max-width: 900px), (max-height: 700px) { .hv-ask-card { padding: 6px 10px; } .hv-ask-text { font-size: 13px; } }
+.hv-ask-text { white-space: pre-wrap; font-size: 17px; line-height: 1.45; color: var(--text); overflow: auto; padding-right: 6px; flex: 1; min-height: 0; }
+
+/* Data older than 5 minutes (it could not load): dim the pages so they don't look current */
+#display.hv-stale main .page { opacity: .45; filter: grayscale(.8); transition: opacity .4s, filter .4s; }

@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS schedules (
   include_prompt INTEGER NOT NULL DEFAULT 1, include_sources INTEGER NOT NULL DEFAULT 1,
   avoid_repeats INTEGER NOT NULL DEFAULT 0,
   send_email INTEGER NOT NULL DEFAULT 1, send_webhook INTEGER NOT NULL DEFAULT 0,
+  webhook_name TEXT NOT NULL DEFAULT '', homeview INTEGER NOT NULL DEFAULT 0,
   created REAL NOT NULL, updated REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS schedule_runs (
   id INTEGER PRIMARY KEY, schedule INTEGER NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
@@ -162,6 +163,9 @@ def clean(body: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
         s[k] = 1 if (v is True or str(v).lower() in ("1", "true", "on", "yes")) else 0
     if not s["send_email"] and not s["send_webhook"]:
         errors["send_to"] = "Pick Email, Webhook or both."
+    s["webhook_name"] = " ".join(str(body.get("webhook_name") or "").split())[:40]
+    if s["webhook_name"].lower() == "default":
+        s["webhook_name"] = ""
     to = recipients(body.get("recipients"))
     bad = [a for a in to if not EMAIL_RE.match(a)]
     if not to:
@@ -173,7 +177,7 @@ def clean(body: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
         errors["recipients"] = "At most 20 addresses."
     s["recipients"] = ", ".join(to)
     for k, default in (("sync_first", False), ("attach_report", True), ("only_changed", False), ("enabled", True),
-                       ("include_prompt", True), ("include_sources", True), ("avoid_repeats", False)):
+                       ("include_prompt", True), ("include_sources", True), ("avoid_repeats", False), ("homeview", False)):
         v = body.get(k, default)
         s[k] = 1 if (v is True or str(v).lower() in ("1", "true", "on", "yes")) else 0
     return s, errors
@@ -366,7 +370,10 @@ def build_chat(s: dict[str, Any], result: dict[str, Any], *, public: str, when: 
         answer = CITATION_RE.sub("", answer)
     lines = [f"**{s['name']}** · {when.strftime('%Y-%m-%d %H:%M %Z')} · {model} · {seconds:.0f} s"]
     if failed or s.get("include_prompt", 1):
-        lines.append(f"> {s['prompt'][:300]}")
+        # Every line quoted: Discord and Slack quote only the line that starts with ">".
+        prompt = s["prompt"].strip()
+        short = prompt[:300] + ("…" if len(prompt) > 300 else "")
+        lines += [f"> {line}" if line.strip() else ">" for line in short.splitlines()]
     lines.append("")
     if failed:
         lines += ["**The scheduled prompt failed.**", str(result["error"])[:1000]]
@@ -395,8 +402,9 @@ def answer_hash(text: str) -> str:
     return hashlib.sha256(" ".join(norm.split()).encode()).hexdigest()[:16]
 
 
-class Mailer:
-    """Sends through the dashboards container (Log alerts → Notifications mail server)."""
+class Notifier:
+    """Sends a scheduled prompt's result through the dashboards container: email with the
+    Log alerts → Notifications mail server, or a chat message with its webhook."""
 
     def __init__(self) -> None:
         self.url = (os.environ.get("ASK_VCO_INTERNAL_URL") or "http://vco:8080").rstrip("/")
@@ -432,13 +440,27 @@ class Mailer:
             raise RuntimeError(f"Email not sent: {detail}")
         return r.json().get("result") or "email sent"
 
-    def webhook(self, title: str, text: str) -> str:
-        """Post to the webhook set on Log alerts → Notifications."""
+    def webhooks(self) -> list[str] | None:
+        """The named webhooks on Log alerts → Notifications (names only), or None when the
+        dashboards container can't be asked."""
+        tok = self.token()
+        try:
+            r = requests.get(f"{self.url}/api/logs/notify/webhooks", timeout=3,
+                             headers={"Authorization": f"Bearer {tok}"} if tok else {})
+            if r.status_code != 200:
+                return None
+            return [str(i["name"]) for i in r.json().get("items") or [] if i.get("name") and i["name"] != "default"]
+        except (requests.RequestException, ValueError, KeyError, TypeError):
+            return None
+
+    def webhook(self, title: str, text: str, *, name: str = "", color: str = "info", link: str = "") -> str:
+        """Post to a webhook set on Log alerts → Notifications (name "" = the default one)."""
         tok = self.token()
         try:
             r = requests.post(f"{self.url}/api/logs/notify/webhook", timeout=90,
                               headers={"Authorization": f"Bearer {tok}"} if tok else {},
-                              json={"title": title, "text": text, "username": "vCommunity Ask"})
+                              json={"title": title, "text": text, "username": "vCommunity Ask", "webhook": name,
+                                    "color": color, "link": link})
         except requests.RequestException as e:
             raise RuntimeError(f"vCommunity Observability is not reachable at {self.url} ({type(e).__name__}). "
                                "The webhook is sent through it, so the vco container must be running.") from None
@@ -459,10 +481,10 @@ class Mailer:
 
 class Schedules:
     def __init__(self, db: DB, settings: Callable[[], dict[str, Any]], split_scope: Callable[[Any], tuple],
-                 indexer: Any, reports: Any, scheduler: Any, mailer: Mailer | None = None):
+                 indexer: Any, reports: Any, scheduler: Any, notifier: Notifier | None = None):
         self.db, self.settings, self.split_scope = db, settings, split_scope
         self.indexer, self.reports, self.scheduler = indexer, reports, scheduler
-        self.mailer = mailer or Mailer()
+        self.notifier = notifier or Notifier()
         self._locks: dict[int, threading.Lock] = {}
         self._guard = threading.Lock()
         with db.conn() as c:
@@ -480,6 +502,14 @@ class Schedules:
                 c.execute("ALTER TABLE schedules ADD COLUMN send_email INTEGER NOT NULL DEFAULT 1")
             if "send_webhook" not in have:
                 c.execute("ALTER TABLE schedules ADD COLUMN send_webhook INTEGER NOT NULL DEFAULT 0")
+            # 2026-11-16: which of the Logs webhooks gets the post ("" = the default one).
+            if "webhook_name" not in have:
+                c.execute("ALTER TABLE schedules ADD COLUMN webhook_name TEXT NOT NULL DEFAULT ''")
+            # 2026-11-16: show the latest answer on the Apple HomeView wall display.
+            if "homeview" not in have:
+                c.execute("ALTER TABLE schedules ADD COLUMN homeview INTEGER NOT NULL DEFAULT 0")
+            # 2026-11-16: the status "email_failed" is now "not_sent" (email or webhook).
+            c.execute("UPDATE schedule_runs SET status='not_sent' WHERE status='email_failed'")
 
     # -- storage -------------------------------------------------------------------
     def list(self) -> list[dict[str, Any]]:
@@ -541,6 +571,25 @@ class Schedules:
             n = c.execute("DELETE FROM schedules WHERE id=?", (sid,)).rowcount
         self._unschedule(sid)
         return bool(n)
+
+    def homeview(self, limit_chars: int = 2400) -> list[dict[str, Any]]:
+        """The latest good answer of each scheduled prompt with "Show on the HomeView" on, for
+        the Apple HomeView wall display in vCommunity Observability (GET /api/homeview)."""
+        out = []
+        with self.db.conn() as c:
+            items = [dict(r) for r in c.execute("SELECT id, name FROM schedules WHERE homeview = 1 ORDER BY name COLLATE NOCASE")]
+            for s in items:
+                run = c.execute("SELECT finished, chat_id, status FROM schedule_runs WHERE schedule=? AND chat_id != '' "
+                                "AND status IN ('ok','unchanged','not_sent') ORDER BY id DESC LIMIT 1", (s["id"],)).fetchone()
+                if not run:
+                    out.append({"id": s["id"], "name": s["name"], "answer": "", "finished": None, "chat": ""})
+                    continue
+                msg = c.execute("SELECT content FROM messages WHERE chat=? AND role='assistant' ORDER BY id DESC LIMIT 1",
+                                (run["chat_id"],)).fetchone()
+                text = CITATION_RE.sub("", (msg["content"] if msg else "") or "").strip()
+                out.append({"id": s["id"], "name": s["name"], "finished": run["finished"], "chat": f"/chat/{run['chat_id']}",
+                            "answer": text[:limit_chars] + ("…" if len(text) > limit_chars else "")})
+        return out
 
     def runs(self, sid: int, limit: int = SHOW_RUNS) -> list[dict[str, Any]]:
         with self.db.conn() as c:
@@ -663,20 +712,22 @@ class Schedules:
                 subject, text, html_body = build_email(s, result, public=public, when=when, model=cfg["chat_model"], seconds=seconds)
                 files = self._attachments(result) if s["attach_report"] and status == "ok" else []
                 try:
-                    sent.append(self.mailer.send(recipients(s["recipients"]), subject, text, html_body, files))
+                    sent.append(self.notifier.send(recipients(s["recipients"]), subject, text, html_body, files))
                 except Exception as e:  # noqa: BLE001
                     sent.append(f"email not sent: {e}" if s.get("send_webhook") else f"not sent: {e}")
                     failed_any = True
             if s.get("send_webhook"):
                 title, chat_text = build_chat(s, result, public=public, when=when, model=cfg["chat_model"], seconds=seconds)
+                link = f"{public.rstrip('/')}/chat/{result['chat_id']}" if public and result.get("chat_id") else ""
                 try:
-                    sent.append(self.mailer.webhook(title, chat_text))
+                    sent.append(self.notifier.webhook(title, chat_text, name=s.get("webhook_name") or "",
+                                                      color="fail" if status == "error" else "ok", link=link))
                 except Exception as e:  # noqa: BLE001
                     sent.append(f"webhook not sent: {e}")
                     failed_any = True
             email = "; ".join(sent)
             if failed_any and status == "ok":
-                status = "email_failed"          # shown as "not sent"
+                status = "not_sent"
         with self.db.conn() as c:
             c.execute("UPDATE schedule_runs SET finished=?, status=?, chat_id=?, email=?, error=?, answer_hash=?, seconds=? WHERE id=?",
                       (time.time(), status, chat_id, email[:500], err[:1000], digest, round(seconds, 1), rid))
@@ -692,7 +743,7 @@ class Schedules:
         out: list[str] = []
         with self.db.conn() as c:
             runs = c.execute("SELECT chat_id FROM schedule_runs WHERE schedule=? AND chat_id != '' "
-                             "AND status IN ('ok','unchanged','email_failed') ORDER BY id DESC LIMIT ?",
+                             "AND status IN ('ok','unchanged','not_sent') ORDER BY id DESC LIMIT ?",
                              (sid, limit)).fetchall()
             for (cid,) in runs:
                 m = c.execute("SELECT content FROM messages WHERE chat=? AND role='assistant' ORDER BY id DESC LIMIT 1",

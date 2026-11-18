@@ -238,6 +238,12 @@ def register(app, ctx) -> None:
             c.close()
         out = {k: v for k, v in s.items() if k not in logstore.SECRET_KEYS}
         out["smtp_password_set"] = bool(s.get("smtp_password"))
+        # Webhook URLs work like passwords: the page gets only the site, never the whole URL.
+        out["webhook_url"] = ""
+        out["webhook_url_set"] = bool(s.get("webhook_url"))
+        out["webhook_url_hint"] = notify.mask_url(s.get("webhook_url") or "")
+        out["webhooks"] = [{"name": w.get("name"), "hint": notify.mask_url(w.get("url") or "")}
+                           for w in s.get("webhooks") or [] if isinstance(w, dict)]
         return out
 
     def save_settings(body: dict[str, Any]) -> dict[str, Any]:
@@ -261,9 +267,37 @@ def register(app, ctx) -> None:
         number("max_size_gb", 0.1, 10000)
         number("silent_minutes", 1, 1440, int)
         number("smtp_port", 1, 65535, int)
-        for key in ("smtp_host", "smtp_user", "smtp_from", "smtp_to", "webhook_url"):
+        for key in ("smtp_host", "smtp_user", "smtp_from", "smtp_to"):
             if key in body:
                 values[key] = str(body[key] or "").strip()
+        if str(body.get("webhook_url") or "").strip():     # blank keeps the saved URL
+            values["webhook_url"] = str(body["webhook_url"]).strip()
+        if body.get("clear_webhook_url"):
+            values["webhook_url"] = ""
+        if isinstance(body.get("webhooks"), list):
+            c0 = con()
+            try:
+                old = {str(w.get("name", "")).lower(): str(w.get("url") or "")
+                       for w in logstore.load_settings(c0).get("webhooks") or [] if isinstance(w, dict)}
+            finally:
+                c0.close()
+            hooks, seen = [], set()
+            for w in body["webhooks"][:20]:
+                if not isinstance(w, dict):
+                    continue
+                name = " ".join(str(w.get("name") or "").split())[:40]
+                if not name:
+                    continue
+                if name.lower() in seen or name.lower() == "default":
+                    errors.append(f"webhook name '{name}' is used twice (or is 'default')")
+                    continue
+                seen.add(name.lower())
+                url = str(w.get("url") or "").strip() or old.get(str(w.get("was") or name).lower(), "")
+                if not url.lower().startswith(("http://", "https://")):
+                    errors.append(f"webhook '{name}': give an http:// or https:// URL")
+                    continue
+                hooks.append({"name": name, "url": url})
+            values["webhooks"] = hooks
         if "smtp_security" in body:
             if body["smtp_security"] not in ("none", "starttls", "ssl"):
                 errors.append("smtp security: none, starttls or ssl")
@@ -306,7 +340,8 @@ def register(app, ctx) -> None:
             raise HTTPException(400, "Not saved: threshold 1 or more, window 1 to 10080 minutes, cooldown 0 to 10080 minutes")
         return {"name": name[:120], "enabled": 1 if body.get("enabled", True) else 0, "query": query, "min_severity": sev,
                 "threshold": threshold, "window_minutes": window, "cooldown_minutes": cooldown,
-                "notify_email": 1 if body.get("notify_email") else 0, "notify_webhook": 1 if body.get("notify_webhook") else 0}
+                "notify_email": 1 if body.get("notify_email") else 0, "notify_webhook": 1 if body.get("notify_webhook") else 0,
+                "webhook_name": " ".join(str(body.get("webhook_name") or "").split())[:40]}
 
     def alerts_view(limit: int = 200) -> dict[str, Any]:
         c = con()
@@ -327,7 +362,8 @@ def register(app, ctx) -> None:
             r["min_severity_name"] = logstore.SEVERITIES[r["min_severity"]] if r["min_severity"] is not None else None
         return {"rules": rules, "events": events, "alerts_enabled": settings.get("alerts_enabled", True),
                 "email_ready": bool(settings.get("smtp_host") and settings.get("smtp_to")),
-                "webhook_ready": bool(settings.get("webhook_url")),
+                "webhook_ready": bool(settings.get("webhook_url") or notify.webhook_names(settings)),
+                "webhook_names": notify.webhook_names(settings),
                 "unacked": sum(1 for e in events if not e["acked"])}
 
     def save_rule(body: dict[str, Any]) -> dict[str, Any]:
@@ -447,10 +483,15 @@ def register(app, ctx) -> None:
                                           "severity_name": "info", "app": "logs", "message": "This is a test from vCommunity Logs."}],
                  "fired_at_text": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}
         kind = body.get("kind")
-        if kind == "webhook" and isinstance(body.get("webhook_url"), str):
-            # Test what is in the form now, even before Save.
-            settings = dict(settings, webhook_url=body["webhook_url"].strip())
-        result = notify.notify(settings, event, kind == "email", kind == "webhook")
+        name = str(body.get("webhook") or "")
+        if kind == "webhook" and isinstance(body.get("webhook_url"), str) and body["webhook_url"].strip():
+            # Test what is in the form now, even before Save (blank: the saved URL).
+            url = body["webhook_url"].strip()
+            if name and name.lower() != "default":
+                settings = dict(settings, webhooks=[{"name": name, "url": url}])
+            else:
+                settings = dict(settings, webhook_url=url)
+        result = notify.notify(settings, event, kind == "email", kind == "webhook", name)
         return {"ok": "failed" not in result, "result": result}
 
     # -- REST API for MP Builder and scripts -------------------------------------------
@@ -491,25 +532,38 @@ def register(app, ctx) -> None:
     @app.post("/api/logs/notify/webhook", tags=["logs"], dependencies=tok,
               summary="Post a message to the webhook set on Log alerts → Notifications, or to the url given "
                       "(used by vCommunity Ask scheduled prompts)")
-    def api_send_webhook(body: dict = Body(..., examples=[{"title": "Hello", "text": "Markdown text"}])):
-        """Body: title, text, optional url (default: the saved webhook URL), optional username
-        (Discord only). Discord URLs get Discord messages (long text split into up to 5);
-        other URLs get JSON {"text", "title"}."""
+    def api_send_webhook(body: dict = Body(..., examples=[{"title": "Hello", "text": "Markdown text", "webhook": "daily"}])):
+        """Body: title, text, optional webhook (a name from Log alerts → Notifications; default:
+        the Webhook URL field) or url, optional username (Discord only), optional color
+        (fail, warn, ok, info) and link. Discord URLs get Discord embeds (long text split into
+        up to 5); other URLs get JSON {"text", "title"}."""
         url = str(body.get("url") or "").strip()
-        if not url:
-            c = con()
-            try:
-                url = str(logstore.load_settings(c).get("webhook_url") or "")
-            finally:
-                c.close()
         try:
+            if not url:
+                c = con()
+                try:
+                    url = notify.resolve_webhook(logstore.load_settings(c), str(body.get("webhook") or ""))
+                finally:
+                    c.close()
             result = notify.post_webhook(url, str(body.get("title") or ""), str(body.get("text") or ""),
-                                         username=str(body.get("username") or "vCommunity")[:60] or "vCommunity")
+                                         username=str(body.get("username") or "vCommunity")[:60] or "vCommunity",
+                                         color=str(body.get("color") or "info"), link=str(body.get("link") or ""))
         except ValueError as e:
             raise HTTPException(400, str(e))
         except Exception as e:  # noqa: BLE001 - network errors go back to the caller
             raise HTTPException(502, f"the webhook could not be reached: {type(e).__name__}: {str(e)[:200]}")
         return {"ok": True, "result": result}
+    @app.get("/api/logs/notify/webhooks", tags=["logs"], dependencies=tok,
+             summary="The webhooks set on Log alerts → Notifications, by name only (never the URLs)")
+    def api_webhooks():
+        c = con()
+        try:
+            s = logstore.load_settings(c)
+        finally:
+            c.close()
+        return {"items": [{"name": "default", "ready": bool(s.get("webhook_url"))}] +
+                         [{"name": n, "ready": True} for n in notify.webhook_names(s)]}
+
     app.add_api_route("/api/logs/search", search, methods=["GET"], tags=["logs"], dependencies=tok,
                       summary="Search syslog messages (q uses the Logs page search language; range 15m/1h/6h/24h/3d/7d or since/until epoch)")
     app.add_api_route("/api/logs/summary", summary, methods=["GET"], tags=["logs"], dependencies=tok,

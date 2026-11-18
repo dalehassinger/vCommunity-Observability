@@ -147,6 +147,13 @@
           <div class="hint">Adds <b>Web search (Brave)</b> to the chat's Sources menu: the model may call <code>brave_search</code>
             (Brave Search API, needs internet). Needs a Brave Search API key as <code>BRAVE_API_KEY</code> in <code>.env</code>:
             {% if brave_key_set %}<b>set</b>{% else %}<b>not set</b>{% endif %}. Can be used together with Ollama web search or on its own. Leave off on dark sites.</div></div></div>
+      <div class="field"><label for="s-local_fetch">Web fetch (local){% if 'local_fetch' in overridden or 'local_fetch_hosts' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><label class="switch"><input type="checkbox" role="switch" id="s-local_fetch" data-key="local_fetch" {{ 'checked' if settings.local_fetch else '' }}><span></span>On</label>
+          <div class="hint">Adds <b>Web fetch (local)</b> to the chat's Sources menu: the model may call <code>local_fetch</code> to read the pages a question names.
+            Ask downloads them itself (no cloud service, no key, no cost), so it works on dark sites for internal pages such as a wiki or a documentation mirror. It cannot search.</div>
+          <input type="text" id="s-local_fetch_hosts" data-key="local_fetch_hosts" value="{{ settings.local_fetch_hosts }}" placeholder="Allowed hosts (empty = any host)" aria-label="Allowed hosts" style="width:100%;margin-top:8px">
+          <div class="hint">Allowed hosts: comma-separated names, <code>*</code> patterns allowed (for example <code>wiki.corp.local, *.vcrocs.local</code>). Empty = any host. A redirect to another host is refused too.</div>
+          <label class="switch"><input type="checkbox" role="switch" id="s-local_fetch_insecure" data-key="local_fetch_insecure" {{ 'checked' if settings.local_fetch_insecure else '' }}><span></span>Accept self-signed certificates</label></div></div>
       <div class="field"><label for="s-web_order">Web search order{% if 'web_order' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><select id="s-web_order" data-key="web_order">
             {% for v, t in [('ollama_first', 'Ollama first, Brave as fallback'), ('brave_first', 'Brave first, Ollama as fallback'), ('model', 'No fixed order (the model picks)')] %}
@@ -159,7 +166,10 @@
             <label>Ollama fetch <input type="number" id="s-web_price_ollama_fetch" data-key="web_price_ollama_fetch" value="{{ settings.web_price_ollama_fetch }}" min="0" step="0.0001"></label>
             <label>Brave search <input type="number" id="s-web_price_brave_search" data-key="web_price_brave_search" value="{{ settings.web_price_brave_search }}" min="0" step="0.0001"></label>
           </div>
-          <div class="hint">For the estimated cost on the Performance page (successful calls × price). Defaults: Ollama search $0.01, Ollama fetch $0.001, Brave $0.005 ($5 per 1,000). Set 0 for calls covered by a free plan.</div></div></div>
+          <div class="hint">For the estimated cost on the Performance page and under each answer (successful calls × price). Defaults: Ollama search $0.01, Ollama fetch $0.001, Brave $0.005 ($5 per 1,000). Set 0 for calls covered by a free plan.</div></div></div>
+      <div class="field"><label for="s-web_budget">Monthly web budget (US$){% if 'web_budget' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><input type="number" id="s-web_budget" data-key="web_budget" value="{{ settings.web_budget }}" min="0" step="0.5" style="width:140px">
+          <div class="hint">0 = no budget. With a budget, answers show a warning from 80 % of it, and at 100 % no web search or fetch runs (chats and scheduled prompts answer without the web) until the next calendar month (UTC). Counted with the prices above; the Performance page shows how much is used.</div></div></div>
       <div class="field"><label for="s-brave_search_url">Brave Search API URL{% if 'brave_search_url' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><input type="text" id="s-brave_search_url" data-key="brave_search_url" value="{{ settings.brave_search_url }}" placeholder="https://api.search.brave.com">
           <div class="hint">Where <code>/res/v1/web/search</code> is called. Keep <code>https://api.search.brave.com</code>.</div></div></div>

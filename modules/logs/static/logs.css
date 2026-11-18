@@ -84,3 +84,9 @@
 .lg-off { background: var(--warn-bg); border-color: var(--warn); display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 16px; }
 .lg-idle { background: var(--track); color: var(--subtle); }
 .lg-off[hidden] { display: none; }
+
+/* Named webhooks (Log alerts → Notifications) */
+.nt-hooks { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.nt-hook-row { display: grid; grid-template-columns: 140px minmax(0, 1fr) auto auto; gap: 8px; align-items: center; }
+.nt-hook-row input { width: 100%; }
+@media (max-width: 640px) { .nt-hook-row { grid-template-columns: 1fr; } }

@@ -8,10 +8,15 @@
     <p class="subtle">A prompt that works, kept with its sources, so you can ask it again with one click: <b>Run</b> here, or the
       <b>Saved</b> menu under the chat box. Each run starts a new chat. Pick <b>Web fetch (Ollama)</b> under Sources and list the pages
       to read only those pages (one Ollama web fetch each, no searching), or pick a web search, knowledge sources or MCP tools.
-      The <b>Save prompt</b> link under any question in a chat starts a new one from it.</p>
+      The <b>Save prompt</b> link under any question in a chat starts a new one from it. ★ pins a prompt to the top; the rest are listed most used first.</p>
   </div>
-  {% if not show_form %}<a class="btn btn-primary" href="/saved?new=1">New saved prompt</a>{% endif %}
+  {% if not show_form %}<div class="page-actions">
+    <a class="btn btn-outline" href="/ui/saved/export" download title="Every saved prompt as a JSON file, to keep, share or import into another Ask">Export</a>
+    <button class="btn btn-outline" type="button" id="saved-import-btn" title="Add saved prompts from an exported JSON file (a prompt with the same name is replaced)">Import</button>
+    <input type="file" id="saved-import" accept="application/json,.json" hidden>
+    <a class="btn btn-primary" href="/saved?new=1">New saved prompt</a></div>{% endif %}
 </div>
+<div class="sched-msg" id="saved-import-msg" aria-live="polite"></div>
 {% include "_token.html" %}
 {% if ask_paused %}<div class="alert alert-danger">Ask is paused (Settings, Apps on / off), so saved prompts can't be run.</div>{% endif %}
 
@@ -45,7 +50,8 @@
         <div class="field-err" data-err="urls"></div></div></div>
     <div class="field"><label for="f-prompt">Prompt</label>
       <div><textarea id="f-prompt" name="prompt" rows="5" placeholder="List the newest fixes in these release notes, with the issue number of each.">{{ c.prompt or '' }}</textarea>
-        <div class="hint">Written exactly as you would type it in the chat.</div>
+        <div class="hint">Written exactly as you would type it in the chat. A value that changes can be a variable: <code>{city}</code>, or <code>{city=Dillsburg}</code> with a default.
+          Run asks for the values first (in the pages too, for example <code>https://example.com/weather/{city}</code>).</div>
         <div class="field-err" data-err="prompt"></div></div></div>
     <div class="field"><label for="f-tags">Tags</label>
       <div><input type="text" id="f-tags" name="tags" value="{{ (c.tag_list or []) | join(', ') }}" placeholder="sports, weather, news" list="tag-list" autocomplete="off">
@@ -77,21 +83,28 @@
   </div>
   <div class="table-wrap"><table class="datagrid sched-table saved-table">
     <thead><tr><th class="saved-check"><input type="checkbox" id="saved-all" aria-label="Select every saved prompt"></th>
-      <th>Saved prompt</th><th>Sources</th><th>Used</th><th></th></tr></thead>
+      <th class="pin-cell"><span class="visually-hidden">Pinned</span></th><th>Saved prompt</th><th>Sources</th><th>Used</th><th></th></tr></thead>
     <tbody>
+    {% set web_names = {'web:fetch': 'Web fetch (Ollama)', 'web:local': 'Web fetch (local)', 'web:ollama': 'Web search (Ollama)', 'web:brave': 'Web search (Brave)'} %}
     {% for s in items %}
       <tr data-id="{{ s.id }}" data-tags="{{ s.tag_list | join(',') }}" data-text="{{ (s.name ~ ' ' ~ s.prompt ~ ' ' ~ s.urls ~ ' ' ~ s.tags ~ ' ' ~ s.scope) | lower }}">
         <td class="saved-check"><input type="checkbox" class="saved-box" value="{{ s.id }}" aria-label="Select {{ s.name }}"></td>
+        <td class="pin-cell"><button type="button" class="saved-pin{{ ' on' if s.pinned else '' }}" data-pin="{{ s.id }}" data-on="{{ s.pinned }}"
+          aria-pressed="{{ 'true' if s.pinned else 'false' }}" aria-label="{{ 'Unpin' if s.pinned else 'Pin' }} {{ s.name }}" title="{{ 'Unpin' if s.pinned else 'Pin to the top' }}">{{ '★' if s.pinned else '☆' }}</button></td>
         <td><b>{{ s.name }}</b>{% for t in s.tag_list %} <span class="tag-pill">{{ t }}</span>{% endfor %}
           <div class="subtle sched-prompt">“{{ s.prompt | truncate(160) }}”</div>
-          {% if s.urls %}<div class="subtle sched-meta">Pages: {{ s.urls.split('\n') | join(', ') | truncate(160) }}</div>{% endif %}</td>
-        {% set web_names = {'web:fetch': 'Web fetch (Ollama)', 'web:ollama': 'Web search (Ollama)', 'web:brave': 'Web search (Brave)', 'none': 'No sources (just the model)'} %}
+          {% if s.urls %}<div class="subtle sched-meta">Pages: {{ s.urls.split('\n') | join(', ') | truncate(160) }}</div>{% endif %}
+          {% if s.variables %}<div class="subtle sched-meta">Asks for: {{ s.variables | map(attribute='name') | join(', ') }}</div>{% endif %}
+          {% if s.unavailable %}<div class="saved-warn saved-row-warn">Not available now: {% for v in s.unavailable %}{{ web_names.get(v, v[4:] ~ ' (MCP)' if v.startswith('mcp:') else v) if web_names is defined else v }}{{ ', ' if not loop.last }}{% endfor %}.
+            {{ 'Run answers with No sources (just the model).' if s.unavailable | length == s.scope.split(',') | length else 'Run leaves it out.' }}</div>{% endif %}</td>
+        {% set web_names = {'web:fetch': 'Web fetch (Ollama)', 'web:local': 'Web fetch (local)', 'web:ollama': 'Web search (Ollama)', 'web:brave': 'Web search (Brave)', 'none': 'No sources (just the model)'} %}
         <td class="sched-meta">{% if s.scope == 'all' %}All sources{% else %}{% for v in s.scope.split(',') %}{{ web_names.get(v, v[4:] ~ ' (MCP)' if v.startswith('mcp:') else (sources | selectattr('name', 'equalto', v) | map(attribute='title') | first) or v) }}{{ ', ' if not loop.last }}{% endfor %}{% endif %}{% if s.model %}<div>model {{ s.model }}</div>{% endif %}</td>
         <td class="sched-meta">{% if s.uses %}{{ s.uses }} {{ 'time' if s.uses == 1 else 'times' }}<div>{{ s.last_used | ago }}</div>{% else %}never{% endif %}</td>
         <td class="sched-acts">
           <a class="btn btn-primary btn-run" href="/chat?saved={{ s.id }}">Run</a>
           <a class="link-btn" href="/chat?saved={{ s.id }}&amp;edit=1" title="Put the prompt in the chat box with its sources picked, so you can change it before sending">Edit before sending</a> ·
           <a class="link-btn" href="/saved?edit={{ s.id }}">Edit</a> ·
+          <a class="link-btn" href="/schedules?saved={{ s.id }}" title="A new scheduled prompt filled with this prompt, its sources and model">Schedule</a> ·
           <button class="link-btn" type="button" data-del="{{ s.id }}" data-name="{{ s.name }}">Delete</button>
         </td>
       </tr>
@@ -106,5 +119,6 @@
 {% endblock %}
 {% block scripts %}
 <script src="/static/admin.js?v={{ asset_v }}"></script>
+<script src="/static/scope.js?v={{ asset_v }}"></script>
 <script src="/static/saved.js?v={{ asset_v }}"></script>
 {% endblock %}

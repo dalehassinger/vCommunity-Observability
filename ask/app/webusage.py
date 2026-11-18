@@ -53,6 +53,18 @@ class Usage:
         except Exception:   # counting must never break an answer
             pass
 
+    def month_cost(self, cfg: dict[str, Any]) -> float:
+        """Estimated cost of this calendar month's successful web calls (UTC), for the budget."""
+        now = datetime.now(timezone.utc)
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
+        try:
+            with self.db.conn() as c:
+                rows = c.execute("SELECT provider, tool, COUNT(*) FROM web_usage WHERE ts >= ? AND ok = 1 "
+                                 "GROUP BY provider, tool", (start,)).fetchall()
+        except Exception:
+            return 0.0
+        return sum(n * self._price(cfg, (p, t)) for p, t, n in rows)
+
     @staticmethod
     def _price(cfg: dict[str, Any], key: tuple[str, str]) -> float:
         try:
@@ -110,7 +122,8 @@ class Usage:
                 "tools": [{**t, "cost": round(t["cost"], 4)} for t in tools.values()],
                 "total_cost": round(sum(p["cost"] for p in providers.values()), 4),
                 "days": [{**d, "cost": round(d["cost"], 4)} for d in per_day.values()],
-                "series": [LABELS[k] for k in LABELS], "prices": prices, "brave_quota": quota}
+                "series": [LABELS[k] for k in LABELS], "prices": prices, "brave_quota": quota,
+                "budget": budget_state(cfg)}
 
 
 def parse_quota(headers: Any) -> dict[str, Any] | None:
@@ -127,4 +140,40 @@ def parse_quota(headers: Any) -> dict[str, Any] | None:
     return {"limit": limit, "remaining": remaining, "reset_at": time.time() + reset if reset is not None else None}
 
 
+def price_of(cfg: dict[str, Any], tool: str) -> float:
+    """The price of one successful call of a web tool (Settings → Price per web call)."""
+    provider = "brave" if tool == "brave_search" else "ollama"
+    return Usage._price(cfg, (provider, tool))
+
+
+def answer_cost(cfg: dict[str, Any], calls: list[tuple[str, bool]]) -> dict[str, Any]:
+    """The web calls one answer made, for its stats line: {"calls", "failed", "cost", "by_tool"}.
+    Only calls that reached the provider count (a page reused or refused costs nothing)."""
+    by_tool: dict[str, int] = {}
+    cost, failed = 0.0, 0
+    for tool, ok in calls:
+        if ok:
+            by_tool[tool] = by_tool.get(tool, 0) + 1
+            cost += price_of(cfg, tool)
+        else:
+            failed += 1
+    return {"calls": sum(by_tool.values()), "failed": failed, "cost": round(cost, 4), "by_tool": by_tool}
+
+
+def budget_state(cfg: dict[str, Any]) -> dict[str, Any] | None:
+    """The monthly web budget (Settings → Monthly web budget; 0 = no budget): spent this
+    calendar month (UTC), the limit, the share used, and whether web calls are stopped."""
+    try:
+        limit = float(cfg.get("web_budget") or 0)
+    except (TypeError, ValueError):
+        limit = 0.0
+    if limit <= 0 or MONTH_COST is None:
+        return None
+    spent = MONTH_COST(cfg)
+    used = spent / limit
+    return {"limit": round(limit, 2), "spent": round(spent, 4), "used": round(used, 3),
+            "warn": used >= 0.8, "stopped": used >= 1.0}
+
+
 RECORDER: Callable[..., None] | None = None   # Usage.record, set by create_app
+MONTH_COST: Callable[[dict[str, Any]], float] | None = None   # Usage.month_cost, set by create_app

@@ -42,6 +42,7 @@
         <label>Notify</label>
         <span class="inline"><label class="lg-check"><input type="checkbox" name="notify_email"> Email</label>
           <label class="lg-check"><input type="checkbox" name="notify_webhook"> Webhook</label>
+          <select name="webhook_name" id="al-hook" aria-label="Which webhook"><option value="">Default webhook</option></select>
           <span class="lg-meta">Always shown on this page. Set up email and webhook under Notifications.</span></span>
         <label>On</label>
         <span class="inline"><label class="switch" style="font-weight:400"><input type="checkbox" role="switch" name="enabled" checked><span></span></label></span>
@@ -91,8 +92,16 @@
       <label for="nt-pass">SMTP password</label><input class="wide" id="nt-pass" type="password" name="smtp_password" placeholder="leave blank to keep">
       <label for="nt-from">From</label><input class="wide" id="nt-from" name="smtp_from" placeholder="vco-logs@lab.local">
       <label for="nt-to">To</label><input class="wide" id="nt-to" name="smtp_to" placeholder="ops@lab.local, me@lab.local">
-      <label for="nt-hook">Webhook URL</label><input class="wide" id="nt-hook" name="webhook_url" placeholder="https://chat.lab.local/hooks/...">
-      <span class="hint">POSTs JSON with a <code>text</code> field (Slack, Mattermost, Rocket.Chat style) plus the alert details.</span>
+      <label for="nt-hook">Webhook URL</label><span class="inline"><input class="wide" id="nt-hook" name="webhook_url" placeholder="https://chat.lab.local/hooks/..." autocomplete="off" style="flex:1">
+        <label class="lg-check" id="nt-hook-clear-wrap" hidden><input type="checkbox" name="clear_webhook_url"> Clear</label></span>
+      <span class="hint">The default webhook. POSTs JSON with a <code>text</code> field (Slack, Mattermost, Rocket.Chat style) plus the alert details; Discord gets embeds (red for alerts and failures).
+        A saved URL is shown only by its site, because it works like a password: leave the box blank to keep it.</span>
+      <label>Named webhooks</label>
+      <div>
+        <div id="nt-hooks" class="nt-hooks"></div>
+        <button type="button" class="btn btn-outline" id="nt-hook-add">Add webhook</button>
+        <span class="hint">More channels, for example <i>daily</i> for Ask's scheduled posts and the default for alerts. Each alert rule and each Ask scheduled prompt picks one.</span>
+      </div>
     </form>
     <div class="lg-form-actions">
       <button type="button" class="btn btn-primary" id="nt-save">Save</button>
@@ -100,7 +109,7 @@
       <button type="button" class="btn btn-outline" id="nt-test-hook">Send test webhook</button>
       <span id="nt-msg" class="lg-meta" role="status"></span>
     </div>
-    <p class="lg-meta">The SMTP password is stored in <code>data/syslog.db</code> (like the vCenter passwords in <code>_core.db</code>).</p>
+    <p class="lg-meta">The SMTP password and the webhook URLs are stored in <code>data/syslog.db</code> (like the vCenter passwords in <code>_core.db</code>).</p>
   </div>
 </section>
 <script src="/ui/logs/static/logs.js?v={{ asset_v }}"></script>

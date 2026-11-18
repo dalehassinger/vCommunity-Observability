@@ -229,7 +229,8 @@ class Server:
                 for event, rule in fired:
                     settings = dict(self.settings)
                     result = await asyncio.get_running_loop().run_in_executor(
-                        self.mail, notify.notify, settings, event, bool(rule["notify_email"]), bool(rule["notify_webhook"]))
+                        self.mail, notify.notify, settings, event, bool(rule["notify_email"]), bool(rule["notify_webhook"]),
+                        str(rule.get("webhook_name") or ""))
                     await self.run_db(self.record_notified, event["id"], result)
                     log(f"alert '{rule['name']}': {result}")
                 await self.run_db(self.save_state)

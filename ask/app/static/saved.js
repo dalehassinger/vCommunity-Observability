@@ -12,32 +12,9 @@
   // -- form ----------------------------------------------------------------------
   var form = $('#saved-form');
   if (form) {
-    var scope = $('#f-scope'), label = $('#f-scope-label'), allBtn = $('[data-scope-all]', scope);
-    function boxes() { return $$('input[type=checkbox]', scope); }
-    function picked() { return boxes().filter(function (b) { return b.checked; }).map(function (b) { return b.value; }); }
-    function showScope() {
-      var p = picked();
-      allBtn.setAttribute('aria-pressed', p.length ? 'false' : 'true');
-      boxes().forEach(function (b) { b.closest('.scope-chip').classList.toggle('on', b.checked); });
-      if (!p.length) { label.textContent = 'All sources (not spreadsheets)'; return; }
-      label.textContent = p.indexOf('none') >= 0 && p.length === 1 ? 'No sources (just the model)'
-        : boxes().filter(function (b) { return b.checked; }).map(function (b) { return b.nextElementSibling.textContent; }).join(', ');
-    }
-    function isTool(b) { return b.dataset.plugin === 'web' || b.dataset.plugin === 'mcp'; }
-    scope.addEventListener('change', function (e) {
-      var b = e.target;
-      // "No sources" and knowledge sources exclude each other (web and MCP tools may go with it).
-      if (b.value === 'none' && b.checked) boxes().forEach(function (x) { if (x !== b && !isTool(x)) x.checked = false; });
-      else if (b.checked && !isTool(b)) boxes().forEach(function (x) { if (x.value === 'none') x.checked = false; });
-      showScope();
-    });
-    allBtn.addEventListener('click', function () { boxes().forEach(function (b) { b.checked = false; }); showScope(); });
-    $$('[data-scope-only]', scope).forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        boxes().forEach(function (b) { b.checked = b.dataset.plugin === btn.dataset.scopeOnly; });
-        showScope();
-      });
-    });
+    // Sources pick: the rules are in static/scope.js (the same as the chat).
+    var scope = AskScope.bind($('#f-scope'), { label: $('#f-scope-label') });
+    function picked() { return scope.picked(); }
 
     // A prompt sent here from a chat ("Save prompt").
     if (!form.elements.id.value && /[?&]from=chat\b/.test(location.search)) {
@@ -48,13 +25,12 @@
           var parts = String(draft.prompt || '').split('\n\nRead these pages with web_fetch:\n');
           form.elements.prompt.value = parts[0];
           if (parts[1]) form.elements.urls.value = parts[1].split('\n').map(function (l) { return l.replace(/^- /, '').trim(); }).filter(Boolean).join('\n');
-          var want = Array.isArray(draft.scope) ? draft.scope : String(draft.scope || '').split(',');
-          boxes().forEach(function (b) { b.checked = want.indexOf(b.value) >= 0; });
+          scope.set(draft.scope);
           sessionStorage.removeItem('ask.saved.draft');
         }
       } catch (e) { /* nothing saved */ }
     }
-    showScope();
+    scope.refresh(false);
 
     // Chat models from Ollama.
     var model = $('#f-model');
@@ -161,6 +137,36 @@
       remove([Number(b.dataset.del)], 'Delete the saved prompt "' + b.dataset.name + '"? The chats it made are kept.');
     });
   });
+  // Pin / unpin (★): pinned prompts list first.
+  $$('[data-pin]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      fetch('/ui/saved/' + b.dataset.pin + '/pin', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                   body: JSON.stringify({ on: b.dataset.on !== '1' }) })
+        .then(function (r) { if (!r.ok) throw new Error(r.statusText); location.reload(); })
+        .catch(function (err) { vcoAlert(err.message); });
+    });
+  });
+  // Import: a JSON file made by Export (here or in another Ask).
+  var impBtn = $('#saved-import-btn'), impFile = $('#saved-import'), impMsg = $('#saved-import-msg');
+  if (impBtn && impFile) {
+    impBtn.addEventListener('click', function () { impFile.value = ''; impFile.click(); });
+    impFile.addEventListener('change', async function () {
+      var f = impFile.files[0];
+      if (!f) return;
+      var data;
+      try { data = JSON.parse(await f.text()); } catch (e) { say(impMsg, f.name + ' is not a JSON file.', false); return; }
+      try {
+        var r = await AskAdmin.post('/ui/saved/import', data);
+        var text = 'Imported ' + f.name + ': ' + r.added + ' added, ' + r.replaced + ' replaced' + (r.skipped.length ? ', ' + r.skipped.length + ' skipped (' + r.skipped.slice(0, 3).join('; ') + ')' : '') + '.';
+        if (r.skipped.length) { say(impMsg, text, false); setTimeout(function () { location.reload(); }, 4000); }
+        else { try { sessionStorage.setItem('ask.saved.imported', text); } catch (e) { /* private window */ } location.reload(); }
+      } catch (err) { say(impMsg, err.message, false); }
+    });
+    try {
+      var note = sessionStorage.getItem('ask.saved.imported');
+      if (note) { say(impMsg, note, true); sessionStorage.removeItem('ask.saved.imported'); }
+    } catch (e) { /* private window */ }
+  }
   var saved0 = '';
   try { saved0 = localStorage.getItem('ask.saved.tag') || ''; } catch (e) { /* private window */ }
   setTag(saved0, false);

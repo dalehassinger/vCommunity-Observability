@@ -14,6 +14,7 @@ import re
 import secrets
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlparse
 
@@ -35,6 +36,7 @@ from . import control, mcp, rag, syslog_out, websearch, webusage
 from .reports import Reports
 from .perf import SAMPLE_SECONDS, Sampler
 from .evalrun import MAX_PROMPTS, EvalRunner
+from . import routes_saved, routes_schedules
 from . import saved as saved_mod
 from . import schedules as sched
 
@@ -225,6 +227,7 @@ def create_app() -> FastAPI:
     rag.REPORTS = reports
     usage = webusage.Usage(db)
     webusage.RECORDER = usage.record
+    webusage.MONTH_COST = usage.month_cost
     templates.env.filters["ago"] = ago
 
     # -- auth -----------------------------------------------------------------
@@ -277,6 +280,14 @@ def create_app() -> FastAPI:
         known = {s["name"] for s in srcs}
         return [n for n in names if n in known]
 
+    def usable_scopes() -> set[str]:
+        """Every Sources pick that can be used right now (the same chips the chat page shows)."""
+        cfg = settings()
+        names = {s["name"] for s in db.list_sources() if s.get("enabled", True)}
+        names |= {sc for sc in websearch.SCOPES if websearch.status_of(cfg, sc)["available"]}
+        names |= {"mcp:" + s["name"] for s in mcp.quick_servers(cfg["agent_url"])}
+        return names
+
     def split_scope(scope: Any) -> tuple[list[str] | None, list[str]]:
         """The Sources menu value as (knowledge sources, MCP servers). "mcp:<server>" entries
         are MCP tools; with only those picked, no knowledge source is searched (an empty list)."""
@@ -309,7 +320,7 @@ def create_app() -> FastAPI:
         examples = [e for s in db.list_sources() if s["enabled"] for e in s["examples"]][:6]
         return page(request, "chat.html", "/chat", chat=None, messages=[], examples=examples, stats=db.stats(),
                     mcp_servers=mcp.quick_servers(settings()["agent_url"]), web_search=websearch.status(settings()),
-                    brave_search=websearch.brave_status(settings()))
+                    brave_search=websearch.brave_status(settings()), local_fetch=websearch.local_status(settings()))
 
     @app.get("/chat/{chat_id}", response_class=HTMLResponse, include_in_schema=False)
     def chat_page(request: Request, chat_id: str):
@@ -318,7 +329,7 @@ def create_app() -> FastAPI:
             return RedirectResponse("/chat")
         return page(request, "chat.html", f"/chat/{chat_id}", chat=chat, messages=db.messages(chat_id),
                     examples=[], stats=db.stats(), mcp_servers=mcp.quick_servers(settings()["agent_url"]),
-                    web_search=websearch.status(settings()), brave_search=websearch.brave_status(settings()))
+                    web_search=websearch.status(settings()), brave_search=websearch.brave_status(settings()), local_fetch=websearch.local_status(settings()))
 
     @app.get("/sources", response_class=HTMLResponse, include_in_schema=False)
     def sources_page(request: Request):
@@ -668,14 +679,27 @@ def create_app() -> FastAPI:
         cfg_now = settings()
         if str(body.get("model") or "").strip():    # a saved prompt's own model, for this answer only
             cfg_now = {**cfg_now, "chat_model": str(body["model"]).strip()}
-        if body.get("saved_id"):
-            try:
-                saved.used(int(body["saved_id"]))
-            except (TypeError, ValueError):
-                pass
-        return StreamingResponse(rag.answer_stream(db, cfg_now, chat_id, question, docs, tools),
+        stream = rag.answer_stream(db, cfg_now, chat_id, question, docs, tools)
+        try:
+            saved_id = int(body.get("saved_id") or 0)
+        except (TypeError, ValueError):
+            saved_id = 0
+        if saved_id:
+            stream = count_saved_use(stream, saved_id)
+        return StreamingResponse(stream,
                                  media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    def count_saved_use(stream, saved_id: int):
+        """Pass the answer through; a saved prompt's use is counted only when the answer
+        finished (its "done" event), not when it failed or was stopped."""
+        for part in stream:
+            yield part
+            if part.startswith("event: done\n"):
+                try:
+                    saved.used(saved_id)
+                except Exception:   # a deleted prompt: nothing to count
+                    pass
 
     @app.post("/ui/chats/delete", include_in_schema=False)
     def ui_delete_chats(request: Request, body: dict = Body(...)):
@@ -725,6 +749,9 @@ def create_app() -> FastAPI:
                 v = coerce(SETTINGS[key]["type"], value)
             except (TypeError, ValueError):
                 errors[key] = "not a valid value"
+                continue
+            if key == "web_budget" and not (0 <= v <= 100000):
+                errors[key] = "use 0 (no budget) to 100000"
                 continue
             if key in ("top_k", "history_turns", "source_min_chunks") and not (0 <= v <= 50):
                 errors[key] = "use 0 to 50"
@@ -896,217 +923,13 @@ def create_app() -> FastAPI:
         return {"ok": True}
 
     # -- REST API -------------------------------------------------------------
-    # -- scheduled prompts ------------------------------------------------------
-    def schedule_or_404(sid: int) -> dict[str, Any]:
-        s = schedules.get(sid)
-        if not s:
-            raise HTTPException(404, "No such scheduled prompt")
-        return s
-
-    def save_schedule(body: dict, sid: int | None = None):
-        try:
-            return schedules.save(body, sid)
-        except ValueError as e:
-            return JSONResponse({"errors": json.loads(str(e))}, status_code=400)
-        except KeyError:
-            raise HTTPException(404, "No such scheduled prompt")
-
-    def run_schedule(sid: int) -> dict[str, Any]:
-        schedule_or_404(sid)
-        paused()
-        if not schedules.start(sid):
-            raise HTTPException(409, "It is already running.")
-        return {"ok": True, "started": True}
-
-    @app.get("/schedules", response_class=HTMLResponse, include_in_schema=False)
-    def schedules_page(request: Request, edit: int | None = None, new: bool = False):
-        s = settings()
-        current = schedules.get(edit) if edit else None
-        return page(request, "schedules.html", "/schedules", items=schedules.list(), current=current,
-                    show_form=bool(current) or new, frequencies=sched.FREQUENCIES, weekdays=sched.WEEKDAYS,
-                    default_tz=sched.DEFAULT_TZ, mcp_servers=mcp.quick_servers(s["agent_url"]),
-                    web_search=websearch.status(s), brave_search=websearch.brave_status(s),
-                    mail_token=bool(sched.Mailer.token()))
-
-    @app.get("/ui/schedules", include_in_schema=False)
-    def ui_schedules():
-        return {"items": schedules.list()}
-
-    @app.get("/ui/schedules/{sid}/runs", include_in_schema=False)
-    def ui_schedule_runs(sid: int):
-        schedule_or_404(sid)
-        return {"items": schedules.runs(sid)}
-
-    @app.post("/ui/schedules/save", include_in_schema=False, dependencies=[Depends(require_admin)])
-    def ui_schedule_save(body: dict = Body(...)):
-        sid = body.get("id")
-        return save_schedule(body, int(sid) if sid else None)
-
-    @app.post("/ui/schedules/{sid}/run", include_in_schema=False, dependencies=[Depends(require_admin)])
-    def ui_schedule_run(sid: int):
-        return run_schedule(sid)
-
-    @app.post("/ui/schedules/{sid}/enabled", include_in_schema=False, dependencies=[Depends(require_admin)])
-    def ui_schedule_enabled(sid: int, body: dict = Body(...)):
-        schedule_or_404(sid)
-        return schedules.set_enabled(sid, bool(body.get("on")))
-
-    @app.post("/ui/schedules/{sid}/delete", include_in_schema=False, dependencies=[Depends(require_admin)])
-    def ui_schedule_delete(sid: int):
-        schedule_or_404(sid)
-        return {"ok": schedules.delete(sid)}
-
-    @app.post("/ui/schedules/test-email", include_in_schema=False, dependencies=[Depends(require_admin)])
-    def ui_schedule_test_email(body: dict = Body(...)):
-        to = sched.recipients(body.get("recipients"))
-        bad = [a for a in to if not sched.EMAIL_RE.match(a)]
-        if not to or bad:
-            raise HTTPException(400, "Enter valid email addresses first." + (f" Not valid: {', '.join(bad)}" if bad else ""))
-        text = "This is a test from vCommunity Ask. Scheduled prompt emails go through this mail server."
-        try:
-            result = schedules.mailer.send(to, "[Ask] Test email", text, f"<p>{text}</p>")
-        except RuntimeError as e:
-            raise HTTPException(502, str(e))
-        return {"ok": True, "result": result}
-
-    @app.post("/ui/schedules/test-webhook", include_in_schema=False, dependencies=[Depends(require_admin)])
-    def ui_schedule_test_webhook():
-        try:
-            result = schedules.mailer.webhook("[Ask] Test", "This is a test from **vCommunity Ask**. "
-                                              "Scheduled prompts with Webhook on post their answers here.")
-        except RuntimeError as e:
-            raise HTTPException(502, str(e))
-        return {"ok": True, "result": result}
-
-    # -- Saved prompts ----------------------------------------------------------
-    def saved_or_404(pid: int) -> dict[str, Any]:
-        s = saved.get(pid)
-        if not s:
-            raise HTTPException(404, "No such saved prompt")
-        return s
-
-    def save_saved(body: dict, pid: int | None = None):
-        try:
-            return saved.save(body, pid)
-        except ValueError as e:
-            return JSONResponse({"errors": e.args[0]}, status_code=400)
-        except KeyError:
-            raise HTTPException(404, "No such saved prompt")
-
-    @app.get("/saved", response_class=HTMLResponse, include_in_schema=False)
-    def saved_page(request: Request, edit: int | None = None, new: bool = False):
-        s = settings()
-        current = saved.get(edit) if edit else None
-        return page(request, "saved.html", "/saved", items=saved.list(), current=current, all_tags=saved.all_tags(),
-                    show_form=bool(current) or new, mcp_servers=mcp.quick_servers(s["agent_url"]),
-                    web_search=websearch.status(s), brave_search=websearch.brave_status(s))
-
-    @app.get("/ui/saved", include_in_schema=False)
-    def ui_saved():
-        return {"items": saved.list()}
-
-    @app.get("/ui/saved/{pid}", include_in_schema=False)
-    def ui_saved_one(pid: int):
-        return saved_or_404(pid)
-
-    @app.post("/ui/saved/save", include_in_schema=False, dependencies=[Depends(require_admin)])
-    def ui_saved_save(body: dict = Body(...)):
-        pid = body.get("id")
-        return save_saved(body, int(pid) if pid else None)
-
-    @app.post("/ui/saved/delete", include_in_schema=False, dependencies=[Depends(require_admin)])
-    def ui_saved_delete(body: dict = Body(...)):
-        try:
-            ids = [int(i) for i in body.get("ids") or []]
-        except (TypeError, ValueError):
-            raise HTTPException(400, "ids must be numbers")
-        return {"ok": True, "deleted": saved.delete_many(ids)}
-
-    STAG = ["saved prompts"]
-
-    @app.get("/api/saved", tags=STAG, dependencies=[Depends(require_token)])
-    def api_saved():
-        """Every saved prompt: name, prompt, scope, model, pages to fetch, how often used.
-        `question` is what Run sends (the prompt plus the pages to read)."""
-        return {"items": saved.list()}
-
-    @app.post("/api/saved", tags=STAG, dependencies=[Depends(require_token)])
-    def api_saved_create(body: dict = Body(..., examples=[{
-            "name": "VCF release notes", "prompt": "List the newest fixes in these release notes.",
-            "scope": "web:fetch", "urls": ["https://example.com/release-notes"], "tags": "vcf, news"}])):
-        """Create a saved prompt. scope: like the chat ("all", source names, "web:fetch",
-        "web:ollama", "web:brave", "mcp:<server>", "none"; comma-separated or a list).
-        Optional: name (default: the start of the prompt), model, urls (pages to fetch, at most
-        10; needs web:fetch or web:ollama), tags (comma-separated or a list, for example
-        "sports, news"; at most 10)."""
-        return save_saved(body)
-
-    @app.get("/api/saved/{pid}", tags=STAG, dependencies=[Depends(require_token)])
-    def api_saved_one(pid: int):
-        return saved_or_404(pid)
-
-    @app.put("/api/saved/{pid}", tags=STAG, dependencies=[Depends(require_token)])
-    def api_saved_update(pid: int, body: dict = Body(...)):
-        """Replace a saved prompt (same fields as create)."""
-        return save_saved(body, pid)
-
-    @app.delete("/api/saved/{pid}", tags=STAG, dependencies=[Depends(require_token)])
-    def api_saved_delete(pid: int):
-        saved_or_404(pid)
-        return {"ok": saved.delete(pid)}
-
-    @app.post("/api/saved/{pid}/run", tags=STAG, dependencies=[Depends(require_token)])
-    def api_saved_run(pid: int):
-        """Ask the saved prompt in a new chat and wait for the whole answer (like POST /api/ask)."""
-        paused()
-        s = saved_or_404(pid)
-        q = s["question"]
-        chat_id = db.new_chat(s["name"], s["scope"])
-        docs, tools = split_scope(s["scope"])
-        cfg_now = settings()
-        if s["model"]:
-            cfg_now = {**cfg_now, "chat_model": s["model"]}
-        saved.used(pid)
-        return rag.answer(db, cfg_now, chat_id, q, docs, tools)
-
-    TAG = ["scheduled prompts"]
-
-    @app.get("/api/schedules", tags=TAG, dependencies=[Depends(require_token)])
-    def api_schedules():
-        """Every scheduled prompt with its schedule, next run and last run."""
-        return {"items": schedules.list()}
-
-    @app.post("/api/schedules", tags=TAG, dependencies=[Depends(require_token)])
-    def api_schedule_create(body: dict = Body(..., examples=[{
-            "name": "Weekly blog summary", "prompt": "Summarize the posts published in the last 7 days, with their URLs.",
-            "scope": "vcrocs", "frequency": "weekly", "weekday": "mon", "at_time": "07:00",
-            "timezone": "America/New_York", "recipients": "you@example.com"}])):
-        """Create a scheduled prompt. scope: "all", source names (comma-separated or a list),
-        "web:ollama", "web:brave", "web:fetch", "mcp:<server>" or "none". frequency: daily, weekdays, weekly
-        (weekday mon..sun), monthly (monthday 1-28 or last) or hours (every_hours). Optional: model,
-        sync_first, attach_report (default true), only_changed, enabled (default true),
-        send_email (default true; recipients needed then) and send_webhook (default false: posts to
-        the webhook on Log alerts → Notifications in vCommunity Observability)."""
-        return save_schedule(body)
-
-    @app.get("/api/schedules/{sid}", tags=TAG, dependencies=[Depends(require_token)])
-    def api_schedule(sid: int):
-        return {**schedule_or_404(sid), "runs": schedules.runs(sid)}
-
-    @app.put("/api/schedules/{sid}", tags=TAG, dependencies=[Depends(require_token)])
-    def api_schedule_update(sid: int, body: dict = Body(...)):
-        """Replace a scheduled prompt (same fields as create; fields left out take their defaults)."""
-        return save_schedule(body, sid)
-
-    @app.delete("/api/schedules/{sid}", tags=TAG, dependencies=[Depends(require_token)])
-    def api_schedule_delete(sid: int):
-        schedule_or_404(sid)
-        return {"ok": schedules.delete(sid)}
-
-    @app.post("/api/schedules/{sid}/run", tags=TAG, dependencies=[Depends(require_token)])
-    def api_schedule_run(sid: int):
-        """Run it now in the background and email the result (see GET /api/schedules/{id} for the run)."""
-        return run_schedule(sid)
+    # -- Scheduled prompts and Saved prompts: routes in routes_schedules.py / routes_saved.py --
+    shared = SimpleNamespace(db=db, page=page, paused=paused, settings=settings, split_scope=split_scope,
+                             usable_scopes=usable_scopes, require_admin=require_admin, require_token=require_token,
+                             same_origin=same_origin,
+                             schedules=schedules, saved=saved)
+    routes_schedules.register(app, shared)
+    routes_saved.register(app, shared)
 
     @app.get("/api/health", tags=["core"])
     def health():
