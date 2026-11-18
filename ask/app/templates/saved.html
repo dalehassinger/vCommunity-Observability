@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Saved prompts · vCommunity Ask{% endblock %}
+{% block head %}<link rel="stylesheet" href="/shared/mac-ui.css?v={{ asset_v }}">{% endblock %}
 {% block body %}
+<div class="mac-ui">
 <div class="page-head">
   <div>
     <div class="breadcrumb">Knowledge</div>
@@ -115,6 +117,7 @@
   {% elif not show_form %}
   <div class="card-block"><p class="subtle">No saved prompts yet. <a href="/saved?new=1">Create the first one</a>, or use <b>Save prompt</b> under a question in a chat.</p></div>
   {% endif %}
+</div>
 </div>
 {% endblock %}
 {% block scripts %}

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}vCommunity-Observability{% endblock %}</title>
   <link rel="stylesheet" href="/static/app.css?v={{ asset_v }}">
+  <link rel="stylesheet" href="/static/mac-ui.css?v={{ asset_v }}">
   {% block head %}{% endblock %}
   <script>
     // Theme: saved choice, else the OS setting. Runs before paint to avoid a flash.
@@ -117,7 +118,7 @@
   </nav>
   {% endblock %}
 
-  <main class="content">
+  <main class="content mac-ui">
     {% if not control.is_on('observability') %}<div class="paused-banner"><b>vCommunity Observability is paused.</b>
       No data is collected and no scheduled exports run; dashboards and the API show the last collected data.
       <a href="/settings#apps">Turn it on in Settings</a></div>{% endif %}

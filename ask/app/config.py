@@ -59,6 +59,12 @@ SETTINGS: dict[str, dict[str, Any]] = {
     "data_questions":   {"default": True, "type": "bool"},
     "overview_questions": {"default": True, "type": "bool"},
     "history_turns":    {"default": 3, "type": "int"},
+    # New chat's example question boxes: your own list (one per line; empty = the examples of
+    # the enabled knowledge sources) and how many show (0 hides them).
+    "chat_examples":       {"default": "", "type": "text"},
+    "chat_examples_count": {"default": 6, "env": "ASK_CHAT_EXAMPLES", "type": "int"},
+    # How many chats the sidebar's Recent chats list shows (1-200).
+    "recent_chats":     {"default": 10, "env": "ASK_RECENT_CHATS", "type": "int"},
     "keep_alive":       {"default": "10m", "type": "str"},
     "system_prompt":    {"default": DEFAULT_SYSTEM_PROMPT, "type": "text"},
     # "No sources (just the model)": no search, this prompt instead of the sources rules.

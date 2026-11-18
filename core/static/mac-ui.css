@@ -1,0 +1,374 @@
+/* Shared macOS look for both apps (UI only: no ids, names or behaviour change here). The dashboards load it in
+   core base.html (main.content gets class mac-ui); Ask serves it at /shared/mac-ui.css and its pages opt in
+   with a mac-ui wrapper or content class. System fonts only, nothing downloaded: works at dark sites. */
+
+.mac-ui {
+  --m-bg: #f2f2f7;          /* window background            */
+  --m-group: #ffffff;       /* grouped (inset) list          */
+  --m-sep: rgba(60, 60, 67, .16);
+  --m-text: #1d1d1f;
+  --m-sub: #6e6e73;
+  --m-accent: #007aff;      /* system blue                   */
+  --m-accent-hover: #0068d9;
+  --m-green: #34c759;
+  --m-field: #ffffff;
+  --m-field-border: rgba(60, 60, 67, .22);
+  --m-ring: rgba(0, 122, 255, .35);
+  --m-bezel: #ffffff;
+  --m-bezel-border: rgba(60, 60, 67, .2);
+  --m-shadow: 0 0 0 .5px rgba(0, 0, 0, .05), 0 1px 2px rgba(0, 0, 0, .06);
+  --m-track: #e3e3e8;
+  --m-badge-bg: rgba(0, 122, 255, .12);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
+  color: var(--m-text);
+  -webkit-font-smoothing: antialiased;
+}
+[data-theme="dark"] .mac-ui {
+  --m-bg: #1e1e1e;
+  --m-group: #2c2c2e;
+  --m-sep: rgba(255, 255, 255, .09);
+  --m-text: #f5f5f7;
+  --m-sub: #98989d;
+  --m-accent: #0a84ff;
+  --m-accent-hover: #409cff;
+  --m-green: #30d158;
+  --m-field: #1c1c1e;
+  --m-field-border: rgba(255, 255, 255, .14);
+  --m-ring: rgba(10, 132, 255, .45);
+  --m-bezel: #3a3a3c;
+  --m-bezel-border: rgba(255, 255, 255, .1);
+  --m-shadow: 0 0 0 .5px rgba(255, 255, 255, .06);
+  --m-track: #48484a;
+  --m-badge-bg: rgba(10, 132, 255, .2);
+}
+
+/* Text fields, number fields, text areas */
+.mac-ui input[type=text], .mac-ui input[type=password], .mac-ui input[type=number],
+.mac-ui textarea, .mac-ui select {
+  font-family: inherit; font-size: 13px; color: var(--m-text); background: var(--m-field);
+  border: .5px solid var(--m-field-border); border-radius: 7px; padding: 6px 9px; box-shadow: inset 0 .5px 1px rgba(0, 0, 0, .05);
+  transition: box-shadow .15s ease, border-color .15s ease;
+}
+.mac-ui .field input[type=number] { width: 140px; max-width: 100%; }
+.mac-ui textarea { border-radius: 9px; padding: 9px 11px; line-height: 1.5; }
+.mac-ui .field textarea, .mac-ui textarea.prompt { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+.mac-ui input:focus, .mac-ui textarea:focus, .mac-ui select:focus,
+.mac-ui .field input:focus, .mac-ui .field textarea:focus, .mac-ui .field select:focus {
+  outline: none; border-color: var(--m-accent); box-shadow: 0 0 0 3.5px var(--m-ring);
+}
+.mac-ui input::placeholder, .mac-ui textarea::placeholder { color: var(--m-sub); opacity: .75; }
+
+/* Pop-up buttons (selects) with the Mac double chevron */
+.mac-ui select {
+  -webkit-appearance: none; appearance: none; cursor: pointer; padding-right: 30px;
+  background-color: var(--m-bezel); border-color: var(--m-bezel-border); box-shadow: 0 .5px 1.5px rgba(0, 0, 0, .12);
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='12' viewBox='0 0 8 12'%3E%3Cpath d='M1 4.5 4 1.5l3 3M1 7.5l3 3 3-3' fill='none' stroke='%23fff' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"),
+    linear-gradient(var(--m-accent), var(--m-accent));
+  background-repeat: no-repeat; background-size: 8px 12px, 18px 18px; background-position: right 9px center, right 4px center;
+}
+
+/* Switches: the macOS toggle */
+.mac-ui .switch { gap: 9px; font-size: 13px; color: var(--m-text); }
+.mac-ui .switch span { width: 38px; height: 22px; background: var(--m-track); border: 0;
+  box-shadow: inset 0 0 0 .5px rgba(0, 0, 0, .06); transition: background-color .2s ease; }
+.mac-ui .switch span::after { top: 2px; left: 2px; width: 18px; height: 18px; background: #fff;
+  box-shadow: 0 1px 2.5px rgba(0, 0, 0, .25), 0 0 0 .5px rgba(0, 0, 0, .04); transition: left .2s cubic-bezier(.3, .7, .4, 1); }
+.mac-ui .switch input:checked + span, .mac-ui .switch.on span { background: var(--m-accent); border-color: var(--m-accent); }
+.mac-ui .switch input:checked + span::after, .mac-ui .switch.on span::after { left: 18px; }
+.mac-ui .switch.on { color: var(--m-text); }
+.mac-ui .switch input:focus-visible + span { outline: none; box-shadow: 0 0 0 3.5px var(--m-ring); }
+@media (prefers-reduced-motion: reduce) {
+  .mac-ui .switch span, .mac-ui .switch span::after { transition: none; }
+}
+
+/* Buttons: push buttons, no capitals */
+.mac-ui .btn { text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 500; border-radius: 7px;
+  padding: 5px 14px; min-height: 28px; transition: background-color .15s ease, filter .15s ease; }
+.mac-ui .btn-primary { background: var(--m-accent); border: 0; color: #fff;
+  box-shadow: 0 .5px 1.5px rgba(0, 0, 0, .2), inset 0 .5px 0 rgba(255, 255, 255, .25); }
+.mac-ui .btn-primary:hover { background: var(--m-accent-hover); }
+[data-theme="dark"] .mac-ui .btn-primary { color: #fff; }
+.mac-ui .btn-outline, .mac-ui .btn-secondary, .mac-ui .btn:not(.btn-primary):not(.btn-danger) {
+  background: var(--m-bezel); color: var(--m-text); border: .5px solid var(--m-bezel-border); box-shadow: 0 .5px 1.5px rgba(0, 0, 0, .12); }
+.mac-ui .btn-outline:hover, .mac-ui .btn:not(.btn-primary):not(.btn-danger):hover { filter: brightness(.96); }
+[data-theme="dark"] .mac-ui .btn:not(.btn-primary):not(.btn-danger):hover { filter: brightness(1.15); }
+.mac-ui .btn:disabled { opacity: .45; }
+.mac-ui .btn:focus-visible { outline: none; box-shadow: 0 0 0 3.5px var(--m-ring); }
+.mac-ui a, .mac-ui .link-btn { color: var(--m-accent); }
+
+
+/* API token bar */
+.mac-ui .token-bar { background: var(--m-group); border: 0; border-radius: 12px; box-shadow: var(--m-shadow); padding: 11px 16px; margin-bottom: 26px; }
+.mac-ui .token-bar label { font-weight: 400; color: var(--m-text); }
+
+
+main.content:has(> .mac-ui), main.content.mac-ui { background: #f2f2f7; }
+[data-theme="dark"] main.content:has(> .mac-ui), [data-theme="dark"] main.content.mac-ui { background: #1e1e1e; }
+.mac-ui { --m-orange: #ff9500; --m-red: #ff3b30; --m-green-bg: rgba(52, 199, 89, .14); --m-orange-bg: rgba(255, 149, 0, .14); --m-red-bg: rgba(255, 59, 48, .12); }
+[data-theme="dark"] .mac-ui { --m-orange: #ff9f0a; --m-red: #ff453a; --m-green-bg: rgba(48, 209, 88, .18); --m-orange-bg: rgba(255, 159, 10, .18); --m-red-bg: rgba(255, 69, 58, .18); }
+
+/* Large title */
+.mac-ui .page-head { margin-bottom: 18px; display: flex; flex-wrap: nowrap; justify-content: space-between; align-items: flex-end; gap: 24px; }
+.mac-ui .page-head > :last-child:not(:first-child) { flex: none; margin-bottom: 6px; }
+.mac-ui .page-head h1 { font-size: 28px; font-weight: 700; letter-spacing: -.02em; margin: 2px 0 6px; color: var(--m-text); }
+.mac-ui .breadcrumb { font-size: 13px; color: var(--m-sub); text-transform: none; letter-spacing: 0; }
+.mac-ui .subtle, .mac-ui .hint { color: var(--m-sub); }
+.mac-ui code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .92em; background: rgba(120, 120, 128, .12);
+  padding: 1px 5px; border-radius: 5px; }
+.mac-ui h3 { text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 600; margin: 26px 4px 7px; color: var(--m-text); }
+.mac-ui a, .mac-ui .link-btn { color: var(--m-accent); }
+
+/* Cards: rounded grouped boxes with a soft shadow */
+.mac-ui .card { background: var(--m-group); border: 0; border-radius: 14px; box-shadow: var(--m-shadow); overflow: hidden; margin-bottom: 22px; }
+.mac-ui .card-header { border-bottom: .5px solid var(--m-sep); padding: 13px 16px; font-size: 15px; font-weight: 600; letter-spacing: -.01em; color: var(--m-text); }
+.mac-ui .card-block { padding: 12px 16px; }
+.mac-ui .card > .alert { margin: 12px 16px 0; }
+
+/* Form rows: label left, control right, hairline between rows (like System Settings) */
+.mac-ui .field { grid-template-columns: 190px minmax(0, 1fr); gap: 16px; margin: 0 -16px; padding: 11px 16px;
+  border-top: .5px solid var(--m-sep); align-items: start; }
+.mac-ui .card-block > .field:first-child, .mac-ui .card-block > input[type=hidden] + .field { border-top: 0; }
+.mac-ui .field > label { font-size: 13px; font-weight: 400; color: var(--m-text); padding-top: 5px; }
+.mac-ui .field .hint { font-size: 12px; line-height: 1.45; margin-top: 5px; }
+.mac-ui .field input[type=number] { width: 140px; max-width: 100%; }
+.mac-ui .sched-when select, .mac-ui .sched-when input, .mac-ui .mcp-tools select { border-radius: 7px; }
+.mac-ui .sched-when select { width: auto; }
+.mac-ui .sched-opts .switch, .mac-ui .sched-sendto .switch { color: var(--m-text); }
+.mac-ui .sched-actions, .mac-ui .card-block > .form-actions { margin: 4px -16px -12px; padding: 12px 16px; border-top: .5px solid var(--m-sep);
+  background: rgba(120, 120, 128, .04); }
+
+/* Switches that are buttons (class "on") */
+.mac-ui .switch.on span { background: var(--m-accent); border-color: var(--m-accent); }
+
+/* Source chips (Scheduled prompts form): capsules */
+.mac-ui .scope-panel { background: rgba(120, 120, 128, .06); border: 0; border-radius: 10px; }
+.mac-ui .scope-chip span, .mac-ui .scope-chip-btn { border-radius: 999px; border: .5px solid var(--m-bezel-border); background: var(--m-bezel);
+  color: var(--m-text); font-family: inherit; }
+.mac-ui .scope-chip:hover span, .mac-ui .scope-chip-btn:hover { border-color: var(--m-accent); }
+.mac-ui .scope-chip input:checked + span, .mac-ui .scope-chip-btn[aria-pressed="true"] { background: var(--m-accent); border-color: var(--m-accent); color: #fff; }
+
+/* Tables: grouped list rows, no capitals */
+.mac-ui .table-wrap { margin: 0; }
+.mac-ui .card > .table-wrap { margin: 0; }
+.mac-ui .card-block > .table-wrap { margin: 0 -16px; }
+.mac-ui .datagrid { font-size: 12.5px; }
+.mac-ui .datagrid th { background: none; color: var(--m-sub); font-weight: 500; font-size: 12px; text-transform: none; letter-spacing: 0;
+  border-bottom: .5px solid var(--m-sep); }
+.mac-ui .datagrid td { border-bottom: .5px solid var(--m-sep); color: var(--m-text); }
+.mac-ui .datagrid th:first-child, .mac-ui .datagrid td:first-child { padding-left: 16px; }
+.mac-ui .datagrid th:last-child, .mac-ui .datagrid td:last-child { padding-right: 16px; }
+.mac-ui .datagrid tbody tr:last-child td { border-bottom: 0; }
+.mac-ui .datagrid tbody tr:hover td { background: rgba(120, 120, 128, .06); }
+.mac-ui .reports-table tr.picked td { background: var(--m-badge-bg); }
+.mac-ui .datagrid input[type=checkbox], .mac-ui .reports-bar input[type=checkbox] { accent-color: var(--m-accent); width: 15px; height: 15px; }
+.mac-ui .reports-bar { border-bottom: .5px solid var(--m-sep); background: rgba(120, 120, 128, .04); }
+
+/* Badges and status labels: capsules in Apple colours */
+.mac-ui .badge { text-transform: none; letter-spacing: 0; font-weight: 500; font-size: 11px; background: rgba(120, 120, 128, .14); color: var(--m-sub); }
+.mac-ui .badge-info { background: var(--m-badge-bg); color: var(--m-accent); }
+.mac-ui .badge-success { background: var(--m-green-bg); color: var(--m-green); }
+.mac-ui .badge-warn { background: var(--m-orange-bg); color: var(--m-orange); }
+.mac-ui .badge-danger { background: var(--m-red-bg); color: var(--m-red); }
+.mac-ui .label { border-radius: 999px; font-weight: 500; text-transform: none; }
+.mac-ui .label-ok { background: var(--m-green-bg); color: var(--m-green); }
+.mac-ui .label-warn { background: var(--m-orange-bg); color: var(--m-orange); }
+.mac-ui .label-crit { background: var(--m-red-bg); color: var(--m-red); }
+
+/* Alerts and notes: rounded, no thick edge */
+.mac-ui .alert, .mac-ui .perf-note { border: 0; border-radius: 10px; padding: 10px 14px; }
+.mac-ui .alert-danger { background: var(--m-red-bg); }
+.mac-ui .alert-success { background: var(--m-green-bg); }
+.mac-ui .alert-info { background: var(--m-badge-bg); }
+.mac-ui .perf-note { background: var(--m-orange-bg); }
+
+/* Buttons in rows: compact; destructive ones in red */
+.mac-ui .btn-sm { font-size: 12px; padding: 3px 10px; min-height: 24px; }
+.mac-ui .btn.btn-outline[data-delete], .mac-ui .btn.btn-outline[id*="delete"], .mac-ui .btn-danger { color: var(--m-red); }
+.mac-ui .btn-danger { background: var(--m-bezel); border: .5px solid var(--m-bezel-border); }
+
+/* MCP tools */
+.mac-ui .mcp-head { font-size: 15px; }
+.mac-ui .mcp-head .status { color: var(--m-sub); }
+.mac-ui .mcp-stderr pre { border: 0; border-radius: 9px; background: rgba(120, 120, 128, .08); }
+
+@media (max-width: 640px) {
+  .mac-ui .page-head { flex-wrap: wrap; align-items: flex-start; }
+  .mac-ui .page-head h1 { font-size: 24px; }
+  .mac-ui .field { grid-template-columns: 1fr; gap: 6px; }
+  .mac-ui .field > label { padding-top: 0; font-weight: 500; }
+  .mac-ui .token-bar { flex-wrap: wrap; }
+}
+
+/* Saved prompts: tag filter chips and tags as capsules */
+.mac-ui .tag-chip { border-radius: 999px; border: .5px solid var(--m-bezel-border); background: var(--m-bezel); color: var(--m-text);
+  font-family: inherit; text-transform: none; letter-spacing: 0; }
+.mac-ui .tag-chip.on { background: var(--m-accent); border-color: var(--m-accent); color: #fff; }
+.mac-ui .tag-pill { border-radius: 999px; background: rgba(120, 120, 128, .14); color: var(--m-sub); text-transform: none; letter-spacing: 0; }
+.mac-ui .saved-warn { border-left: 0; border-radius: 8px; padding: 3px 8px; background: var(--m-orange-bg); color: var(--m-text); }
+
+/* About page (Ask): hero, fact tiles, sidebar contents and the README text in the Mac style */
+.mac-ui .about-hero { padding: 22px 24px; }
+.mac-ui .about-hero h1 { font-size: 28px; font-weight: 700; letter-spacing: -.02em; color: var(--m-text); }
+.mac-ui .about-hero h1 b { font-weight: 700; }
+.mac-ui .about-hero h1 .badge { vertical-align: 6px; margin-left: 4px; }
+.mac-ui .about-hero p { color: var(--m-sub); font-size: 14px; line-height: 1.5; }
+.mac-ui .about-facts { gap: 14px; margin-bottom: 22px; }
+.mac-ui .about-fact, .mac-ui .about-fact.ok, .mac-ui .about-fact.warn { background: var(--m-group); border: 0; border-radius: 14px; box-shadow: var(--m-shadow);
+  padding: 12px 16px; position: relative; }
+.mac-ui .about-fact.ok::before, .mac-ui .about-fact.warn::before { content: ""; position: absolute; top: 14px; right: 14px; width: 8px; height: 8px; border-radius: 50%; }
+.mac-ui .about-fact.ok::before { background: var(--m-green); }
+.mac-ui .about-fact.warn::before { background: var(--m-orange); }
+.mac-ui .about-fact .k { font-size: 12px; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--m-sub); }
+.mac-ui .about-fact .v { font-size: 22px; font-weight: 600; letter-spacing: -.01em; color: var(--m-text);
+  font-family: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
+.mac-ui .about-fact .v small { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; font-weight: 400; color: var(--m-sub); }
+.mac-ui .about-layout { gap: 18px; }
+.mac-ui .about-side { padding: 12px; margin: 0; }
+.mac-ui .about-side input { border-radius: 8px; border: 0; background: rgba(120, 120, 128, .12); padding: 7px 10px; box-shadow: none; }
+.mac-ui .about-side input:focus { box-shadow: 0 0 0 3.5px var(--m-ring); }
+.mac-ui .about-side .k { font-size: 11px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--m-sub); padding: 0 6px; }
+.mac-ui #about-toc a { border-radius: 6px; padding: 4px 8px; color: var(--m-text); }
+.mac-ui #about-toc a.sub { padding-left: 20px; color: var(--m-sub); }
+.mac-ui #about-toc a:hover { background: rgba(120, 120, 128, .1); }
+.mac-ui #about-toc a.active { background: var(--m-accent); color: #fff; font-weight: 500; }
+.mac-ui .about-md { padding: 26px 32px; font-size: 14px; line-height: 1.6; color: var(--m-text); margin: 0; }
+.mac-ui .about-md h2 { font-size: 22px; font-weight: 700; letter-spacing: -.015em; border-bottom: .5px solid var(--m-sep); }
+.mac-ui .about-md h3 { font-size: 17px; font-weight: 600; text-transform: none; letter-spacing: -.01em; color: var(--m-text); margin: 24px 0 8px; }
+.mac-ui .about-md h4 { font-size: 14px; font-weight: 600; }
+.mac-ui .about-md code { background: rgba(120, 120, 128, .12); border-radius: 5px; font-size: 12.5px; }
+.mac-ui .about-md pre { background: rgba(120, 120, 128, .08); border: 0; border-radius: 10px; padding: 12px 14px; }
+.mac-ui .about-md pre code { background: none; }
+.mac-ui .about-table { border-radius: 10px; box-shadow: 0 0 0 .5px var(--m-sep); }
+.mac-ui .about-md table { width: 100%; }
+.mac-ui .about-md th, .mac-ui .about-md td { border: 0; border-bottom: .5px solid var(--m-sep); padding: 7px 12px; }
+.mac-ui .about-md th { background: rgba(120, 120, 128, .08); color: var(--m-sub); font-weight: 500; }
+.mac-ui .about-md tr:last-child td { border-bottom: 0; }
+.mac-ui .about-md blockquote { border-left: 0; border-radius: 10px; background: rgba(120, 120, 128, .08); padding: 8px 14px; }
+.mac-ui .about-md img { border: 0; border-radius: 10px; box-shadow: var(--m-shadow), 0 4px 14px rgba(0, 0, 0, .08); }
+.mac-ui .about-callout { border-left: 0 !important; border-radius: 10px; padding: 10px 14px !important; }
+.mac-ui .about-md .about-callout-warning, .mac-ui .about-md .about-callout-caution { background: var(--m-orange-bg); }
+.mac-ui .about-md .about-callout-note, .mac-ui .about-md .about-callout-tip, .mac-ui .about-md .about-callout-important { background: var(--m-badge-bg); }
+.mac-ui .about-callout-label { text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 600; }
+
+/* Chat: iMessage-style question bubbles, rounded answers, a floating Mac composer */
+.mac-ui .chat-title, .mac-ui .chat-head h1 { font-weight: 700; letter-spacing: -.02em; }
+.mac-ui .empty-icon { background: var(--m-badge-bg); color: var(--m-accent); }
+.mac-ui .example { background: var(--m-group); border: 0; border-radius: 12px; box-shadow: var(--m-shadow); color: var(--m-text);
+  font-family: inherit; transition: box-shadow .15s ease, transform .15s ease; }
+.mac-ui .example:hover { background: var(--m-group); box-shadow: var(--m-shadow), 0 4px 14px rgba(0, 0, 0, .08); transform: translateY(-1px); }
+.mac-ui .msg.user .bubble { background: var(--m-accent); color: #fff; border-radius: 18px 18px 4px 18px; padding: 9px 14px; }
+[data-theme="dark"] .mac-ui .msg.user .bubble { color: #fff; }
+.mac-ui .answer { background: var(--m-group); border: 0; border-radius: 16px; box-shadow: var(--m-shadow); }
+.mac-ui .msg.failed .answer { box-shadow: var(--m-shadow), inset 3px 0 0 var(--m-red); }
+.mac-ui .md pre { border: 0; border-radius: 10px; background: rgba(120, 120, 128, .08); }
+.mac-ui .md code { background: rgba(120, 120, 128, .12); border-radius: 5px; }
+.mac-ui .md pre code { background: none; }
+.mac-ui .md th, .mac-ui .md td { border: 0; border-bottom: .5px solid var(--m-sep); }
+.mac-ui .md th { background: rgba(120, 120, 128, .08); color: var(--m-sub); font-weight: 500; }
+.mac-ui .md blockquote { border-left: 0; border-radius: 10px; background: rgba(120, 120, 128, .08); padding: 6px 12px; }
+.mac-ui .md img { border: 0; border-radius: 10px; }
+.mac-ui .think-text { border-radius: 10px; background: rgba(120, 120, 128, .08); }
+.mac-ui .src-card, .mac-ui .src-card.linked, .mac-ui .src-card.data, .mac-ui .src-card.tool-card { background: rgba(120, 120, 128, .07); border: 0;
+  border-radius: 10px; box-shadow: inset 3px 0 0 var(--m-accent); }
+.mac-ui .src-card.linked, .mac-ui .src-card.tool-card { box-shadow: inset 3px 0 0 rgba(120, 120, 128, .45); }
+.mac-ui .src-card.data, .mac-ui .src-card.tool-card.ok { box-shadow: inset 3px 0 0 var(--m-green); }
+.mac-ui .src-card.tool-card.error { box-shadow: inset 3px 0 0 var(--m-red); }
+.mac-ui .src-card.tool-card.waiting { box-shadow: inset 3px 0 0 var(--m-orange); }
+.mac-ui .src-card.flash { box-shadow: 0 0 0 3px var(--m-ring); }
+.mac-ui .composer { background: linear-gradient(to bottom, transparent, var(--m-bg) 30%); }
+.mac-ui .composer-box { background: var(--m-group); border: .5px solid var(--m-sep); border-radius: 18px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .08), 0 0 0 .5px rgba(0, 0, 0, .03); padding: 12px 14px 9px; }
+.mac-ui .composer-box:focus-within { border-color: var(--m-accent); box-shadow: 0 6px 24px rgba(0, 0, 0, .08), 0 0 0 3.5px var(--m-ring); }
+.mac-ui .composer textarea, .mac-ui .composer textarea:focus { border: 0; box-shadow: none; background: transparent; padding: 0; font-size: 15px; border-radius: 0; }
+.mac-ui .composer-bar #send { border-radius: 999px; padding: 5px 16px; }
+.mac-ui .model-btn { border-radius: 999px; font-family: inherit; }
+.mac-ui .scope-panel { background: var(--m-group); box-shadow: var(--m-shadow); border-radius: 12px; }
+
+/* Documents list and one document */
+.mac-ui .filter-input { border-radius: 8px; border: 0; background: rgba(120, 120, 128, .12); box-shadow: none; padding: 7px 10px; }
+.mac-ui .filter-input:focus { box-shadow: 0 0 0 3.5px var(--m-ring); }
+.mac-ui .kv { font-size: 12.5px; }
+.mac-ui .kv dt { color: var(--m-sub); }
+
+/* Performance: rounded tiles with a coloured status dot instead of the thick edge */
+.mac-ui .perf-kpi, .mac-ui .perf-kpi.ok, .mac-ui .perf-kpi.warn, .mac-ui .perf-kpi.crit { background: var(--m-group); border: 0; border-radius: 14px;
+  box-shadow: var(--m-shadow); position: relative; }
+.mac-ui .perf-kpi.ok::before, .mac-ui .perf-kpi.warn::before, .mac-ui .perf-kpi.crit::before { content: ""; position: absolute; top: 14px; right: 14px;
+  width: 8px; height: 8px; border-radius: 50%; }
+.mac-ui .perf-kpi.ok::before { background: var(--m-green); }
+.mac-ui .perf-kpi.warn::before { background: var(--m-orange); }
+.mac-ui .perf-kpi.crit::before { background: var(--m-red); }
+.mac-ui .perf-kpi-label { font-size: 12px; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--m-sub); }
+.mac-ui .perf-kpi-value { font-weight: 600; letter-spacing: -.02em; font-family: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
+.mac-ui .perf-kpi-sub { color: var(--m-sub); }
+.mac-ui .seg { background: rgba(120, 120, 128, .14); border-radius: 8px; padding: 2px; border: 0; }
+.mac-ui .seg button, .mac-ui .seg a { border: 0; border-radius: 6px; background: none; color: var(--m-text); font-family: inherit; text-transform: none; letter-spacing: 0; }
+.mac-ui .seg .on, .mac-ui .seg [aria-pressed="true"] { background: var(--m-bezel); color: var(--m-text); box-shadow: 0 1px 3px rgba(0, 0, 0, .12), 0 0 0 .5px rgba(0, 0, 0, .04); }
+.mac-ui .seg button + button { border-left: 0; }
+.mac-ui .seg button.on { background: var(--m-bezel); color: var(--m-text); }
+
+/* Map the app's own colour tokens to the Mac ones inside .mac-ui, so module dashboards and older page styles
+   (which use var(--surface), var(--border) and so on) follow the Mac look without their own rules.
+   Status colours (--ok, --warn, --crit) stay as they are, so dashboard health rings keep their meaning. */
+.mac-ui {
+  --bg: var(--m-bg); --surface: var(--m-group); --surface-2: rgba(120, 120, 128, .07);
+  --text: var(--m-text); --subtle: var(--m-sub); --border: var(--m-sep); --track: var(--m-track);
+  --primary: var(--m-accent); --primary-hover: var(--m-accent-hover); --link: var(--m-accent);
+  --info-bg: var(--m-badge-bg); --shadow: var(--m-shadow);
+}
+
+/* ===== Window chrome on every page: the top bar as a Mac toolbar and the side menu as a Mac sidebar =====
+   Not scoped to .mac-ui (the header and sidebar sit outside main), so these apply wherever this file loads:
+   every dashboard page (core base.html) and every Ask page (Ask base.html). */
+:root, [data-theme="light"] {
+  --header-bg: rgba(246, 246, 248, .86); --header-fg: #1d1d1f; --header-accent: #007aff;
+  --nav-bg: #ececf0; --nav-fg: #1d1d1f; --nav-muted: #86868b; --nav-active-bg: rgba(0, 0, 0, .06);
+}
+[data-theme="dark"] {
+  --header-bg: rgba(44, 44, 46, .86); --header-fg: #f5f5f7; --header-accent: #0a84ff;
+  --nav-bg: #252527; --nav-fg: #f5f5f7; --nav-muted: #8e8e93; --nav-active-bg: rgba(255, 255, 255, .07);
+}
+.app-header { border-bottom: .5px solid rgba(0, 0, 0, .14); color: var(--header-fg);
+  -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", system-ui, sans-serif; }
+[data-theme="dark"] .app-header { border-bottom-color: rgba(0, 0, 0, .6); box-shadow: inset 0 -.5px 0 rgba(255, 255, 255, .06); }
+.brand-name { font-size: 15px; font-weight: 400; letter-spacing: -.01em; }
+.brand-name b { font-weight: 700; }
+.brand .logo { color: var(--header-accent); }
+[data-theme="light"] .brand-by, :root:not([data-theme="dark"]) .brand-by { color: #c25e00; }
+.icon-btn { color: var(--header-fg); border-radius: 7px; }
+.header-chip { text-transform: none; letter-spacing: 0; font-weight: 500; }
+
+/* Toolbar control, light window: a grey track with a white raised segment (the dark window keeps the
+   white-on-dark version from app.css, which already matches a dark Mac toolbar). */
+:root:not([data-theme="dark"]) .hdr-toolbar { background: rgba(0, 0, 0, .055); border: .5px solid rgba(0, 0, 0, .08); box-shadow: none; }
+:root:not([data-theme="dark"]) .hdr-sep { background: rgba(0, 0, 0, .14); }
+:root:not([data-theme="dark"]) a.app-switch-item:hover, :root:not([data-theme="dark"]) .hdr-menu-btn:hover,
+:root:not([data-theme="dark"]) .hdr-seg:hover, :root:not([data-theme="dark"]) .hdr-menu[open] .hdr-menu-btn,
+:root:not([data-theme="dark"]) .icon-btn:hover { background: rgba(0, 0, 0, .06); }
+:root:not([data-theme="dark"]) .app-switch-item.active, :root:not([data-theme="dark"]) .hdr-menu-btn.active,
+:root:not([data-theme="dark"]) .hdr-seg.active { background: #fff; box-shadow: 0 .5px 2px rgba(0, 0, 0, .18), 0 0 0 .5px rgba(0, 0, 0, .05); }
+.app-switch-item:focus-visible, .hdr-menu-btn:focus-visible, .hdr-seg:focus-visible { outline: 2px solid var(--header-accent); }
+.hdr-menu-list { border-radius: 10px; padding: 5px; -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, .22), 0 0 0 .5px rgba(0, 0, 0, .12); }
+.hdr-menu-list a:hover, .hdr-menu-list a:focus-visible { background: var(--header-accent); }
+
+/* Sidebar: grey Mac source list, rounded selection in the accent colour, icons in the accent colour */
+.sidenav { background: var(--nav-bg); border-right: .5px solid rgba(0, 0, 0, .1); padding: 8px 0 24px;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", system-ui, sans-serif; }
+[data-theme="dark"] .sidenav { border-right-color: rgba(0, 0, 0, .55); }
+.nav-section { font-size: 11px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--nav-muted); padding: 16px 20px 4px; }
+.nav-section .link-btn, .nav-section-row .link-btn { color: var(--header-accent); }
+.nav-group { padding: 8px 20px 2px; }
+.nav-link { margin: 1px 10px; padding: 6px 10px; border-left: 0; border-radius: 7px; font-size: 13px; color: var(--nav-fg); }
+.nav-link.sub { padding-left: 28px; }
+.nav-link svg { color: var(--header-accent); flex: none; }
+.nav-link:hover { background: var(--nav-active-bg); }
+.nav-link.active, .nav-link.active:hover { background: var(--header-accent); color: #fff; font-weight: 500; border-left: 0; }
+.nav-link.active svg { color: #fff; }
+.nav-link.new-chat { color: var(--header-accent); font-weight: 500; }
+.nav-link.chat-link { padding-top: 5px; padding-bottom: 5px; font-size: 13px; }
+.nav-empty { padding: 4px 30px; }
+@media (max-width: 860px) { .sidenav { box-shadow: 0 0 0 .5px rgba(0, 0, 0, .15), 8px 0 30px rgba(0, 0, 0, .18); } }
+.nav-link.new-chat.active { color: #fff; }

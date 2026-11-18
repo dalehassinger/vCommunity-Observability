@@ -10,6 +10,8 @@
 {% macro pair(old, new, unit='') -%}
   {{ old if old is not none else '–' }}{{ unit }} <span class="subtle">→</span> <b>{{ new if new is not none else '–' }}{{ unit }}</b>
 {%- endmacro %}
+{% block content_class %}mac-ui{% endblock %}
+{% block head %}<link rel="stylesheet" href="/shared/mac-ui.css?v={{ asset_v }}">{% endblock %}
 {% block body %}
 {% set sm = run.summary %}
 <div class="page-head">

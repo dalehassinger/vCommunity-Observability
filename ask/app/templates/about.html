@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block title %}About · vCommunity Ask{% endblock %}
-{% block head %}<link rel="stylesheet" href="/shared/about.css?v={{ asset_v }}">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/shared/about.css?v={{ asset_v }}"><link rel="stylesheet" href="/shared/mac-ui.css?v={{ asset_v }}">{% endblock %}
 {% block body %}
+<div class="mac-ui">
 <div class="card about-hero">
   <div>
     <h1>vCommunity <b>Ask</b> <span class="badge badge-info">v{{ version }}</span></h1>
@@ -30,6 +31,7 @@
   <div class="card about-md" id="about-body"></div>
 </div>
 <script type="application/json" id="about-md">{{ readme | tojson }}</script>
+</div>
 {% endblock %}
 {% block scripts %}
 <script>window.ABOUT = { repo: {{ repo | tojson }}, screenshots: '/about/screenshots/' };</script>

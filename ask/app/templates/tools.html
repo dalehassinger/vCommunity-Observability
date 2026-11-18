@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block title %}MCP tools · vCommunity Ask{% endblock %}
+{% block head %}<link rel="stylesheet" href="/shared/mac-ui.css?v={{ asset_v }}">{% endblock %}
 {% block body %}
+<div class="mac-ui">
 <div class="page-head">
   <div>
     <div class="breadcrumb">Knowledge</div>
@@ -35,6 +37,7 @@
 <div class="form-actions card-actions">
   <button class="btn btn-primary" type="button" id="mcp-save">Save</button>
   <span class="form-msg" id="mcp-msg"></span>
+</div>
 </div>
 {% endblock %}
 {% block scripts %}

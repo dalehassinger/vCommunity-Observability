@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block title %}{{ chat.title if chat else "New chat" }} · vCommunity Ask{% endblock %}
 {% block body_class %}chat-page{% endblock %}
-{% block content_class %}chat-content{% endblock %}
+{% block content_class %}chat-content mac-ui{% endblock %}
+{% block head %}<link rel="stylesheet" href="/shared/mac-ui.css?v={{ asset_v }}">{% endblock %}
 {% block body %}
 <div class="chat-wrap">
   <div class="chat-head">

@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Reports · vCommunity Ask{% endblock %}
+{% block head %}<link rel="stylesheet" href="/shared/mac-ui.css?v={{ asset_v }}">{% endblock %}
 {% block body %}
+<div class="mac-ui">
 <div class="page-head">
   <div>
     <div class="breadcrumb">Knowledge</div>
@@ -44,6 +46,7 @@
   {% else %}
   <div class="card-block subtle">No reports yet. Pick a spreadsheet source in the chat and ask for an HTML report or a dashboard report.</div>
   {% endif %}
+</div>
 </div>
 {% endblock %}
 {% block scripts %}

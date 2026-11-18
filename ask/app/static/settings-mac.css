@@ -1,0 +1,187 @@
+/* Settings page, macOS System Settings look (UI only: no ids, names or behaviour change here).
+   Everything is scoped to .mac-settings, so the other Ask pages keep the VCF Operations look.
+   System fonts only (San Francisco on a Mac), nothing is downloaded: works at dark sites. */
+
+.mac-settings {
+  --m-bg: #f2f2f7;          /* window background            */
+  --m-group: #ffffff;       /* grouped (inset) list          */
+  --m-sep: rgba(60, 60, 67, .16);
+  --m-text: #1d1d1f;
+  --m-sub: #6e6e73;
+  --m-accent: #007aff;      /* system blue                   */
+  --m-accent-hover: #0068d9;
+  --m-green: #34c759;
+  --m-field: #ffffff;
+  --m-field-border: rgba(60, 60, 67, .22);
+  --m-ring: rgba(0, 122, 255, .35);
+  --m-bezel: #ffffff;
+  --m-bezel-border: rgba(60, 60, 67, .2);
+  --m-shadow: 0 0 0 .5px rgba(0, 0, 0, .05), 0 1px 2px rgba(0, 0, 0, .06);
+  --m-track: #e3e3e8;
+  --m-badge-bg: rgba(0, 122, 255, .12);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
+  color: var(--m-text);
+  max-width: 880px;
+  margin: 0 auto;
+  padding-bottom: 8px;
+  -webkit-font-smoothing: antialiased;
+}
+[data-theme="dark"] .mac-settings {
+  --m-bg: #1e1e1e;
+  --m-group: #2c2c2e;
+  --m-sep: rgba(255, 255, 255, .09);
+  --m-text: #f5f5f7;
+  --m-sub: #98989d;
+  --m-accent: #0a84ff;
+  --m-accent-hover: #409cff;
+  --m-green: #30d158;
+  --m-field: #1c1c1e;
+  --m-field-border: rgba(255, 255, 255, .14);
+  --m-ring: rgba(10, 132, 255, .45);
+  --m-bezel: #3a3a3c;
+  --m-bezel-border: rgba(255, 255, 255, .1);
+  --m-shadow: 0 0 0 .5px rgba(255, 255, 255, .06);
+  --m-track: #48484a;
+  --m-badge-bg: rgba(10, 132, 255, .2);
+}
+/* The window background behind the page (only on this page). */
+main.content:has(> .mac-settings) { background: #f2f2f7; }
+[data-theme="dark"] main.content:has(> .mac-settings) { background: #1e1e1e; }
+
+/* Large title */
+.mac-settings .page-head { margin-bottom: 18px; }
+.mac-settings .page-head h1 { font-size: 28px; font-weight: 700; letter-spacing: -.02em; margin: 2px 0 6px; color: var(--m-text); }
+.mac-settings .breadcrumb { font-size: 13px; color: var(--m-sub); text-transform: none; letter-spacing: 0; }
+.mac-settings .subtle, .mac-settings .hint { color: var(--m-sub); }
+.mac-settings code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .92em; background: rgba(120, 120, 128, .12);
+  padding: 1px 5px; border-radius: 5px; }
+
+/* One column of grouped lists, like System Settings */
+.mac-settings .form-grid { display: block; margin: 0; }
+.mac-settings .card { background: none; border: 0; box-shadow: none; border-radius: 0; margin: 0 0 26px !important; }
+.mac-settings .card-header { border: 0; padding: 0 4px 7px; font-size: 13px; font-weight: 600; color: var(--m-text);
+  display: flex; align-items: center; gap: 6px; }
+.mac-settings .card-block { background: var(--m-group); border-radius: 12px; box-shadow: var(--m-shadow); padding: 4px 16px; overflow: hidden; }
+.mac-settings .card-block > p.subtle:first-child { margin: 12px 0; }
+.mac-settings .card-block > .hint { margin: 0 -16px; padding: 10px 16px; border-top: .5px solid var(--m-sep); font-size: 12px; line-height: 1.45; }
+
+/* Rows: label on the left, control on the right, hairline between rows */
+.mac-settings .field { grid-template-columns: 210px minmax(0, 1fr); gap: 16px; margin: 0 -16px; padding: 11px 16px;
+  border-top: .5px solid var(--m-sep); align-items: start; }
+.mac-settings .card-block > .field:first-child,
+.mac-settings .card-block > .ollama-status + .field { border-top: 0; }
+.mac-settings .field > label { font-size: 13px; font-weight: 400; color: var(--m-text); padding-top: 5px; }
+.mac-settings .field > label:empty { padding: 0; }
+.mac-settings .field .hint { font-size: 12px; line-height: 1.45; margin-top: 5px; }
+
+/* Text fields, number fields, text areas */
+.mac-settings input[type=text], .mac-settings input[type=password], .mac-settings input[type=number],
+.mac-settings textarea, .mac-settings select {
+  font-family: inherit; font-size: 13px; color: var(--m-text); background: var(--m-field);
+  border: .5px solid var(--m-field-border); border-radius: 7px; padding: 6px 9px; box-shadow: inset 0 .5px 1px rgba(0, 0, 0, .05);
+  transition: box-shadow .15s ease, border-color .15s ease;
+}
+.mac-settings .field input[type=number] { width: 140px; max-width: 100%; }
+.mac-settings textarea { border-radius: 9px; padding: 9px 11px; line-height: 1.5; }
+.mac-settings .field textarea, .mac-settings textarea.prompt { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+.mac-settings input:focus, .mac-settings textarea:focus, .mac-settings select:focus,
+.mac-settings .field input:focus, .mac-settings .field textarea:focus, .mac-settings .field select:focus {
+  outline: none; border-color: var(--m-accent); box-shadow: 0 0 0 3.5px var(--m-ring);
+}
+.mac-settings input::placeholder, .mac-settings textarea::placeholder { color: var(--m-sub); opacity: .75; }
+
+/* Pop-up buttons (selects) with the Mac double chevron */
+.mac-settings select {
+  -webkit-appearance: none; appearance: none; cursor: pointer; padding-right: 30px;
+  background-color: var(--m-bezel); border-color: var(--m-bezel-border); box-shadow: 0 .5px 1.5px rgba(0, 0, 0, .12);
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='12' viewBox='0 0 8 12'%3E%3Cpath d='M1 4.5 4 1.5l3 3M1 7.5l3 3 3-3' fill='none' stroke='%23fff' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"),
+    linear-gradient(var(--m-accent), var(--m-accent));
+  background-repeat: no-repeat; background-size: 8px 12px, 18px 18px; background-position: right 9px center, right 4px center;
+}
+
+/* Switches: the macOS toggle */
+.mac-settings .switch { gap: 9px; font-size: 13px; color: var(--m-text); }
+.mac-settings .switch span { width: 38px; height: 22px; background: var(--m-track); border: 0;
+  box-shadow: inset 0 0 0 .5px rgba(0, 0, 0, .06); transition: background-color .2s ease; }
+.mac-settings .switch span::after { top: 2px; left: 2px; width: 18px; height: 18px; background: #fff;
+  box-shadow: 0 1px 2.5px rgba(0, 0, 0, .25), 0 0 0 .5px rgba(0, 0, 0, .04); transition: left .2s cubic-bezier(.3, .7, .4, 1); }
+.mac-settings .switch input:checked + span, .mac-settings .switch.on span { background: var(--m-accent); border-color: var(--m-accent); }
+.mac-settings .switch input:checked + span::after, .mac-settings .switch.on span::after { left: 18px; }
+.mac-settings .switch.on { color: var(--m-text); }
+.mac-settings .switch input:focus-visible + span { outline: none; box-shadow: 0 0 0 3.5px var(--m-ring); }
+@media (prefers-reduced-motion: reduce) {
+  .mac-settings .switch span, .mac-settings .switch span::after { transition: none; }
+}
+
+/* Buttons: push buttons, no capitals */
+.mac-settings .btn { text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 500; border-radius: 7px;
+  padding: 5px 14px; min-height: 28px; transition: background-color .15s ease, filter .15s ease; }
+.mac-settings .btn-primary { background: var(--m-accent); border: 0; color: #fff;
+  box-shadow: 0 .5px 1.5px rgba(0, 0, 0, .2), inset 0 .5px 0 rgba(255, 255, 255, .25); }
+.mac-settings .btn-primary:hover { background: var(--m-accent-hover); }
+[data-theme="dark"] .mac-settings .btn-primary { color: #fff; }
+.mac-settings .btn-outline, .mac-settings .btn-secondary, .mac-settings .btn:not(.btn-primary):not(.btn-danger) {
+  background: var(--m-bezel); color: var(--m-text); border: .5px solid var(--m-bezel-border); box-shadow: 0 .5px 1.5px rgba(0, 0, 0, .12); }
+.mac-settings .btn-outline:hover, .mac-settings .btn:not(.btn-primary):not(.btn-danger):hover { filter: brightness(.96); }
+[data-theme="dark"] .mac-settings .btn:not(.btn-primary):not(.btn-danger):hover { filter: brightness(1.15); }
+.mac-settings .btn:disabled { opacity: .45; }
+.mac-settings .btn:focus-visible { outline: none; box-shadow: 0 0 0 3.5px var(--m-ring); }
+.mac-settings a, .mac-settings .link-btn { color: var(--m-accent); }
+
+/* "saved" badge: a small capsule */
+.mac-settings .override { text-transform: none; letter-spacing: 0; font-size: 11px; font-weight: 500; border-radius: 999px;
+  padding: 1px 8px; background: var(--m-badge-bg); color: var(--m-accent); }
+
+/* Status row (Ollama) */
+.mac-settings .ollama-status { background: none; border: 0; border-radius: 0; margin: 0 -16px; padding: 12px 16px;
+  border-bottom: .5px solid var(--m-sep); font-size: 13px; }
+
+/* Apps on / off */
+.mac-settings .app-switches { gap: 0; }
+.mac-settings .app-switch { margin: 0 -16px; padding: 12px 16px; border-top: .5px solid var(--m-sep); flex-direction: row-reverse;
+  justify-content: space-between; gap: 18px; }
+.mac-settings .app-switch:first-child { border-top: 0; }
+.mac-settings .app-switch > .switch { flex: none; }
+.mac-settings .app-switch > label:not(.switch) { flex: 1; min-width: 0; }
+.mac-settings .app-switch b { font-weight: 500; font-size: 13px; margin-bottom: 2px; }
+.mac-settings .app-switch .subtle { font-size: 12px; }
+.mac-settings .card-block > .alert { margin: 12px 0; border-radius: 9px; }
+
+/* Answer quality test */
+.mac-settings .eval-form { padding: 12px 0; margin: 0; border-top: .5px solid var(--m-sep); }
+.mac-settings .eval-form > label:not(.switch) { font-size: 13px; color: var(--m-text); }
+.mac-settings .eval-table-wrap { margin: 0 -16px; border-top: .5px solid var(--m-sep); }
+.mac-settings .datagrid { font-size: 12px; }
+.mac-settings .datagrid th { background: none; color: var(--m-sub); font-weight: 500; text-transform: none; letter-spacing: 0;
+  border-bottom: .5px solid var(--m-sep); }
+.mac-settings .datagrid td { border-bottom: .5px solid var(--m-sep); }
+.mac-settings .datagrid tbody tr:nth-child(even) td { background: rgba(120, 120, 128, .05); }
+.mac-settings .datagrid tbody tr:last-child td { border-bottom: 0; }
+.mac-settings .badge { border-radius: 999px; text-transform: none; letter-spacing: 0; font-weight: 500; }
+
+/* API token bar */
+.mac-settings .token-bar { background: var(--m-group); border: 0; border-radius: 12px; box-shadow: var(--m-shadow); padding: 11px 16px; margin-bottom: 26px; }
+.mac-settings .token-bar label { font-weight: 400; color: var(--m-text); }
+
+/* Save bar: stays at the bottom of the window, translucent like a Mac toolbar */
+.mac-settings .form-actions.card-actions {
+  position: sticky; bottom: 0; z-index: 5; margin: 0 -12px; padding: 12px; justify-content: flex-end;
+  background: color-mix(in srgb, var(--m-bg) 78%, transparent);
+  -webkit-backdrop-filter: saturate(180%) blur(18px); backdrop-filter: saturate(180%) blur(18px);
+  border-top: .5px solid var(--m-sep); border-radius: 0 0 12px 12px;
+}
+.mac-settings .form-actions .form-msg { order: -1; margin-right: auto; }
+.mac-settings .form-actions .btn-primary { padding: 6px 20px; }
+.mac-settings > p.subtle:last-child { font-size: 12px; text-align: center; margin-top: 14px; }
+
+/* Narrow windows and phones: label above its control */
+@media (max-width: 640px) {
+  .mac-settings .field { grid-template-columns: 1fr; gap: 6px; }
+  .mac-settings .field > label { padding-top: 0; font-weight: 500; }
+  .mac-settings .field > label:empty { display: none; }
+  .mac-settings .page-head h1 { font-size: 24px; }
+  .mac-settings .app-switch { flex-direction: row-reverse; }
+  .mac-settings .token-bar { flex-wrap: wrap; }
+  .mac-settings .form-actions.card-actions { justify-content: flex-start; }
+}

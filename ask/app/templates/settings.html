@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Settings · vCommunity Ask{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/settings-mac.css?v={{ asset_v }}">{% endblock %}
 {% block body %}
+<div class="mac-settings">
 <div class="page-head">
   <div>
     <div class="breadcrumb">Administration</div>
@@ -107,7 +109,8 @@
         ('context_chars', 'Context budget (chars)', 'Upper limit for all sources together. About 4 characters per token.'),
         ('num_ctx', 'Model context (tokens)', 'Ollama num_ctx. Must hold the sources, the chat history and the answer.'),
         ('temperature', 'Temperature', 'Low (0.1-0.3) keeps answers close to the sources.'),
-        ('history_turns', 'Chat history (turns)', 'Earlier questions and answers sent along for follow-up questions. 0 = none.')] %}
+        ('history_turns', 'Chat history (turns)', 'Earlier questions and answers sent along for follow-up questions. 0 = none.'),
+        ('recent_chats', 'Recent chats shown', 'How many chats the sidebar lists under Recent chats, newest first (1 to 200, default 10). Older chats are kept, just not listed.')] %}
       <div class="field"><label for="s-{{ key }}">{{ label }}{% if key in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><input type="number" id="s-{{ key }}" data-key="{{ key }}" value="{{ settings[key] }}" step="{{ '0.05' if key == 'temperature' else '1' }}"><div class="hint">{{ hint }}</div></div></div>
       {% endfor %}
@@ -199,6 +202,20 @@
     </div>
   </div>
 
+  <div class="card span-all" id="examples">
+    <div class="card-header">Example questions on New chat{% if 'chat_examples' in overridden or 'chat_examples_count' in overridden %}<span class="override">saved</span>{% endif %}</div>
+    <div class="card-block">
+      <div class="field"><label for="s-chat_examples_count">How many show</label>
+        <div><input type="number" id="s-chat_examples_count" data-key="chat_examples_count" value="{{ settings.chat_examples_count }}" min="0" max="24" step="1" style="width:100px">
+          <div class="hint">Boxes on an empty New chat (two per row). 0 hides them. Default 6.</div></div></div>
+      <div class="field"><label for="s-chat_examples">Questions</label>
+        <div><textarea class="prompt examples-list" id="s-chat_examples" data-key="chat_examples" rows="8" placeholder="One question per line. Empty uses the example questions of your knowledge sources.">{{ settings.chat_examples }}</textarea>
+          <div class="hint">One question per line, shown in this order (at most 50, up to 300 characters each). Clicking a box asks it with the sources picked under the chat box.
+            Empty uses the example questions set on each enabled knowledge source{% if source_examples %} ({{ source_examples | length }} now){% endif %}.
+            {% if source_examples %}<button class="link-btn" type="button" id="examples-from-sources">Start from the sources' questions</button>{% endif %}</div></div></div>
+    </div>
+  </div>
+
   <div class="card span-all">
     <div class="card-header">System prompt{% if 'system_prompt' in overridden %}<span class="override">saved</span>{% endif %}</div>
     <div class="card-block">
@@ -223,6 +240,7 @@
   <span class="form-msg" id="save-msg"></span>
 </div>
 <p class="subtle">Config file: <code>{{ config_path }}</code></p>
+</div>
 {% endblock %}
 {% block scripts %}
 <script src="/static/admin.js?v={{ asset_v }}"></script>
@@ -325,6 +343,13 @@
     } catch (e) { st.textContent = e.message; st.style.color = 'var(--crit)'; }
   };
   document.getElementById('reset-prompt').onclick = function () { document.getElementById('s-system_prompt').value = DEFAULT_PROMPT; };
+  var exBtn = document.getElementById('examples-from-sources');
+  if (exBtn) exBtn.onclick = function () {
+    var box = document.getElementById('s-chat_examples');
+    if (box.value.trim() && !box.value.endsWith('\n')) box.value += '\n';
+    box.value += {{ source_examples | join('\n') | tojson }};
+    box.focus();
+  };
   document.getElementById('reset-plain-prompt').onclick = function () { document.getElementById('s-plain_system_prompt').value = {{ defaults.plain_system_prompt | tojson }}; };
   document.getElementById('save').onclick = async function () {
     var values = {};

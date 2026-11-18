@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Scheduled prompts · vCommunity Ask{% endblock %}
+{% block head %}<link rel="stylesheet" href="/shared/mac-ui.css?v={{ asset_v }}">{% endblock %}
 {% block body %}
+<div class="mac-ui">
 <div class="page-head">
   <div>
     <div class="breadcrumb">Knowledge</div>
@@ -143,6 +145,7 @@
   <div class="card-block"><p class="subtle">No scheduled prompts yet. <a href="/schedules?new=1">Create the first one</a>, for example a weekly summary of new blog posts
     sent every Monday at 07:00.</p></div>
   {% endif %}
+</div>
 </div>
 {% endblock %}
 {% block scripts %}

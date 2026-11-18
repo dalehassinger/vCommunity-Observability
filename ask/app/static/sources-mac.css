@@ -1,0 +1,204 @@
+/* Knowledge sources page, macOS look (UI only: no ids, names or behaviour change here).
+   Same tokens and controls as settings-mac.css, scoped to .mac-sources so other pages keep their look.
+   System fonts only, nothing is downloaded: works at dark sites. */
+
+.mac-sources {
+  --m-bg: #f2f2f7;          /* window background            */
+  --m-group: #ffffff;       /* grouped (inset) list          */
+  --m-sep: rgba(60, 60, 67, .16);
+  --m-text: #1d1d1f;
+  --m-sub: #6e6e73;
+  --m-accent: #007aff;      /* system blue                   */
+  --m-accent-hover: #0068d9;
+  --m-green: #34c759;
+  --m-field: #ffffff;
+  --m-field-border: rgba(60, 60, 67, .22);
+  --m-ring: rgba(0, 122, 255, .35);
+  --m-bezel: #ffffff;
+  --m-bezel-border: rgba(60, 60, 67, .2);
+  --m-shadow: 0 0 0 .5px rgba(0, 0, 0, .05), 0 1px 2px rgba(0, 0, 0, .06);
+  --m-track: #e3e3e8;
+  --m-badge-bg: rgba(0, 122, 255, .12);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
+  color: var(--m-text);
+  -webkit-font-smoothing: antialiased;
+}
+[data-theme="dark"] .mac-sources {
+  --m-bg: #1e1e1e;
+  --m-group: #2c2c2e;
+  --m-sep: rgba(255, 255, 255, .09);
+  --m-text: #f5f5f7;
+  --m-sub: #98989d;
+  --m-accent: #0a84ff;
+  --m-accent-hover: #409cff;
+  --m-green: #30d158;
+  --m-field: #1c1c1e;
+  --m-field-border: rgba(255, 255, 255, .14);
+  --m-ring: rgba(10, 132, 255, .45);
+  --m-bezel: #3a3a3c;
+  --m-bezel-border: rgba(255, 255, 255, .1);
+  --m-shadow: 0 0 0 .5px rgba(255, 255, 255, .06);
+  --m-track: #48484a;
+  --m-badge-bg: rgba(10, 132, 255, .2);
+}
+
+/* Text fields, number fields, text areas */
+.mac-sources input[type=text], .mac-sources input[type=password], .mac-sources input[type=number],
+.mac-sources textarea, .mac-sources select {
+  font-family: inherit; font-size: 13px; color: var(--m-text); background: var(--m-field);
+  border: .5px solid var(--m-field-border); border-radius: 7px; padding: 6px 9px; box-shadow: inset 0 .5px 1px rgba(0, 0, 0, .05);
+  transition: box-shadow .15s ease, border-color .15s ease;
+}
+.mac-sources .field input[type=number] { width: 140px; max-width: 100%; }
+.mac-sources textarea { border-radius: 9px; padding: 9px 11px; line-height: 1.5; }
+.mac-sources .field textarea, .mac-sources textarea.prompt { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+.mac-sources input:focus, .mac-sources textarea:focus, .mac-sources select:focus,
+.mac-sources .field input:focus, .mac-sources .field textarea:focus, .mac-sources .field select:focus {
+  outline: none; border-color: var(--m-accent); box-shadow: 0 0 0 3.5px var(--m-ring);
+}
+.mac-sources input::placeholder, .mac-sources textarea::placeholder { color: var(--m-sub); opacity: .75; }
+
+/* Pop-up buttons (selects) with the Mac double chevron */
+.mac-sources select {
+  -webkit-appearance: none; appearance: none; cursor: pointer; padding-right: 30px;
+  background-color: var(--m-bezel); border-color: var(--m-bezel-border); box-shadow: 0 .5px 1.5px rgba(0, 0, 0, .12);
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='12' viewBox='0 0 8 12'%3E%3Cpath d='M1 4.5 4 1.5l3 3M1 7.5l3 3 3-3' fill='none' stroke='%23fff' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"),
+    linear-gradient(var(--m-accent), var(--m-accent));
+  background-repeat: no-repeat; background-size: 8px 12px, 18px 18px; background-position: right 9px center, right 4px center;
+}
+
+/* Switches: the macOS toggle */
+.mac-sources .switch { gap: 9px; font-size: 13px; color: var(--m-text); }
+.mac-sources .switch span { width: 38px; height: 22px; background: var(--m-track); border: 0;
+  box-shadow: inset 0 0 0 .5px rgba(0, 0, 0, .06); transition: background-color .2s ease; }
+.mac-sources .switch span::after { top: 2px; left: 2px; width: 18px; height: 18px; background: #fff;
+  box-shadow: 0 1px 2.5px rgba(0, 0, 0, .25), 0 0 0 .5px rgba(0, 0, 0, .04); transition: left .2s cubic-bezier(.3, .7, .4, 1); }
+.mac-sources .switch input:checked + span, .mac-sources .switch.on span { background: var(--m-accent); border-color: var(--m-accent); }
+.mac-sources .switch input:checked + span::after, .mac-sources .switch.on span::after { left: 18px; }
+.mac-sources .switch.on { color: var(--m-text); }
+.mac-sources .switch input:focus-visible + span { outline: none; box-shadow: 0 0 0 3.5px var(--m-ring); }
+@media (prefers-reduced-motion: reduce) {
+  .mac-sources .switch span, .mac-sources .switch span::after { transition: none; }
+}
+
+/* Buttons: push buttons, no capitals */
+.mac-sources .btn { text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 500; border-radius: 7px;
+  padding: 5px 14px; min-height: 28px; transition: background-color .15s ease, filter .15s ease; }
+.mac-sources .btn-primary { background: var(--m-accent); border: 0; color: #fff;
+  box-shadow: 0 .5px 1.5px rgba(0, 0, 0, .2), inset 0 .5px 0 rgba(255, 255, 255, .25); }
+.mac-sources .btn-primary:hover { background: var(--m-accent-hover); }
+[data-theme="dark"] .mac-sources .btn-primary { color: #fff; }
+.mac-sources .btn-outline, .mac-sources .btn-secondary, .mac-sources .btn:not(.btn-primary):not(.btn-danger) {
+  background: var(--m-bezel); color: var(--m-text); border: .5px solid var(--m-bezel-border); box-shadow: 0 .5px 1.5px rgba(0, 0, 0, .12); }
+.mac-sources .btn-outline:hover, .mac-sources .btn:not(.btn-primary):not(.btn-danger):hover { filter: brightness(.96); }
+[data-theme="dark"] .mac-sources .btn:not(.btn-primary):not(.btn-danger):hover { filter: brightness(1.15); }
+.mac-sources .btn:disabled { opacity: .45; }
+.mac-sources .btn:focus-visible { outline: none; box-shadow: 0 0 0 3.5px var(--m-ring); }
+.mac-sources a, .mac-sources .link-btn { color: var(--m-accent); }
+
+
+/* API token bar */
+.mac-sources .token-bar { background: var(--m-group); border: 0; border-radius: 12px; box-shadow: var(--m-shadow); padding: 11px 16px; margin-bottom: 26px; }
+.mac-sources .token-bar label { font-weight: 400; color: var(--m-text); }
+
+
+main.content:has(> .mac-sources) { background: #f2f2f7; }
+[data-theme="dark"] main.content:has(> .mac-sources) { background: #1e1e1e; }
+.mac-sources { --m-orange: #ff9500; --m-red: #ff3b30; }
+[data-theme="dark"] .mac-sources { --m-orange: #ff9f0a; --m-red: #ff453a; }
+
+/* Large title */
+.mac-sources .page-head { margin-bottom: 18px; display: flex; flex-wrap: nowrap; justify-content: space-between; align-items: flex-end; gap: 24px; }
+.mac-sources .page-head .page-actions { flex: none; padding-bottom: 6px; }
+.mac-sources .page-head h1 { font-size: 28px; font-weight: 700; letter-spacing: -.02em; margin: 2px 0 6px; color: var(--m-text); }
+.mac-sources .breadcrumb { font-size: 13px; color: var(--m-sub); text-transform: none; letter-spacing: 0; }
+.mac-sources .subtle, .mac-sources .hint { color: var(--m-sub); }
+.mac-sources code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .92em; background: rgba(120, 120, 128, .12);
+  padding: 1px 5px; border-radius: 5px; }
+.mac-sources h3 { text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 600; margin: 30px 4px 7px; color: var(--m-text); }
+
+/* Source tiles: rounded, soft shadow, no coloured edge (the ring shows the status) */
+.mac-sources .source-grid { grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 18px; }
+.mac-sources .card { background: var(--m-group); border: 0; border-radius: 14px; box-shadow: var(--m-shadow); overflow: hidden; }
+.mac-sources .source-card, .mac-sources .source-card.ok, .mac-sources .source-card.running,
+.mac-sources .source-card.warn, .mac-sources .source-card.crit { border-left: 0; }
+.mac-sources .source-card { display: flex; flex-direction: column; transition: box-shadow .2s ease; }
+.mac-sources .source-card:hover { box-shadow: var(--m-shadow), 0 6px 18px rgba(0, 0, 0, .07); }
+.mac-sources .source-card .card-header { border-bottom: .5px solid var(--m-sep); padding: 13px 16px; font-size: 15px; font-weight: 600;
+  letter-spacing: -.01em; align-items: flex-start; }
+.mac-sources .source-card .card-header > span:first-child { line-height: 1.5; }
+.mac-sources .source-card .card-block { padding: 14px 16px 16px; display: flex; flex-direction: column; flex: 1; }
+.mac-sources .badge { text-transform: none; letter-spacing: 0; font-weight: 500; font-size: 11px; background: rgba(120, 120, 128, .14);
+  color: var(--m-sub); padding: 1px 8px; margin-left: 4px; vertical-align: 2px; }
+.mac-sources .badge-info { background: var(--m-badge-bg); color: var(--m-accent); }
+.mac-sources .switch.on span { background: var(--m-green); border-color: var(--m-green); }
+.mac-sources .switch { font-weight: 400; color: var(--m-sub); flex: none; }
+
+/* Status ring + big numbers, like an Activity ring */
+.mac-sources .source-kpis { gap: 22px; align-items: center; margin-bottom: 14px; }
+.mac-sources .ring { width: 58px; height: 58px; }
+.mac-sources .ring svg { width: 58px; height: 58px; }
+.mac-sources .ring circle { stroke-width: 7; }
+.mac-sources .ring .track { stroke: rgba(120, 120, 128, .16); }
+.mac-sources .ok .ring .fill { stroke: var(--m-green); }
+.mac-sources .running .ring .fill { stroke: var(--m-accent); }
+.mac-sources .warn .ring .fill { stroke: var(--m-orange); }
+.mac-sources .crit .ring .fill { stroke: var(--m-red); }
+.mac-sources .ring b { font-size: 11px; font-weight: 600; text-transform: none; color: var(--m-text); }
+.mac-sources .kpi-mini .v { font-size: 28px; font-weight: 600; letter-spacing: -.02em; color: var(--m-text);
+  font-family: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
+.mac-sources .kpi-mini .l { font-size: 12px; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--m-sub); }
+
+/* Details: an inset list with hairline rows */
+.mac-sources .kv { grid-template-columns: 96px minmax(0, 1fr); gap: 0; font-size: 12.5px; background: rgba(120, 120, 128, .06);
+  border-radius: 10px; padding: 2px 12px; }
+.mac-sources .kv dt, .mac-sources .kv dd { padding: 6px 0; border-top: .5px solid var(--m-sep); }
+.mac-sources .kv dt:first-of-type, .mac-sources .kv dd:first-of-type { border-top: 0; }
+.mac-sources .kv dt { color: var(--m-sub); }
+.mac-sources .kv dd { color: var(--m-text); }
+.mac-sources .kv dd code { background: none; padding: 0; font-size: 12px; }
+.mac-sources .err-box { border-radius: 10px; }
+
+/* Buttons: compact push buttons, Delete in red */
+.mac-sources .source-card .card-actions { margin-top: auto; padding-top: 14px; gap: 6px; }
+.mac-sources .source-card .card-actions .btn { font-size: 12px; padding: 4px 11px; min-height: 26px; }
+.mac-sources .btn.btn-outline[data-delete] { color: var(--m-red); }
+.mac-sources .card-block > .hint { margin-top: 10px; font-size: 12px; }
+
+/* Upload box */
+.mac-sources .upload-box { border: 1.5px dashed var(--m-field-border); border-radius: 10px; background: rgba(120, 120, 128, .04); }
+.mac-sources .upload-box.drag { border-color: var(--m-accent); background: var(--m-badge-bg); }
+
+/* Plug-ins table as a grouped list */
+.mac-sources .datagrid { font-size: 12.5px; }
+.mac-sources .datagrid th { background: none; color: var(--m-sub); font-weight: 500; text-transform: none; letter-spacing: 0;
+  border-bottom: .5px solid var(--m-sep); }
+.mac-sources .datagrid td { border-bottom: .5px solid var(--m-sep); }
+.mac-sources .datagrid tbody tr:last-child td { border-bottom: 0; }
+.mac-sources .card:not(.source-card) > .card-block { overflow-x: auto; }
+
+/* Add / Edit source: a Mac sheet */
+.mac-sources .editor-dialog { border: .5px solid var(--m-sep); border-radius: 14px; background: var(--m-group); color: var(--m-text);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, .3), 0 0 0 .5px rgba(0, 0, 0, .1); }
+.mac-sources .editor-dialog::backdrop { background: rgba(0, 0, 0, .28); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); }
+.mac-sources .editor-dialog form { padding: 20px 22px; }
+.mac-sources .editor-dialog h3 { text-transform: none; letter-spacing: -.01em; font-size: 17px; font-weight: 700; margin: 0 0 14px; text-align: center; }
+.mac-sources .editor-dialog .field { grid-template-columns: 150px minmax(0, 1fr); gap: 14px; margin: 0; padding: 9px 0;
+  border-top: .5px solid var(--m-sep); }
+.mac-sources .editor-dialog .field > label { font-size: 13px; font-weight: 400; color: var(--m-text); padding-top: 5px; text-align: right; }
+.mac-sources .editor-dialog .form-actions { justify-content: flex-end; border-top: .5px solid var(--m-sep); padding-top: 14px; margin-top: 4px; }
+.mac-sources .editor-dialog .form-actions .form-msg { order: -1; margin-right: auto; }
+.mac-sources .editor-dialog #editor-cancel { order: 0; }
+.mac-sources .editor-dialog #editor-save { order: 1; }
+.mac-sources .sched-when select, .mac-sources .sched-when input { border-radius: 7px; }
+
+@media (max-width: 640px) {
+  .mac-sources .source-grid { grid-template-columns: 1fr; }
+  .mac-sources .page-head h1 { font-size: 24px; }
+  .mac-sources .page-head { flex-wrap: wrap; align-items: flex-start; }
+  .mac-sources .datagrid { min-width: 640px; }
+  .mac-sources .editor-dialog .field { grid-template-columns: 1fr; gap: 6px; }
+  .mac-sources .editor-dialog .field > label { text-align: left; padding-top: 0; }
+  .mac-sources .token-bar { flex-wrap: wrap; }
+}

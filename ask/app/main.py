@@ -256,11 +256,19 @@ def create_app() -> FastAPI:
         if not token_ok(supplied_token(request, api_key)):
             raise HTTPException(status_code=401, detail="Enter the API token (ASK_API_TOKEN in .env) to change this.")
 
+    def source_examples() -> list[str]:
+        return [e for s in db.list_sources() if s["enabled"] for e in s["examples"]]
+
+    def example_questions(s: dict[str, Any]) -> list[str]:
+        """New chat's example boxes: Settings -> Example questions, else the sources' examples."""
+        own = [line.strip() for line in str(s.get("chat_examples") or "").splitlines() if line.strip()]
+        return own or source_examples()
+
     # -- page helpers ---------------------------------------------------------
     def page(request: Request, name: str, active: str, **ctx: Any) -> HTMLResponse:
         s = settings()
         return templates.TemplateResponse(request, name, {
-            "active": active, "chats": db.list_chats(20), "sources": db.list_sources(),
+            "active": active, "chats": db.list_chats(max(1, min(200, int(s.get("recent_chats") or 10)))), "sources": db.list_sources(),
             "observability_url": follow_host(s["observability_url"], request.url.hostname) if control.is_on("observability") else "",
             "ask_paused": not control.is_on("ask"), "version": __version__,
             "auth": bool(cfg.api_tokens), "settings": s, **ctx})
@@ -317,7 +325,8 @@ def create_app() -> FastAPI:
 
     @app.get("/chat", response_class=HTMLResponse, include_in_schema=False)
     def chat_new(request: Request):
-        examples = [e for s in db.list_sources() if s["enabled"] for e in s["examples"]][:6]
+        s = settings()
+        examples = example_questions(s)[:max(0, min(24, int(s.get("chat_examples_count", 6) or 0)))]
         return page(request, "chat.html", "/chat", chat=None, messages=[], examples=examples, stats=db.stats(),
                     mcp_servers=mcp.quick_servers(settings()["agent_url"]), web_search=websearch.status(settings()),
                     brave_search=websearch.brave_status(settings()), local_fetch=websearch.local_status(settings()))
@@ -551,7 +560,8 @@ def create_app() -> FastAPI:
                     defaults=cfg.defaults, config_path=str(cfg.path), web_key_set=bool(websearch.api_key()), brave_key_set=bool(websearch.brave_key()),
                     apps=control.status(), activity=syslog_out.status(settings()),
                     eval_runs=evaluator.runs(5), eval_running=evaluator.running,
-                    eval_available=len(evaluator.candidates(MAX_PROMPTS)), eval_max=MAX_PROMPTS)
+                    eval_available=len(evaluator.candidates(MAX_PROMPTS)), eval_max=MAX_PROMPTS,
+                    source_examples=source_examples())
 
     # -- answer quality test ----------------------------------------------------
     @app.get("/eval/{rid}", response_class=HTMLResponse, include_in_schema=False)
@@ -752,6 +762,18 @@ def create_app() -> FastAPI:
                 continue
             if key == "web_budget" and not (0 <= v <= 100000):
                 errors[key] = "use 0 (no budget) to 100000"
+                continue
+            if key == "chat_examples_count" and not (0 <= v <= 24):
+                errors[key] = "use 0 (hide them) to 24"
+                continue
+            if key == "chat_examples":
+                lines = [line.strip() for line in v.splitlines() if line.strip()]
+                if len(lines) > 50 or any(len(line) > 300 for line in lines):
+                    errors[key] = "at most 50 questions of up to 300 characters"
+                    continue
+                v = "\n".join(lines)
+            if key == "recent_chats" and not (1 <= v <= 200):
+                errors[key] = "use 1 to 200"
                 continue
             if key in ("top_k", "history_turns", "source_min_chunks") and not (0 <= v <= 50):
                 errors[key] = "use 0 to 50"
