@@ -372,3 +372,12 @@ main.content:has(> .mac-ui), main.content.mac-ui { background: #f2f2f7; }
 .nav-empty { padding: 4px 30px; }
 @media (max-width: 860px) { .sidenav { box-shadow: 0 0 0 .5px rgba(0, 0, 0, .15), 8px 0 30px rgba(0, 0, 0, .18); } }
 .nav-link.new-chat.active { color: #fff; }
+
+/* Logs drop-down in the toolbar: a Mac menu (translucent grey, white in light mode, blue highlight) */
+.hdr-menu-list { background: rgba(246, 246, 248, .94); border: .5px solid rgba(0, 0, 0, .12); color: #1d1d1f;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", system-ui, sans-serif; }
+[data-theme="dark"] .hdr-menu-list { background: rgba(44, 44, 46, .94); border-color: rgba(255, 255, 255, .12);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, .5), 0 0 0 .5px rgba(0, 0, 0, .6); }
+.hdr-menu-list a { color: #1d1d1f; font-size: 13px; padding-top: 4px; padding-bottom: 4px; border-radius: 6px; }
+[data-theme="dark"] .hdr-menu-list a { color: #f5f5f7; }
+.hdr-menu-list a:hover, .hdr-menu-list a:focus-visible { background: var(--header-accent); color: #fff; }
