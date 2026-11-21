@@ -46,6 +46,10 @@ Rules:
 # Settings the UI can change. Each has a default, an optional env var and a type.
 SETTINGS: dict[str, dict[str, Any]] = {
     "ollama_url":       {"default": "http://host.docker.internal:11434", "env": "ASK_OLLAMA_URL", "type": "str"},
+    # Model providers (llm.py): each can be turned off. LM Studio model names start with "lmstudio:".
+    "ollama_enabled":   {"default": True, "env": "ASK_OLLAMA_ENABLED", "type": "bool"},
+    "lmstudio_enabled": {"default": False, "env": "ASK_LMSTUDIO_ENABLED", "type": "bool"},
+    "lmstudio_url":     {"default": "http://127.0.0.1:1234", "env": "ASK_LMSTUDIO_URL", "type": "str"},
     "chat_model":       {"default": "qwen3.8:27b-mlx", "env": "ASK_CHAT_MODEL", "type": "str"},
     "embed_model":      {"default": "nomic-embed-text", "env": "ASK_EMBED_MODEL", "type": "str"},
     "think":            {"default": False, "env": "ASK_THINK", "type": "bool"},

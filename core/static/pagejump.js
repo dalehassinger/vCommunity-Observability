@@ -1,9 +1,10 @@
 /* Page jump buttons (both apps): two small arrow buttons at the bottom right that jump to the
    top or the bottom of a long page. Each one shows only when there is somewhere to go
-   (more than 300 px above or below). On a page with a sticky composer (the Ask chat), the
-   buttons sit just above it. Smooth scrolling unless the reader prefers reduced motion. */
+   (more than 300 px above or below). Not on the Ask chat page: it has its own Jump to latest
+   button on the composer. Smooth scrolling unless the reader prefers reduced motion. */
 (function () {
   'use strict';
+  if (document.body && document.body.classList.contains('chat-page')) return;
   var GAP = 300;
   var box = document.createElement('div');
   box.className = 'page-jump';
@@ -26,8 +27,6 @@
     var r = root(), y = window.scrollY || r.scrollTop;
     up.hidden = y < GAP;
     down.hidden = r.scrollHeight - (y + window.innerHeight) < GAP;
-    var composer = document.querySelector('.composer');
-    box.style.bottom = composer ? (composer.offsetHeight + 8) + 'px' : '';
   }
   function later() { if (!queued) { queued = true; requestAnimationFrame(update); } }
 
@@ -35,8 +34,10 @@
     document.body.appendChild(box);
     window.addEventListener('scroll', later, { passive: true });
     window.addEventListener('resize', later);
-    // Pages that grow after load (a streaming answer, a table filled by script).
-    if (window.ResizeObserver) new ResizeObserver(later).observe(document.body);
+    // Pages that grow after load (a table filled by script): watch the content area only, not
+    // the whole body, so menus, toasts and the sidebar don't wake it.
+    var main = document.querySelector('main') || document.body;
+    if (window.ResizeObserver) new ResizeObserver(later).observe(main);
     update();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();

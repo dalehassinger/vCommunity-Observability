@@ -7,7 +7,7 @@
   <div>
     <div class="breadcrumb">Knowledge</div>
     <h1>Knowledge sources</h1>
-    <p class="subtle">Where answers come from. Each source is a plug-in that fetches documents; the app splits them by heading,
+    <p class="subtle" id="src-total">Where answers come from. Each source is a plug-in that fetches documents; the app splits them by heading,
       embeds them with <code>{{ settings.embed_model }}</code> and stores them in SQLite. {{ stats.documents }} documents, {{ stats.chunks }} chunks in total.</p>
   </div>
   <div class="page-actions">
@@ -131,33 +131,57 @@
 </div>
 {% endblock %}
 {% block scripts %}
+<script type="application/json" id="sources-data">{{ sources | tojson }}</script>
 <script src="/static/admin.js?v={{ asset_v }}"></script>
 <script>
 (function () {
-  var SOURCES = {{ sources | tojson }};
+  // The sources' settings (for the editor) are in a JSON block that refresh() swaps with the cards.
   var PLUGINS = {{ plugins_json | tojson }};
-  var byName = {}; SOURCES.forEach(function (s) { byName[s.name] = s; });
+  var byName = {};
+  function readSources() {
+    byName = {};
+    JSON.parse(document.getElementById('sources-data').textContent).forEach(function (s) { byName[s.name] = s; });
+  }
+  readSources();
+  // After an action, update the cards in place (no page reload: scroll, focus and the open
+  // editor stay). The totals line and the editor's data are refreshed with them.
+  var PARTS = ['#source-grid', '#sources-data', '#src-total'];
+  function refreshAll() {
+    return AskAdmin.refresh(PARTS).then(function () { readSources(); startPoll(); });
+  }
   function msg(name, text, bad) {
     var m = document.querySelector('[data-msg="' + name + '"]');
     if (m) { m.textContent = text; m.className = 'form-msg ' + (bad ? 'bad' : 'ok'); }
   }
   async function act(name, url, body, ok) {
-    try { await AskAdmin.post(url, body); msg(name, ok); setTimeout(function () { location.reload(); }, 700); }
+    try { await AskAdmin.post(url, body); msg(name, ok); setTimeout(refreshAll, 700); }
     catch (e) { msg(name, e.message, true); }
   }
-  document.querySelectorAll('[data-sync]').forEach(function (b) {
-    b.onclick = function () { act(b.dataset.sync, '/ui/sources/' + b.dataset.sync + '/sync', {}, 'Sync started'); };
-  });
-  document.querySelectorAll('[data-full]').forEach(function (b) {
-    b.onclick = async function () {
+  // One click handler for every card button, so it keeps working after the cards are swapped.
+  var grid = document.querySelector('.mac-sources');
+  grid.addEventListener('click', async function (e) {
+    var b = e.target.closest('[data-sync],[data-full],[data-toggle],[data-unload],[data-delete],[data-edit]');
+    if (!b || !document.getElementById('source-grid').contains(b)) return;
+    var d = b.dataset;
+    if (d.sync) act(d.sync, '/ui/sources/' + d.sync + '/sync', {}, 'Sync started');
+    else if (d.full) {
       if (await vcoConfirm('Re-embed every document of this source? This takes a few minutes.', { ok: 'Re-index' }))
-        act(b.dataset.full, '/ui/sources/' + b.dataset.full + '/sync', { full: true }, 'Full re-index started');
-    };
-  });
-  document.querySelectorAll('[data-toggle]').forEach(function (b) {
-    b.onclick = function () {
-      act(b.dataset.toggle, '/ui/sources/' + b.dataset.toggle + '/enabled', { enabled: !b.classList.contains('on') }, 'Saved');
-    };
+        act(d.full, '/ui/sources/' + d.full + '/sync', { full: true }, 'Full re-index started');
+    } else if (d.toggle) act(d.toggle, '/ui/sources/' + d.toggle + '/enabled', { enabled: !b.classList.contains('on') }, 'Saved');
+    else if (d.unload) {
+      if (await vcoConfirm('Remove ' + d.fname + ' and re-index?', { ok: 'Remove', danger: true }))
+        act(d.unload, '/ui/sources/' + d.unload + '/files/' + encodeURIComponent(d.fname) + '/delete', {}, 'Removed');
+    } else if (d.delete) {
+      if (d.used) {
+        var names = d.used.split('\n');
+        await vcoAlert('"' + d.delete + '" can\'t be deleted while ' + (names.length > 1 ? 'these scheduled prompts use' : 'this scheduled prompt uses')
+          + ' it: ' + names.map(function (n) { return '"' + n + '"'; }).join(', ')
+          + '. Change ' + (names.length > 1 ? 'them' : 'it') + ' to another source on the Scheduled prompts page first.');
+        return;
+      }
+      if (await vcoConfirm('Delete source "' + d.delete + '" and its index? The files themselves are not touched.', { ok: 'Delete', danger: true }))
+        act(d.delete, '/ui/sources/' + d.delete + '/delete', {}, 'Deleted');
+    } else if (d.edit) openEditor(byName[d.edit]);
   });
   // Uploads (spreadsheet and PDF sources): each raw file is PUT to /ui/sources/<name>/files/<file name>.
   async function upload(name, files) {
@@ -172,39 +196,21 @@
         var data = {}; try { data = await res.json(); } catch (e) {}
         if (!res.ok) throw new Error(file.name + ': ' + (data.detail || res.statusText));
       }
-      msg(name, 'Uploaded, indexing started'); setTimeout(function () { location.reload(); }, 700);
+      msg(name, 'Uploaded, indexing started'); setTimeout(refreshAll, 700);
     } catch (e) { msg(name, e.message, true); }
   }
-  document.querySelectorAll('[data-file]').forEach(function (i) {
-    i.onchange = function () { if (i.files.length) upload(i.dataset.file, i.multiple ? i.files : [i.files[0]]); };
+  grid.addEventListener('change', function (e) {
+    var i = e.target.closest('[data-file]');
+    if (i && i.files.length) upload(i.dataset.file, i.multiple ? i.files : [i.files[0]]);
   });
-  document.querySelectorAll('[data-upload]').forEach(function (box) {
-    box.addEventListener('dragover', function (e) { e.preventDefault(); box.classList.add('drag'); });
-    box.addEventListener('dragleave', function () { box.classList.remove('drag'); });
-    box.addEventListener('drop', function (e) {
-      e.preventDefault(); box.classList.remove('drag');
-      var inp = box.querySelector('[data-file]');
-      if (e.dataTransfer.files.length) upload(box.dataset.upload, inp && inp.multiple ? e.dataTransfer.files : [e.dataTransfer.files[0]]);
-    });
-  });
-  document.querySelectorAll('[data-unload]').forEach(function (b) {
-    b.onclick = async function () {
-      if (await vcoConfirm('Remove ' + b.dataset.fname + ' and re-index?', { ok: 'Remove', danger: true }))
-        act(b.dataset.unload, '/ui/sources/' + b.dataset.unload + '/files/' + encodeURIComponent(b.dataset.fname) + '/delete', {}, 'Removed');
-    };
-  });
-  document.querySelectorAll('[data-delete]').forEach(function (b) {
-    b.onclick = async function () {
-      if (b.dataset.used) {
-        var names = b.dataset.used.split('\n');
-        await vcoAlert('"' + b.dataset.delete + '" can\'t be deleted while ' + (names.length > 1 ? 'these scheduled prompts use' : 'this scheduled prompt uses')
-          + ' it: ' + names.map(function (n) { return '"' + n + '"'; }).join(', ')
-          + '. Change ' + (names.length > 1 ? 'them' : 'it') + ' to another source on the Scheduled prompts page first.');
-        return;
-      }
-      if (await vcoConfirm('Delete source "' + b.dataset.delete + '" and its index? The files themselves are not touched.', { ok: 'Delete', danger: true }))
-        act(b.dataset.delete, '/ui/sources/' + b.dataset.delete + '/delete', {}, 'Deleted');
-    };
+  grid.addEventListener('dragover', function (e) { var box = e.target.closest('[data-upload]'); if (box) { e.preventDefault(); box.classList.add('drag'); } });
+  grid.addEventListener('dragleave', function (e) { var box = e.target.closest('[data-upload]'); if (box) box.classList.remove('drag'); });
+  grid.addEventListener('drop', function (e) {
+    var box = e.target.closest('[data-upload]');
+    if (!box) return;
+    e.preventDefault(); box.classList.remove('drag');
+    var inp = box.querySelector('[data-file]');
+    if (e.dataTransfer.files.length) upload(box.dataset.upload, inp && inp.multiple ? e.dataTransfer.files : [e.dataTransfer.files[0]]);
   });
 
   // Editor dialog: fields come from the plug-in's source.yaml options.
@@ -273,7 +279,6 @@
   }
   fPlugin.onchange = function () { renderOptions(fPlugin.value, null); };
   document.getElementById('add-source').onclick = function () { openEditor(null); };
-  document.querySelectorAll('[data-edit]').forEach(function (b) { b.onclick = function () { openEditor(byName[b.dataset.edit]); }; });
   document.getElementById('editor-cancel').onclick = function () { dlg.close(); };
   document.getElementById('editor-save').onclick = async function () {
     var opts = {};
@@ -286,28 +291,33 @@
         sync_schedule: { frequency: fFreq.value, weekday: fWday.value, monthday: fMday.value, at_time: fAt.value, timezone: fTz.value }
       });
       eMsg.textContent = 'Saved, sync started'; eMsg.className = 'form-msg ok';
-      setTimeout(function () { location.reload(); }, 600);
+      setTimeout(function () { dlg.close(); refreshAll(); }, 600);
     } catch (e) { eMsg.textContent = e.message; eMsg.className = 'form-msg bad'; }
   };
 
-  // While a sync runs, refresh its progress every 2 seconds and reload when it ends.
+  // While a sync runs, refresh its progress every 2 seconds; when it ends, only that card is
+  // redrawn (no page reload). Polling pauses while the tab is hidden.
+  var polling = false;
   function poll() {
-    var running = document.querySelectorAll('.source-card[data-status="running"]').length;
-    if (!running) return;
-    fetch('/ui/sources').then(function (r) { return r.json(); }).then(function (d) {
-      var reload = false;
+    if (!document.querySelectorAll('.source-card[data-status="running"]').length) { polling = false; return; }
+    if (document.hidden) { setTimeout(poll, 2000); return; }
+    fetch('/ui/sources', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+      var ended = [];
       d.sources.forEach(function (s) {
-        var card = document.querySelector('.source-card[data-name="' + s.name + '"]');
+        var card = document.querySelector('.source-card[data-name="' + CSS.escape(s.name) + '"]');
         if (!card) return;
-        if (card.dataset.status === 'running' && s.status !== 'running') reload = true;
+        if (card.dataset.status === 'running' && s.status !== 'running') ended.push(s.name);
         ['docs', 'chunks', 'progress'].forEach(function (f) {
           var e = card.querySelector('[data-f="' + f + '"]'); if (e) e.textContent = s[f];
         });
       });
-      if (reload) location.reload(); else setTimeout(poll, 2000);
+      if (!ended.length) { setTimeout(poll, 2000); return; }
+      var parts = ended.map(function (n) { return '.source-card[data-name="' + CSS.escape(n) + '"]'; }).concat(['#sources-data', '#src-total']);
+      AskAdmin.refresh(parts).then(function () { readSources(); setTimeout(poll, 2000); });
     }).catch(function () { setTimeout(poll, 5000); });
   }
-  setTimeout(poll, 1500);
+  function startPoll() { if (!polling) { polling = true; setTimeout(poll, 1500); } }
+  startPoll();
 })();
 </script>
 {% endblock %}

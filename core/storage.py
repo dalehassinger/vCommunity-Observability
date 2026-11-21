@@ -325,6 +325,19 @@ class Storage:
             ).fetchall()
         return {(r["module"], r["collector"]): dict(r) for r in rows}
 
-    def query(self, module: str, sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    def query(self, module: str, sql: str, params: dict[str, Any] | None = None,
+              limit: int | None = None) -> list[dict[str, Any]]:
+        """Run a read-only query. With limit, stop reading after that many rows (the query
+        itself is not changed, so its ORDER BY still decides which rows come first)."""
         with self.readonly(module) as db:
-            return [dict(r) for r in db.execute(sql, params or {}).fetchall()]
+            cur = db.execute(sql, params or {})
+            rows = cur.fetchall() if limit is None else cur.fetchmany(limit)
+            return [dict(r) for r in rows]
+
+    def count(self, module: str, sql: str, params: dict[str, Any] | None = None) -> int | None:
+        """How many rows a query returns (None when it can't be counted)."""
+        try:
+            with self.readonly(module) as db:
+                return db.execute(f"SELECT COUNT(*) FROM ({sql.strip().rstrip(';')})", params or {}).fetchone()[0]
+        except Exception:
+            return None

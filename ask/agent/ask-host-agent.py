@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ask host agent: performance numbers of the machine that runs Ollama, for the
+"""Ask host agent: performance numbers of the machine that runs Ollama and LM Studio, for the
 Performance page of vCommunity Ask.
 
 Runs on the host (macOS; Linux works too, with fewer numbers), outside Docker. Python 3.9+
@@ -9,7 +9,7 @@ standard library only, so nothing to install and it works offline. Ask polls
 A background thread samples every few seconds, so a request never waits for the tools.
 
 macOS sources (no sudo): top (CPU), vm_stat + sysctl (memory, pressure, swap), ioreg
-(GPU utilization and memory), netstat (network), ps (Ollama's own CPU and memory), and
+(GPU utilization and memory), netstat (network), ps (CPU and memory of Ollama's and LM Studio's own processes), and
 macmon (https://github.com/vladkens/macmon, MIT) for temperature and power if installed.
 
 MCP bridge: the MCP servers listed in ~/.config/ask-host-agent/mcp.json (or --mcp-config;
@@ -40,7 +40,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 MAC = sys.platform == "darwin"
 
 
@@ -149,12 +149,27 @@ def parse_netstat(text: str) -> tuple[int, int]:
     return rx, tx
 
 
-def parse_ps(text: str) -> dict:
-    """ps -Ao pid=,%cpu=,rss=,comm= -> Ollama's processes (server and model runners)."""
+def is_ollama(comm: str) -> bool:
+    return "ollama" in os.path.basename(comm).lower()
+
+
+def is_lmstudio(comm: str) -> bool:
+    """LM Studio's processes: the app and its helpers (/Applications/LM Studio.app/...), the model
+    engines it starts from ~/.lmstudio/ (llama.cpp and MLX runners), and its headless daemon and CLI
+    (llmster, lms). macOS `ps -o comm` shows the whole path, Linux only the name."""
+    c = comm.lower()
+    base = os.path.basename(c)
+    return ("lm studio" in c or "/.lmstudio/" in c or "/.cache/lm-studio/" in c
+            or base in ("lms", "llmster") or base.startswith(("lm-studio", "lmstudio")))
+
+
+def parse_ps(text: str, match=is_ollama) -> dict:
+    """ps -Ao pid=,%cpu=,rss=,comm= -> CPU and memory of the processes `match` picks
+    (Ollama's server and model runners by default)."""
     cpu = rss = n = 0
     for line in (text or "").splitlines():
         f = line.split(None, 3)
-        if len(f) == 4 and "ollama" in os.path.basename(f[3]).lower():
+        if len(f) == 4 and match(f[3]):
             cpu += num(f[1]) or 0; rss += (num(f[2], int) or 0) * 1024; n += 1
     return {"cpu_pct": round(cpu, 1), "rss": rss, "processes": n}
 
@@ -274,9 +289,11 @@ class Collector:
         du = shutil.disk_usage(disk_path)
         d["disk"] = {"path": disk_path, "total": du.total, "used": du.used, "free": du.free,
                      "used_pct": round(du.used / du.total * 100, 1)}
-        d["ollama"] = parse_ps(run(["ps", "-Ao", "pid=,%cpu=,rss=,comm="], 5))
+        ps = run(["ps", "-Ao", "pid=,%cpu=,rss=,comm="], 5)
         ncpu = (self.static.get("cores") or {}).get("total") or os.cpu_count() or 1
-        d["ollama"]["cpu_pct_of_host"] = round(d["ollama"]["cpu_pct"] / ncpu, 1)
+        for key, match in (("ollama", is_ollama), ("lmstudio", is_lmstudio)):
+            d[key] = parse_ps(ps, match)
+            d[key]["cpu_pct_of_host"] = round(d[key]["cpu_pct"] / ncpu, 1)
         for k in ("cpu", "memory"):
             if not d.get(k):
                 d["errors"].append(f"{k} not available")

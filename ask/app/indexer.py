@@ -24,7 +24,8 @@ import yaml
 
 from . import control
 from .db import DB, IndexReset
-from .ollama import Ollama, OllamaError
+from . import llm
+from .ollama import OllamaError
 
 log = logging.getLogger("ask.indexer")
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
@@ -152,8 +153,8 @@ def embed_text(doc: dict[str, Any], chunk: dict[str, Any], prefix: str) -> str:
 
 def embed_prefixes(model: str) -> tuple[str, str]:
     """Task prefixes some embedding models are trained with (document, query)."""
-    m = model.lower()
-    if m.startswith("nomic-embed"):
+    m = llm.bare(model).lower()
+    if m.startswith("nomic-embed") or (llm.provider_of(model) == llm.LMSTUDIO and "nomic-embed" in m):
         return "search_document: ", "search_query: "
     if "mxbai-embed" in m:
         return "", "Represent this sentence for searching relevant passages: "
@@ -228,7 +229,7 @@ class Indexer:
             raise RuntimeError(f"source plug-in '{src['plugin']}' not found")
         generation = self.db.generation  # before reading the model: a reset after this stops the sync
         cfg = self.settings()
-        ollama = Ollama(cfg["ollama_url"])
+        ollama = llm.client(cfg)
         model = cfg["embed_model"]
         prev = self.db.get_state(name)
         # Re-embed everything if the embedding model changed since this source was indexed.

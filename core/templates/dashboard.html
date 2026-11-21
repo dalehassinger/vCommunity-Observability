@@ -2,6 +2,11 @@
 {% from "_run_error.html" import run_error %}
 {% block title %}{{ dash.title }} · vCommunity-Observability{% endblock %}
 {% set statuses = ['green', 'yellow', 'red', 'gray', 'Connected', 'Disconnected', 'NotResponding', 'Maintenance'] %}
+{# Row cap note under a table or bar list: "Showing 50 of 1,234 · Show all" (a link to ?all=<n>). #}
+{% macro show_more(w, i) -%}
+  {% if w.more %}<p class="widget-more subtle">Showing the first {{ w.rows|length }}{% if w.total %} of {{ '{:,}'.format(w.total) }}{% endif %} rows{% if not w.shown_all %} · <a href="?all={{ i }}#w{{ i }}">Show all</a>{% else %} (the most one page shows){% endif %}</p>
+  {% elif w.shown_all %}<p class="widget-more subtle">All {{ w.rows|length }} rows · <a href="?#w{{ i }}">Show fewer</a></p>{% endif %}
+{%- endmacro %}
 {% block body %}
 <div class="page-head">
   <div>
@@ -21,7 +26,7 @@
 
 <div class="widget-grid">
 {% for w in widgets %}
-  <section class="card {{ 'span-all' if w.type == 'table' or w.wide else '' }} {{ 'kpi-card ' ~ (w.level or 'none') if w.type == 'kpi' else '' }}">
+  <section class="card {{ 'span-all' if w.type == 'table' or w.wide else '' }} {{ 'kpi-card ' ~ (w.level or 'none') if w.type == 'kpi' else '' }}" id="w{{ loop.index0 }}">
     {% if w.title %}<div class="card-header">{{ w.title }}</div>{% endif %}
     <div class="card-block">
     {% if w.error %}
@@ -47,9 +52,10 @@
         <span class="bar-value">{{ b.value }}{{ w.unit or '' }}</span>
       </div>
       {% else %}<p class="subtle">No data yet.</p>{% endfor %}
+      {{ show_more(w, loop.index0) }}
     {% elif w.type == 'table' %}
       {% if w.rows %}
-      <div class="table-wrap"><table class="datagrid">
+      <div class="table-wrap{{ ' long' if w.rows|length > 30 else '' }}"><table class="datagrid">
         <thead><tr>{% for c in w.columns %}<th>{{ c|replace('_', ' ') }}</th>{% endfor %}</tr></thead>
         <tbody>
         {% for r in w.rows %}{% set lvl = w.levels[loop.index0] if w.levels else '' %}
@@ -62,6 +68,7 @@
         {% endfor %}
         </tbody>
       </table></div>
+      {{ show_more(w, loop.index0) }}
       {% else %}<p class="subtle">No data yet.</p>{% endif %}
     {% endif %}
     </div>

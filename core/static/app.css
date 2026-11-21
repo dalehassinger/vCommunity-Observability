@@ -321,3 +321,8 @@ label.switch { position: relative; }
 .page-jump-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .page-jump-btn[hidden] { display: none; }
 @media print { .page-jump { display: none; } }
+
+/* Dashboard row cap (core/app.py WIDGET_ROWS): the "Showing the first N of M rows · Show all" note, and long
+   tables that the browser lays out and paints only when they scroll near the screen. */
+.widget-more { margin: 10px 0 0; font-size: 12px; }
+.table-wrap.long { content-visibility: auto; contain-intrinsic-size: auto 900px; }

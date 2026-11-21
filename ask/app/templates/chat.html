@@ -15,7 +15,17 @@
     </div>
   </div>
 
-  <div id="thread" class="thread" aria-live="polite">
+  {# A saved chat is painted here as plain text before any script runs; ask.js then turns the
+     newest turns into markdown with their source cards right away, and older turns only when
+     they scroll near the screen. aria-live sits on the answer being streamed, not on the thread. #}
+  <div id="thread" class="thread">
+    {% for m in messages %}
+    {% if m.role == 'user' %}
+    <div class="msg user" data-i="{{ loop.index0 }}"><div class="bubble">{{ m.content }}</div><button type="button" class="link-btn save-prompt" title="Keep this question with the sources picked below, to ask it again with one click (Saved menu)">Save prompt</button></div>
+    {% else %}
+    <div class="msg assistant pending{{ ' failed' if m.stats and m.stats.error else '' }}" data-i="{{ loop.index0 }}"><div class="avatar"><svg viewBox="0 0 32 32" width="18" height="18"><path d="M8 10.5h16a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-8l-5 3.5v-3.5H8A1.5 1.5 0 0 1 6.5 20v-8A1.5 1.5 0 0 1 8 10.5z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/></svg></div><div class="answer"><div class="src-strip"></div><details class="thinking" hidden><summary>Thinking</summary><div class="think-text"></div></details><div class="md md-plain">{{ m.content }}</div><div class="src-wrap"></div><div class="answer-stats"></div></div></div>
+    {% endif %}
+    {% endfor %}
     {% if not chat %}
     <div class="empty-state" id="empty-state">
       <div class="empty-icon">
@@ -41,7 +51,7 @@
       <details class="model-menu composer-model" id="model-menu" data-current="{{ settings.chat_model }}">
         <summary class="model-btn" title="Chat model (for every chat): click to change it" aria-haspopup="menu">
           <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          <span class="model-current">{{ settings.chat_model }}</span>
+          <span class="model-current">{{ settings.chat_model | replace('lmstudio:', '') }}</span>
           <svg class="model-caret" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </summary>
         <div class="model-list" role="menu" aria-label="Chat model"></div>
@@ -83,8 +93,7 @@
 </div>
 {% endblock %}
 {% block scripts %}
-<script src="/shared/vendor/marked/marked.umd.js?v={{ asset_v }}"></script>
-<script src="/shared/vendor/dompurify/purify.min.js?v={{ asset_v }}"></script>
+{# defer: the saved turns above paint first; the scripts run (in this order) once the page is parsed. #}
 <script>
   window.ASK = {
     chatId: {{ (chat.id if chat else "") | tojson }},
@@ -92,7 +101,9 @@
     model: {{ settings.chat_model | tojson }}
   };
 </script>
-<script src="/static/charts.js?v={{ asset_v }}"></script>
-<script src="/static/scope.js?v={{ asset_v }}"></script>
-<script src="/static/ask.js?v={{ asset_v }}"></script>
+<script defer src="/shared/vendor/marked/marked.umd.js?v={{ asset_v }}"></script>
+<script defer src="/shared/vendor/dompurify/purify.min.js?v={{ asset_v }}"></script>
+<script defer src="/static/charts.js?v={{ asset_v }}"></script>
+<script defer src="/static/scope.js?v={{ asset_v }}"></script>
+<script defer src="/static/ask.js?v={{ asset_v }}"></script>
 {% endblock %}

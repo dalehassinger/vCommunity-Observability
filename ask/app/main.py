@@ -31,7 +31,8 @@ from .links import follow_host
 from .config import SETTINGS, coerce, load_config
 from .db import DB
 from .indexer import NAME_RE, Indexer, discover_plugins
-from .ollama import Ollama, OllamaError
+from . import llm
+from .ollama import OllamaError
 from . import control, mcp, rag, syslog_out, websearch, webusage
 from .reports import Reports
 from .perf import SAMPLE_SECONDS, Sampler
@@ -728,11 +729,25 @@ def create_app() -> FastAPI:
 
     @app.get("/ui/ollama", include_in_schema=False)
     def ui_ollama(url: str = ""):
-        o = Ollama(url or settings()["ollama_url"])
-        try:
-            return {"ok": True, "url": o.url, "version": o.version(), "models": o.models()}
-        except OllamaError as e:
-            return {"ok": False, "url": o.url, "error": str(e), "models": []}
+        """Settings page Test connection for Ollama (the URL in the form, saved or not)."""
+        return llm.check(llm.OLLAMA, url or settings()["ollama_url"])
+
+    @app.get("/ui/lmstudio", include_in_schema=False)
+    def ui_lmstudio(url: str = ""):
+        """Settings page Test connection for LM Studio."""
+        return llm.check(llm.LMSTUDIO, url or settings()["lmstudio_url"])
+
+    @app.get("/ui/models", include_in_schema=False)
+    def ui_models():
+        """Every model of the providers that are on (model menus, saved and scheduled prompts)."""
+        return llm.client(settings()).models()
+
+    @app.get("/api/models", tags=["chat"], dependencies=[Depends(require_token)])
+    def api_models():
+        """Models Ask can use now, from Ollama and LM Studio (whichever are turned on).
+        LM Studio model names start with `lmstudio:`; use the name as is for `chat_model`,
+        `embed_model` or a saved / scheduled prompt's model."""
+        return llm.client(settings()).models()
 
     @app.get("/ui/sources", include_in_schema=False)
     def ui_sources():
@@ -752,13 +767,34 @@ def create_app() -> FastAPI:
     def ui_settings(body: dict = Body(...)):
         before = settings()
         errors = {}
-        for key, value in (body.get("values") or {}).items():
+        vals = body.get("values") or {}
+        try:
+            on_after = [bool(coerce("bool", vals.get(k, before.get(k)))) for k in ("ollama_enabled", "lmstudio_enabled")]
+        except (TypeError, ValueError):
+            on_after = [True]
+        if not any(on_after):
+            return JSONResponse({"ok": False, "errors": {"ollama_enabled": "turn on Ollama or LM Studio (or both)"}},
+                                status_code=400)
+        # The chat and embedding models must come from a provider that stays on.
+        on = dict(zip((llm.OLLAMA, llm.LMSTUDIO), on_after))
+        for key, what in (("chat_model", "chat"), ("embed_model", "embedding")):
+            name = str(vals.get(key, before.get(key)) or "")
+            p = llm.provider_of(name)
+            if name and not on[p]:
+                errors[key] = (f"{llm.bare(name)} is an {llm.LABELS[p]} model and {llm.LABELS[p]} is turned off. "
+                               f"Pick {'an' if what[0] in 'aeiou' else 'a'} {what} model from {llm.LABELS[llm.LMSTUDIO if p == llm.OLLAMA else llm.OLLAMA]}")
+        if errors:
+            return JSONResponse({"ok": False, "errors": errors}, status_code=400)
+        for key, value in vals.items():
             if key not in SETTINGS:
                 continue
             try:
                 v = coerce(SETTINGS[key]["type"], value)
             except (TypeError, ValueError):
                 errors[key] = "not a valid value"
+                continue
+            if key in ("ollama_url", "lmstudio_url") and not re.match(r"^https?://[^\s/]+", str(v)):
+                errors[key] = "a full http:// or https:// address, for example http://127.0.0.1:1234"
                 continue
             if key == "web_budget" and not (0 <= v <= 100000):
                 errors[key] = "use 0 (no budget) to 100000"

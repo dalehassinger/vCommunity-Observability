@@ -77,18 +77,31 @@
 
 <div class="form-grid">
   <div class="card">
-    <div class="card-header">Ollama</div>
+    <div class="card-header">Models: Ollama and LM Studio</div>
     <div class="card-block">
-      <div class="ollama-status" id="ollama-status"><span class="status"><i></i></span><span>Checking Ollama…</span></div>
-      <div class="field"><label for="s-ollama_url">Ollama URL{% if 'ollama_url' in overridden %}<span class="override">saved</span>{% endif %}</label>
+      <div class="field"><label for="s-ollama_enabled">Ollama{% if 'ollama_enabled' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><label class="switch"><input type="checkbox" role="switch" id="s-ollama_enabled" data-key="ollama_enabled" data-provider="ollama" {{ 'checked' if settings.ollama_enabled else '' }}><span></span>Use Ollama models</label>
+          <div class="ollama-status" id="ollama-status"><span class="status"><i></i></span><span>Checking Ollama…</span></div></div></div>
+      <div class="field" data-for="ollama"><label for="s-ollama_url">Ollama URL{% if 'ollama_url' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><input type="text" id="s-ollama_url" data-key="ollama_url" value="{{ settings.ollama_url }}">
           <div class="hint">From Rancher Desktop or Docker Desktop: <code>http://host.docker.internal:11434</code>
             (containerd/nerdctl: <code>http://host.lima.internal:11434</code>). Ollama must listen on all addresses:
-            <code>launchctl setenv OLLAMA_HOST 0.0.0.0</code>, then restart Ollama.</div></div></div>
-      <div class="field"><label></label><div><button class="btn btn-outline" type="button" id="test-ollama">Test connection</button></div></div>
+            <code>launchctl setenv OLLAMA_HOST 0.0.0.0</code>, then restart Ollama.</div>
+          <button class="btn btn-outline" type="button" id="test-ollama" style="margin-top:8px">Test connection</button></div></div>
+      <div class="field"><label for="s-lmstudio_enabled">LM Studio{% if 'lmstudio_enabled' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><label class="switch"><input type="checkbox" role="switch" id="s-lmstudio_enabled" data-key="lmstudio_enabled" data-provider="lmstudio" {{ 'checked' if settings.lmstudio_enabled else '' }}><span></span>Use LM Studio models</label>
+          <div class="ollama-status" id="lmstudio-status"><span class="status"><i></i></span><span>LM Studio is off.</span></div></div></div>
+      <div class="field" data-for="lmstudio"><label for="s-lmstudio_url">LM Studio URL{% if 'lmstudio_url' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><input type="text" id="s-lmstudio_url" data-key="lmstudio_url" value="{{ settings.lmstudio_url }}">
+          <div class="hint">The address LM Studio's Developer tab shows, for example <code>http://127.0.0.1:1234</code>. Inside the container
+            <code>127.0.0.1</code> and <code>localhost</code> are sent to <code>host.docker.internal</code> (your Mac).
+            In LM Studio: Developer tab, start the server and turn on <b>Serve on Local Network</b>, or the container can't reach it.
+            LM Studio models show as <code>lmstudio:&lt;model&gt;</code>. Their context length is set in LM Studio when the model loads
+            (Model context below applies to Ollama only).</div>
+          <button class="btn btn-outline" type="button" id="test-lmstudio" style="margin-top:8px">Test connection</button></div></div>
       <div class="field"><label for="s-chat_model">Chat model{% if 'chat_model' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><select id="s-chat_model" data-key="chat_model" data-current="{{ settings.chat_model }}"><option>{{ settings.chat_model }}</option></select>
-          <div class="hint">Answers the questions. 27-32B models follow "answer only from the sources" best. You can also switch it from the model menu in the header.</div></div></div>
+          <div class="hint">Answers the questions, from Ollama or LM Studio. 27-32B models follow "answer only from the sources" best. You can also switch it from the model menu under the question box.</div></div></div>
       <div class="field"><label for="s-embed_model">Embedding model{% if 'embed_model' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><select id="s-embed_model" data-key="embed_model" data-current="{{ settings.embed_model }}"><option>{{ settings.embed_model }}</option></select>
           <div class="hint">Turns text into vectors for search. <b>Changing it clears the index and re-embeds every source.</b></div></div></div>
@@ -96,7 +109,7 @@
         <div><label class="switch"><input type="checkbox" role="switch" id="s-think" data-key="think" {{ 'checked' if settings.think else '' }}><span></span>On</label>
           <div class="hint">For thinking models (Qwen 3.x and others): slower, but the reasoning is shown above the answer.</div></div></div>
       <div class="field"><label for="s-keep_alive">Keep model loaded{% if 'keep_alive' in overridden %}<span class="override">saved</span>{% endif %}</label>
-        <div><input type="text" id="s-keep_alive" data-key="keep_alive" value="{{ settings.keep_alive }}"><div class="hint">How long Ollama keeps the models in memory after a question, e.g. 10m, 1h, 0.</div></div></div>
+        <div><input type="text" id="s-keep_alive" data-key="keep_alive" value="{{ settings.keep_alive }}"><div class="hint">How long Ollama keeps the models in memory after a question, e.g. 10m, 1h, 0. LM Studio gets it as its idle time-to-live (from 1 second; 0 leaves LM Studio's own setting).</div></div></div>
     </div>
   </div>
 
@@ -107,7 +120,7 @@
         ('top_k', 'Chunks to retrieve', 'Best-matching sections sent to the model (linked files come on top).'),
         ('source_min_chunks', 'Sections per source', 'With several sources picked, each source that matches the question gets at least this many of the chunks above, so one big source cannot take them all. 0 = off (one shared ranking).'),
         ('context_chars', 'Context budget (chars)', 'Upper limit for all sources together. About 4 characters per token.'),
-        ('num_ctx', 'Model context (tokens)', 'Ollama num_ctx. Must hold the sources, the chat history and the answer.'),
+        ('num_ctx', 'Model context (tokens)', 'Ollama num_ctx. Must hold the sources, the chat history and the answer. For LM Studio models set the context length in LM Studio.'),
         ('temperature', 'Temperature', 'Low (0.1-0.3) keeps answers close to the sources.'),
         ('history_turns', 'Chat history (turns)', 'Earlier questions and answers sent along for follow-up questions. 0 = none.'),
         ('recent_chats', 'Recent chats shown', 'How many chats the sidebar lists under Recent chats, newest first (1 to 200, default 10). Older chats are kept, just not listed.')] %}
@@ -253,6 +266,7 @@
       try {
         await AskAdmin.post('/ui/apps', { app: i.dataset.app, on: i.checked });
         appsMsg.textContent = 'Saved.'; appsMsg.className = 'form-msg ok';
+        // This one reloads on purpose: turning an app on or off changes the header (app switcher).
         setTimeout(function () { location.reload(); }, 600);
       } catch (e) {
         i.checked = !i.checked;
@@ -269,7 +283,7 @@
   var judgeOn = document.getElementById('eval-judge');
   judgeOn.onchange = function () { judgeSel.disabled = !judgeOn.checked; };
   // Installed chat models for both pickers; the last picks are remembered in this browser.
-  fetch('/ui/ollama').then(function (r) { return r.json(); }).then(function (d) {
+  fetch('/ui/models').then(function (r) { return r.json(); }).then(function (d) {
     var chat = (d.models || []).filter(function (m) { return m.kind === 'chat'; });
     var saved = {};
     try { saved = { model: localStorage.getItem('ask.eval.model') || '', judge: localStorage.getItem('ask.eval.judge') || '' }; } catch (e) {}
@@ -296,8 +310,11 @@
 })();
 (function () {
   var DEFAULT_PROMPT = {{ defaults.system_prompt | tojson }};
-  var status = document.getElementById('ollama-status');
-  function setStatus(ok, text) {
+  var NAMES = { ollama: 'Ollama', lmstudio: 'LM Studio' };
+  var lists = { ollama: [], lmstudio: [] };          // models from each provider's last test
+  function onOff(p) { return document.getElementById('s-' + p + '_enabled').checked; }
+  function setStatus(ok, text, p) {
+    var status = document.getElementById((p || 'ollama') + '-status');
     status.innerHTML = '';
     var s = document.createElement('span'); s.className = 'status ' + (ok ? 'status-green' : 'status-red'); s.innerHTML = '<i></i>';
     var t = document.createElement('span'); t.textContent = text;
@@ -306,6 +323,7 @@
   function fill(select, models) {
     var cur = select.dataset.current;
     select.innerHTML = '';
+    var groups = {};
     var names = models.map(function (m) { return m.name; });
     // Ollama lists "nomic-embed-text" as "nomic-embed-text:latest": treat them as the same model.
     if (cur && names.indexOf(cur) < 0 && cur.indexOf(':') < 0 && names.indexOf(cur + ':latest') >= 0) {
@@ -313,27 +331,48 @@
       names = models.map(function (m) { return m.name; });
     }
     if (cur && names.indexOf(cur) < 0) models = [{ name: cur, missing: true }].concat(models);
+    // One group per provider (Ollama, LM Studio); a saved model that isn't listed comes first.
     models.forEach(function (m) {
       var o = document.createElement('option'); o.value = m.name;
-      o.textContent = (m.label || m.name) + (m.parameter_size ? ' (' + m.parameter_size + ')' : '') + (m.missing ? ' (not installed)' : '');
-      select.appendChild(o);
+      o.textContent = (m.label || m.name) + (m.parameter_size ? ' (' + m.parameter_size + ')' : '')
+        + (m.missing ? (m.name.indexOf('lmstudio:') === 0 && !onOff('lmstudio') || m.name.indexOf('lmstudio:') !== 0 && !onOff('ollama') ? ' (provider turned off)' : ' (not installed)') : '');
+      if (m.missing || !m.provider) { select.appendChild(o); return; }
+      if (!groups[m.provider]) { groups[m.provider] = document.createElement('optgroup'); groups[m.provider].label = NAMES[m.provider] || m.provider; select.appendChild(groups[m.provider]); }
+      groups[m.provider].appendChild(o);
     });
     select.value = cur;
   }
-  async function test() {
-    setStatus(true, 'Checking…');
-    var url = document.getElementById('s-ollama_url').value;
+  function refill() {
+    var all = (onOff('ollama') ? lists.ollama : []).concat(onOff('lmstudio') ? lists.lmstudio : []);
+    fill(document.getElementById('s-chat_model'), all.filter(function (m) { return m.kind === 'chat'; }));
+    fill(document.getElementById('s-embed_model'), all.filter(function (m) { return m.kind === 'embedding'; }));
+  }
+  function showFields() {
+    ['ollama', 'lmstudio'].forEach(function (p) {
+      document.querySelectorAll('[data-for="' + p + '"]').forEach(function (f) { f.hidden = !onOff(p); });
+    });
+  }
+  async function test(p) {
+    p = p || 'ollama';
+    if (!onOff(p)) { lists[p] = []; setStatus(false, NAMES[p] + ' is off. Its models are not used or listed.', p); refill(); return; }
+    setStatus(true, 'Checking…', p);
+    var url = document.getElementById('s-' + p + '_url').value;
     try {
-      var d = await (await fetch('/ui/ollama?url=' + encodeURIComponent(url))).json();
-      if (!d.ok) { setStatus(false, d.error); return; }
+      var d = await (await fetch('/ui/' + p + '?url=' + encodeURIComponent(url))).json();
+      lists[p] = d.ok ? d.models : [];
+      if (!d.ok) { setStatus(false, d.error, p); refill(); return; }
       var chat = d.models.filter(function (m) { return m.kind === 'chat'; });
       var emb = d.models.filter(function (m) { return m.kind === 'embedding'; });
-      setStatus(true, 'Connected to Ollama ' + d.version + ' at ' + d.url + ': ' + chat.length + ' chat and ' + emb.length + ' embedding models.');
-      fill(document.getElementById('s-chat_model'), chat);
-      fill(document.getElementById('s-embed_model'), emb);
-    } catch (e) { setStatus(false, e.message); }
+      setStatus(true, 'Connected to ' + NAMES[p] + (p === 'ollama' ? ' ' + d.version : '') + ' at ' + d.url + ': ' + chat.length + ' chat and ' + emb.length + ' embedding models.', p);
+      refill();
+    } catch (e) { setStatus(false, e.message, p); }
   }
-  document.getElementById('test-ollama').onclick = test;
+  document.getElementById('test-ollama').onclick = function () { test('ollama'); };
+  document.getElementById('test-lmstudio').onclick = function () { test('lmstudio'); };
+  ['ollama', 'lmstudio'].forEach(function (p) {
+    document.getElementById('s-' + p + '_enabled').addEventListener('change', function () { showFields(); test(p); });
+  });
+  showFields();
   document.getElementById('test-activity').onclick = async function () {
     var st = document.getElementById('activity-status');
     st.textContent = 'Sending…';
@@ -351,6 +390,8 @@
     box.focus();
   };
   document.getElementById('reset-plain-prompt').onclick = function () { document.getElementById('s-plain_system_prompt').value = {{ defaults.plain_system_prompt | tojson }}; };
+  // What each field held when the page loaded (or was last saved), to see what a save changed.
+  document.querySelectorAll('[data-key]').forEach(function (i) { i.dataset.saved = i.type === 'checkbox' ? i.checked : (i.dataset.current || i.value); });
   document.getElementById('save').onclick = async function () {
     var values = {};
     document.querySelectorAll('[data-key]').forEach(function (i) { values[i.dataset.key] = i.type === 'checkbox' ? i.checked : i.value; });
@@ -361,10 +402,16 @@
       var r = await AskAdmin.post('/ui/settings', { values: values });
       m.textContent = r.reindex ? 'Saved. Re-indexing all sources with the new embedding model.' : 'Saved.';
       m.className = 'form-msg ok';
-      setTimeout(function () { location.reload(); }, 1200);
+      // The form already shows what was saved, so the page stays (scroll and focus kept). Only a
+      // change the header or sidebar shows (chat model pill, number of recent chats) reloads it.
+      var navChanged = ['chat_model', 'recent_chats'].some(function (k) { var i = document.querySelector('[data-key="' + k + '"]'); return i && String(i.value) !== String(i.dataset.saved); });
+      document.querySelectorAll('[data-key]').forEach(function (i) { i.dataset.saved = i.type === 'checkbox' ? i.checked : i.value; });
+      emb.dataset.current = emb.value;
+      document.getElementById('s-chat_model').dataset.current = document.getElementById('s-chat_model').value;
+      if (navChanged) setTimeout(function () { location.reload(); }, 1200);
     } catch (e) { m.textContent = 'Not saved: ' + e.message; m.className = 'form-msg bad'; }
   };
-  test();
+  test('ollama'); test('lmstudio');
 })();
 </script>
 {% endblock %}

@@ -8,6 +8,27 @@
 
   // -- helpers ---------------------------------------------------------------------------
   function $(id) { return document.getElementById(id); }
+  // A timer that does nothing while the tab is hidden and catches up once when it is shown
+  // again (the same rule as the Performance page), so a background tab stops polling.
+  function every(ms, fn) {
+    var missed = false;
+    setInterval(function () { if (document.hidden) missed = true; else fn(); }, ms);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden && missed) { missed = false; fn(); } });
+  }
+  // ECharts (1.1 MB, vendored in core/static/vendor) is loaded on first use, not with the page.
+  var ASSET_V = (document.currentScript && document.currentScript.src.split('?')[1]) || '';
+  var echartsLoading = null;
+  function loadECharts() {
+    if (window.echarts) return Promise.resolve(window.echarts);
+    if (!echartsLoading) echartsLoading = new Promise(function (resolve, reject) {
+      var sc = document.createElement('script');
+      sc.src = '/static/vendor/echarts/echarts.min.js' + (ASSET_V ? '?' + ASSET_V : '');
+      sc.onload = function () { resolve(window.echarts); };
+      sc.onerror = function () { echartsLoading = null; reject(new Error('ECharts did not load')); };
+      document.head.appendChild(sc);
+    });
+    return echartsLoading;
+  }
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -121,7 +142,21 @@
     var form = $('lg-form'), q = $('lg-q'), range = $('lg-range'), sev = $('lg-sev'), host = $('lg-host'), appSel = $('lg-app');
     var rows = $('lg-rows'), more = $('lg-more'), errBox = $('lg-err'), chartEl = $('lg-chart');
     var zoom = null, oldest = null, live = false, liveTimer = null, lastId = 0, shown = 0, terms = [];
-    var chart = window.echarts ? echarts.init(chartEl, null, { renderer: 'svg' }) : null;
+    // The chart is made when its card first comes near the screen (that is when ECharts loads).
+    var chart = null, chartWanted = false;
+    function startChart() {
+      return loadECharts().then(function (ec) {
+        if (!chart) chart = ec.init(chartEl, null, { renderer: 'svg' });
+        loadChart();
+      }).catch(function () { chartEl.textContent = 'The chart library could not be loaded.'; });
+    }
+    if ('IntersectionObserver' in window) {
+      var chartIo = new IntersectionObserver(function (en) {
+        if (!en.some(function (e) { return e.isIntersecting; })) return;
+        chartIo.disconnect(); chartWanted = true; startChart();
+      }, { rootMargin: '200px 0px' });
+      chartIo.observe(chartEl);
+    } else { chartWanted = true; startChart(); }
 
     // Search state lives in the URL, so a search can be bookmarked or sent to someone.
     var p = new URLSearchParams(location.search);
@@ -231,7 +266,7 @@
     }
     function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
     function loadChart() {
-      if (!chart) return;
+      if (!chart) { if (chartWanted) startChart(); return; }
       api('GET', '/ui/logs/histogram?' + params({ buckets: 60 })).then(function (h) {
         var cats = h.buckets.map(function (b) { return b.t; });
         var spanDays = (h.end - h.start) / 86400;
@@ -277,9 +312,11 @@
     $('lg-unzoom').addEventListener('click', function () { zoom = null; if (range.value === 'custom') range.value = '1h'; run(); });
     more.addEventListener('click', function () { loadPage(true); });
 
-    // Live tail: new messages that match the search appear at the top every 2 seconds.
-    var liveBtn = $('lg-live');
+    // Live tail: new messages that match the search appear at the top every 2 seconds. The
+    // list keeps the newest LIVE_MAX rows (older ones stay one search away).
+    var liveBtn = $('lg-live'), LIVE_MAX = 500;
     function tick() {
+      if (document.hidden) return;   // resumed by visibilitychange
       var u = params({ after: lastId }); u.delete('range'); u.delete('since'); u.delete('until');
       api('GET', '/ui/logs/tail?' + u).then(function (res) {
         if (res.items.length) {
@@ -288,11 +325,17 @@
           rows.insertAdjacentHTML('afterbegin', html);
           shown += res.items.length;
           $('lg-none').hidden = true;
-          while (rows.children.length > 1500) rows.lastElementChild.remove();
+          while (rows.children.length > LIVE_MAX) rows.removeChild(rows.lastElementChild);
         }
         lastId = res.last || lastId;
       }).catch(function () {}).then(function () { if (live) liveTimer = setTimeout(tick, 2000); });
     }
+    // A hidden tab stops tailing; it fetches what it missed (up to LIVE_MAX rows) when shown again.
+    document.addEventListener('visibilitychange', function () {
+      if (!live) return;
+      clearTimeout(liveTimer);
+      if (!document.hidden) tick();
+    });
     liveBtn.addEventListener('click', function () {
       live = !live;
       liveBtn.classList.toggle('on', live);
@@ -326,7 +369,7 @@
       if (p.get('app')) { ensureOption(appSel, p.get('app')); appSel.value = p.get('app'); }
       run();
     });
-    setInterval(loadSummary, 15000);
+    every(15000, loadSummary);
   }
 
   // =====================================================================================
@@ -529,7 +572,7 @@
       });
     });
     load(); loadNotify();
-    setInterval(load, 30000);
+    every(30000, load);
   }
 
   // =====================================================================================
@@ -585,7 +628,7 @@
     });
     function refresh() { loadSummary().then(function (s) { if (s) listener(s); }); senders(); }
     refresh();
-    setInterval(refresh, 15000);
+    every(15000, refresh);
   }
 
   if (page === 'logs') loadSummary();

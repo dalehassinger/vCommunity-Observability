@@ -30,7 +30,8 @@ from .indexer import embed_prefixes
 
 log = __import__("logging").getLogger("ask.rag")
 REPORTS = None   # app.reports.Reports, set by create_app; makes HTML reports for report questions
-from .ollama import Ollama, OllamaError
+from . import llm
+from .ollama import OllamaError
 
 RRF_K = 60
 # Balanced retrieval: a source's best section counts as a match (and gets a guaranteed slot)
@@ -65,7 +66,7 @@ def retrieve(db: DB, cfg: dict[str, Any], question: str, sources: list[str] | No
     (info["retrieval"]: how many sections were reserved, and from which sources)."""
     model = cfg["embed_model"]
     _, qprefix = embed_prefixes(model)
-    ollama = Ollama(cfg["ollama_url"])
+    ollama = llm.client(cfg)
     qvec = ollama.embed(model, [qprefix + question], keep_alive=cfg["keep_alive"])[0]
     pool = max(30, cfg["top_k"] * 4)
     match = fts_query(question)
@@ -607,7 +608,7 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
             msgs = build_messages(cfg, items, question, history)
         stats.setdefault("retrieval_ms", int((time.time() - t0) * 1000))   # saved, for the answer quality test
         options = {"temperature": cfg["temperature"], "num_ctx": cfg["num_ctx"]}
-        olla = Ollama(cfg["ollama_url"])
+        olla = llm.client(cfg)
         rounds = max(1, int(cfg.get("mcp_max_rounds") or 6)) if mcp_tools else 0
         ev_sum = ed_sum = 0
         for rnd in range(rounds + 1):

@@ -3,12 +3,14 @@
 {#
   vCenter-style inventory browser. Everything is rendered on the server from the
   module's SQLite tables (see module.yaml "queries"); selection and tabs are plain
-  links (?type=vm&name=UniFi&tab=summary), so it needs no JavaScript and works at
-  dark sites.
+  links (?type=vm&name=UniFi&tab=summary), so it works without JavaScript and at
+  dark sites. With JavaScript, a click swaps only the object pane (the tree, its
+  scroll position and open folders stay); see the script at the end.
+  The app's sidebar is hidden on wide screens (the tree takes its place, with a
+  link back to the dashboards); on a phone it is the usual menu drawer.
 #}
 {% block title %}vSphere Inventory · vCommunity-Observability{% endblock %}
 {% block layout_class %}inv-layout{% endblock %}
-{% block sidenav %}{% endblock %}
 
 {% block head %}
 <style>
@@ -18,6 +20,8 @@
   .inv-tree-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px;
     border-bottom: 1px solid var(--border); }
   .inv-tree-head a { font-size: 12px; }
+  .inv-layout > .sidenav { display: none; }
+  .inv-tree-head .inv-fold { display: none; background: none; border: 0; padding: 4px 0; font: inherit; font-size: 12px; color: var(--link, var(--primary)); cursor: pointer; }
   .inv-views { display: flex; gap: 4px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
   .inv-views span { display: inline-flex; padding: 6px 10px; border-bottom: 2px solid transparent; color: var(--subtle); }
   .inv-views span.on { border-bottom-color: var(--primary); color: var(--primary); }
@@ -54,7 +58,9 @@
     border-radius: 4px; box-shadow: var(--shadow); min-height: 220px; }
   .sum-card.wide { grid-column: span 2; }
   .sum-card h2 { display: flex; justify-content: space-between; margin: 0; padding: 14px 16px 6px; font-size: 15px; font-weight: 500; }
-  .sum-card h2::after { content: "⋮⋮"; color: var(--border); letter-spacing: -3px; font-size: 14px; }
+  /* The dotted mark copies the vSphere Client's summary cards (a design touch; here the cards don't move). */
+  .sum-card h2::after { content: "⋮⋮"; color: var(--border); letter-spacing: -3px; font-size: 14px; pointer-events: none; }
+  .inv-main.loading { opacity: .6; transition: opacity .15s .15s; }
   .sum-body { padding: 8px 16px 14px; flex: 1; }
   .sum-foot { padding: 10px 16px; border-top: 1px solid var(--border); font-size: 11px; font-weight: 600;
     letter-spacing: .06em; text-transform: uppercase; }
@@ -86,7 +92,11 @@
   .snap { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
   @media (max-width: 860px) {
     .inv-layout .content { flex-direction: column; }
+    .inv-layout > .sidenav { display: block; }
     .inv-tree { width: auto; height: auto; max-height: 45vh; position: static; border-right: 0; border-bottom: 1px solid var(--border); }
+    /* Phone: the tree folds behind its header (Show tree), so the selected object comes first. */
+    .inv-tree-head .inv-fold { display: inline; }
+    .inv-tree.folded > .inv-views, .inv-tree.folded > ul { display: none; }
     .inv-main { padding: 14px 16px 40px; }
     .sum-card.wide { grid-column: auto; }
   }
@@ -195,9 +205,19 @@
 {% block body %}
 {# ------------------------------------------------------------------ tree #}
 <aside class="inv-tree">
-  <div class="inv-tree-head"><b>Inventory</b><a href="/overview">← Dashboards</a></div>
+  <div class="inv-tree-head"><b>Inventory</b>
+    <button type="button" class="link-btn inv-fold" id="inv-fold" aria-expanded="true" aria-controls="inv-tree-list">Hide tree</button>
+    <a href="/overview" title="All dashboards">← Dashboards</a></div>
+  <script>
+    // On a phone the tree starts folded (Show tree opens it); runs before the tree is drawn.
+    if (window.matchMedia('(max-width: 860px)').matches) {
+      document.currentScript.closest('.inv-tree').classList.add('folded');
+      document.getElementById('inv-fold').setAttribute('aria-expanded', 'false');
+      document.getElementById('inv-fold').textContent = 'Show tree';
+    }
+  </script>
   <div class="inv-views"><span class="on" title="Hosts and Clusters">{{ icon('cluster') }}</span><span title="VMs (from the tree)">{{ icon('vm') }}</span><span title="Storage">{{ icon('disk') }}</span><span title="Networking">{{ icon('net') }}</span></div>
-  <ul>
+  <ul id="inv-tree-list">
     {% for root in vcenters %}
     {% set root_hosts = hosts|selectattr('vcenter', 'equalto', root.vcenter)|list %}
     {% set root_vms = vms|selectattr('vcenter', 'equalto', root.vcenter)|list %}
@@ -472,4 +492,58 @@ uptime {{ v.uptime_days }} days{% else %}Powered off{% endif %}</div>
   {% endif %}
   {% endif %}
 </section>
+<script>
+(function () {
+  'use strict';
+  var tree = document.querySelector('.inv-tree'), fold = document.getElementById('inv-fold');
+  fold.addEventListener('click', function () {
+    var f = tree.classList.toggle('folded');
+    fold.setAttribute('aria-expanded', f ? 'false' : 'true');
+    fold.textContent = f ? 'Show tree' : 'Hide tree';
+  });
+  // Selecting an object or a tab swaps only the object pane, instead of loading the whole page
+  // (and rebuilding the tree) again. The address bar, Back and Forward work as before, and any
+  // problem falls back to a normal page load.
+  if (!window.fetch || !window.DOMParser || !history.pushState) return;
+  function same(a) { return a.origin === location.origin && a.pathname === location.pathname && a.search.indexOf('type=') >= 0; }
+  async function show(url, push) {
+    var main = document.querySelector('.inv-main');
+    main.classList.add('loading');
+    try {
+      var res = await fetch(url, { headers: { 'Accept': 'text/html' } });
+      if (!res.ok) throw new Error(res.statusText);
+      var doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+      var next = doc.querySelector('.inv-main');
+      if (!next) throw new Error('no object pane');
+      main.replaceWith(document.adoptNode(next));
+      document.title = doc.title;
+      // Selection marks in the tree, from the new page's tree.
+      var sel = doc.querySelector('.inv-tree .node.sel');
+      tree.querySelectorAll('.node.sel').forEach(function (n) { n.classList.remove('sel'); });
+      if (sel && sel.getAttribute('href')) {
+        var mine = tree.querySelector('.node[href="' + CSS.escape(sel.getAttribute('href')) + '"]');
+        if (mine) {
+          mine.classList.add('sel');
+          for (var d = mine.closest('details'); d; d = d.parentElement.closest('details')) d.open = true;
+        }
+      }
+      if (push) history.pushState({ inv: true }, '', url);
+      if (push) window.scrollTo(0, 0);
+      var h = document.querySelector('.inv-main h1');
+      if (h) { h.setAttribute('tabindex', '-1'); h.focus({ preventScroll: true }); }
+      if (window.matchMedia('(max-width: 860px)').matches && !tree.classList.contains('folded')) fold.click();
+    } catch (e) {
+      location.href = url;
+    }
+  }
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest('.inv-tree a.node[href], .inv-main .tabs a[href], .inv-main a.node[href]');
+    if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || a.target) return;
+    if (!same(a)) return;
+    e.preventDefault();
+    show(a.href, true);
+  });
+  window.addEventListener('popstate', function () { show(location.href, false); });
+})();
+</script>
 {% endblock %}

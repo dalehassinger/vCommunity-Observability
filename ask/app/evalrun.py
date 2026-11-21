@@ -28,7 +28,8 @@ from typing import Any, Callable
 
 from . import rag
 from .db import DB
-from .ollama import Ollama, OllamaError
+from . import llm
+from .ollama import OllamaError
 
 log = logging.getLogger("ask.eval")
 
@@ -177,7 +178,7 @@ class EvalRunner:
             retrieval_ms = int((time.time() - t0) * 1000)
             msgs = rag.build_messages(cfg, items, item["question"], history)
             content, first, stats = "", None, {}
-            olla = Ollama(cfg["ollama_url"])
+            olla = llm.client(cfg)
             for obj in olla.chat_stream(cfg["chat_model"], msgs, think=cfg["think"], keep_alive=cfg["keep_alive"],
                                         options={"temperature": cfg["temperature"], "num_ctx": cfg["num_ctx"]}):
                 if self._stop.is_set():
@@ -327,7 +328,7 @@ def _avg(values: list[Any]) -> float | None:
     return round(sum(vals) / len(vals), 2) if vals else None
 
 
-def judge_answers(olla: Ollama, cfg: dict[str, Any], question: str, items: list[dict[str, Any]],
+def judge_answers(olla: "llm.Models", cfg: dict[str, Any], question: str, items: list[dict[str, Any]],
                   old: str, new: str, limit: int = 12000) -> dict[str, Any]:
     """Ask the chat model which answer is better. The two answers go in random order so the
     model's habit of preferring the first (or second) one doesn't decide."""

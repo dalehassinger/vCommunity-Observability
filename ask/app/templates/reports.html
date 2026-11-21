@@ -13,7 +13,7 @@
   </div>
 </div>
 {% include "_token.html" %}
-<div class="card">
+<div class="card reports-card">
   {% if reports %}
   <div class="reports-bar">
     <span class="subtle" id="r-count">{{ reports | length }} report{{ '' if reports | length == 1 else 's' }}</span>
@@ -63,8 +63,9 @@
     if (all) { all.checked = n > 0 && n === picks.length; all.indeterminate = n > 0 && n < picks.length; }
     picks.forEach(function (b) { b.closest('tr').classList.toggle('picked', b.checked); });
   }
-  picks.forEach(function (b, i) {
+  picks.forEach(function (b) {
     b.addEventListener('click', function (e) {
+      var i = picks.indexOf(b);
       if (e.shiftKey && last >= 0) {
         var lo = Math.min(last, i), hi = Math.max(last, i);
         for (var k = lo; k <= hi; k++) picks[k].checked = b.checked;
@@ -73,13 +74,25 @@
     });
   });
   if (all) all.addEventListener('change', function () { picks.forEach(function (b) { b.checked = all.checked; }); sync(); });
+  // Deleted reports leave the table in place (no page reload); the last one shows the empty card.
+  function dropRows(ids) {
+    picks = picks.filter(function (b) {
+      if (ids.indexOf(b.value) < 0) return true;
+      b.closest('tr').remove(); return false;
+    });
+    last = -1;
+    var cnt = document.getElementById('r-count');
+    if (cnt) cnt.textContent = picks.length + ' report' + (picks.length === 1 ? '' : 's');
+    if (!picks.length) AskAdmin.refresh('.reports-card');
+    sync();
+  }
   async function bulk(body, question) {
     if (!(await vcoConfirm(question, { ok: 'Delete', danger: true }))) return;
     var m = document.getElementById('r-msg');
     try {
       var r = await AskAdmin.post('/ui/reports/delete', body);
       m.textContent = 'Deleted ' + r.deleted + (r.deleted === 1 ? ' report.' : ' reports.'); m.className = 'form-msg ok';
-      setTimeout(function () { location.reload(); }, 500);
+      dropRows(body.all ? picks.map(function (b) { return b.value; }) : body.ids);
     } catch (e) { m.textContent = e.message; m.className = 'form-msg bad'; }
   }
   if (delSel) delSel.addEventListener('click', function () {
@@ -93,7 +106,7 @@
     b.onclick = async function () {
       if (!(await vcoConfirm('Delete the report "' + b.dataset.title + '"?', { ok: 'Delete', danger: true }))) return;
       var m = document.getElementById('r-msg');
-      try { await AskAdmin.post('/ui/reports/' + b.dataset.rdel + '/delete', {}); location.reload(); }
+      try { await AskAdmin.post('/ui/reports/' + b.dataset.rdel + '/delete', {}); dropRows([b.dataset.rdel]); }
       catch (e) { m.textContent = e.message; m.className = 'form-msg bad'; }
     };
   });

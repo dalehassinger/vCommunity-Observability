@@ -6,6 +6,8 @@ in ask.db (table perf_samples):
   container  the vco-ask container itself, read from its own cgroup files (CPU, memory,
              disk and network I/O); no Docker socket is needed
   ollama     what Ollama has loaded (/api/ps): models, memory, GPU share, context size
+  lmstudio   what LM Studio has loaded (/api/v0/models) when it is turned on, plus the host
+             agent's CPU and memory of LM Studio's processes
   vco        the vCommunity Observability container (dashboards), from its
              /perf/container endpoint (ASK_VCO_INTERNAL_URL, default http://vco:8080);
              "running": false when it doesn't answer
@@ -28,6 +30,7 @@ from typing import Any, Callable
 
 import requests
 
+from . import llm
 from .db import DB
 
 log = logging.getLogger("ask.perf")
@@ -161,6 +164,29 @@ def ollama_view(url: str) -> dict[str, Any]:
     return out
 
 
+def _host_share(p: dict[str, Any] | None) -> float | None:
+    if not p:
+        return None
+    return p.get("cpu_pct_of_host") if p.get("cpu_pct_of_host") is not None else p.get("cpu_pct")
+
+
+def lmstudio_view(cfg: dict[str, Any], host: dict[str, Any] | None = None) -> dict[str, Any]:
+    """What LM Studio has loaded (its /api/v0/models, state loaded). Its API has no memory or GPU
+    figures, so memory comes from the host agent (RSS of LM Studio's processes: the app, its
+    helpers and model engines) when it runs; a model size LM Studio reports wins."""
+    c = llm.LMStudio(cfg.get("lmstudio_url") or "", timeout=3)
+    try:
+        out: dict[str, Any] = {"ok": True, "url": c.url, "models": c.loaded()}
+    except (requests.RequestException, ValueError) as e:
+        out = {"ok": False, "url": c.url, "models": [], "error": str(e)[:200]}
+    procs = (host or {}).get("lmstudio") if (host or {}).get("ok") else None
+    sizes = [m["size"] for m in out["models"] if m.get("size")]
+    out["procs"] = procs
+    out["mem"] = sum(sizes) if sizes else (procs or {}).get("rss")
+    out["mem_from"] = "models" if sizes else ("processes" if procs else None)
+    return out
+
+
 def host_view(url: str, token: str) -> dict[str, Any] | None:
     if not url:
         return None
@@ -194,9 +220,12 @@ class Sampler:
             cfg = self.settings()
             t = time.time()
             raw = container_raw()
+            host = host_view(cfg.get("agent_url") or "", os.environ.get("ASK_AGENT_TOKEN", ""))
             s = {"ts": t, "container": container_view(raw, self.prev, t - self.prev_t), "vco": self.vco_view(t),
-                 "ollama": ollama_view(cfg["ollama_url"].rstrip("/")),
-                 "host": host_view(cfg.get("agent_url") or "", os.environ.get("ASK_AGENT_TOKEN", ""))}
+                 "ollama": (ollama_view(llm.reach(cfg["ollama_url"])) if cfg.get("ollama_enabled", True)
+                            else {"ok": False, "off": True, "models": [], "error": "Ollama is turned off in Settings."}),
+                 "lmstudio": lmstudio_view(cfg, host) if cfg.get("lmstudio_enabled") else None,
+                 "host": host}
             self.prev, self.prev_t, self.last = raw, t, s
             try:
                 with self.db.conn() as c:
@@ -238,6 +267,7 @@ class Sampler:
                         "c_rx": s["container"].get("net_rx_bps"), "c_tx": s["container"].get("net_tx_bps"),
                         "c_rd": s["container"].get("io_read_bps"), "c_wr": s["container"].get("io_write_bps"),
                         "o_mem": (s.get("ollama") or {}).get("mem"),
+                        "lm_mem": (s.get("lmstudio") or {}).get("mem"),
                         "v_cpu": (s.get("vco") or {}).get("cpu_pct"), "v_mem": (s.get("vco") or {}).get("mem"),
                         "v_rx": (s.get("vco") or {}).get("net_rx_bps"), "v_tx": (s.get("vco") or {}).get("net_tx_bps"),
                         "v_rd": (s.get("vco") or {}).get("io_read_bps"), "v_wr": (s.get("vco") or {}).get("io_write_bps"),
@@ -249,7 +279,10 @@ class Sampler:
                         "h_gpu": (h.get("gpu") or {}).get("pct") if h.get("ok") else None,
                         "h_mem": (h.get("memory") or {}).get("used") if h.get("ok") else None,
                         "h_press": (h.get("memory") or {}).get("pressure_pct") if h.get("ok") else None,
-                        "h_ollama_cpu": (h.get("ollama") or {}).get("cpu_pct") if h.get("ok") else None,
+                        # Share of the whole host (0-100, like the host CPU line); older agents only had
+                        # cpu_pct, where one core = 100.
+                        "h_ollama_cpu": _host_share(h.get("ollama")) if h.get("ok") else None,
+                        "h_lms_cpu": _host_share(h.get("lmstudio")) if h.get("ok") else None,
                         "h_power": (h.get("power") or {}).get("total_w") if h.get("ok") else None,
                         "h_temp": (h.get("temp") or {}).get("gpu_c") if h.get("ok") else None})
         return out

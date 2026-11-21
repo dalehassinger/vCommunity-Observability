@@ -585,13 +585,28 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
             for m in core.modules.values() if m.available for d in m.dashboards
         ]
 
-    def render_widget(mod: Module, w: dict[str, Any]) -> dict[str, Any]:
-        out = {**w, "rows": [], "error": None}
+    # Dashboard tables and bar lists show this many rows (module.yaml `limit:` per widget),
+    # with a "Show all" link (?all=<widget number>) up to WIDGET_ROWS_MAX. Keeps the page small
+    # in a big environment, where SELECT * of VMs or snapshots can be thousands of rows.
+    WIDGET_ROWS = {"table": 50, "bar": 25}
+    WIDGET_ROWS_MAX = 5000
+
+    def render_widget(mod: Module, w: dict[str, Any], show_all: bool = False) -> dict[str, Any]:
+        out = {**w, "rows": [], "error": None, "more": False, "total": None}
+        cap = None
+        if w.get("type") in WIDGET_ROWS:
+            cap = WIDGET_ROWS_MAX if show_all else int(w.get("limit") or WIDGET_ROWS[w["type"]])
         try:
-            out["rows"] = core.storage.query(mod.name, w["query"])
+            rows = core.storage.query(mod.name, w["query"], limit=None if cap is None else cap + 1)
         except Exception as exc:  # show the problem on the tile, keep the page up
             out["error"] = str(exc)
             return out
+        if cap is not None and len(rows) > cap:
+            rows = rows[:cap]
+            out["more"] = True
+            out["total"] = core.storage.count(mod.name, w["query"])
+        out["rows"] = rows
+        out["shown_all"] = show_all
         warn, crit = w.get("warn"), w.get("crit")
 
         def level(v: Any) -> str:
@@ -665,7 +680,8 @@ def create_app(cfg: Config | None = None, start_scheduler: bool = True) -> FastA
                 "last_collected": max((r["finished_at"] for r in mod_runs if r["status"] == "ok"), default=None),
                 "run_errors": [r for r in mod_runs if r["status"] != "ok"],
             })
-        widgets = [render_widget(mod, w) for w in dash.get("widgets", [])]
+        show = request.query_params.get("all", "")
+        widgets = [render_widget(mod, w, show_all=str(i) == show) for i, w in enumerate(dash.get("widgets", []))]
         mod_runs = [runs[(mod.name, c.name)] for c in mod.collectors if (mod.name, c.name) in runs]
         return templates.TemplateResponse(request, "dashboard.html", {
             "nav": nav(), "mod": mod, "dash": dash, "widgets": widgets, "mock": core.cfg.mock,

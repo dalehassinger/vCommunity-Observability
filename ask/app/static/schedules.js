@@ -23,12 +23,12 @@
     freq.addEventListener('change', showFreq);
     showFreq();
 
-    // Chat models from Ollama.
+    // Chat models from Ollama and LM Studio (whichever are on).
     var model = $('#f-model');
-    fetch('/ui/ollama', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+    fetch('/ui/models', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
       var cur = model.dataset.current, found = !cur;
       (d.models || []).filter(function (m) { return m.kind === 'chat'; }).forEach(function (m) {
-        var o = el('option', null, m.name + ((m.capabilities || []).indexOf('tools') < 0 ? ' (no tools)' : ''));
+        var o = el('option', null, (m.label || m.name) + (m.provider === 'lmstudio' ? ' · LM Studio' : '') + ((m.capabilities || []).indexOf('tools') < 0 ? ' (no tools)' : ''));
         o.value = m.name;
         if (m.name === cur) { o.selected = true; found = true; }
         model.appendChild(o);
@@ -98,8 +98,24 @@
   }
 
   // -- list ----------------------------------------------------------------------
-  $$('[data-run]').forEach(function (b) {
-    b.addEventListener('click', async function () {
+  // Clicks and switches in the list are handled once on the card (delegated), so they keep
+  // working after a row is swapped in place by AskAdmin.refresh (no page reloads).
+  var list = $('#sched-list');
+  function rowSel(id) { return '#sched-list tr[data-id="' + CSS.escape(String(id)) + '"]'; }
+  if (list) list.addEventListener('change', async function (e) {
+    var i = e.target.closest('[data-enable]');
+    if (!i) return;
+    try {
+      await AskAdmin.post('/ui/schedules/' + i.dataset.enable + '/enabled', { on: i.checked });
+      AskAdmin.refresh(rowSel(i.dataset.enable));   // the row's "Next" time changes
+    }
+    catch (err) { i.checked = !i.checked; vcoAlert(err.message); }
+  });
+  var LABELS = { ok: 'sent', unchanged: 'no change', not_sent: 'not sent', error: 'failed', running: 'running' };
+  if (list) list.addEventListener('click', async function (e) {
+    var b = e.target.closest('[data-run],[data-del],[data-history]');
+    if (!b) return;
+    if (b.dataset.run) {
       b.disabled = true;
       try {
         await AskAdmin.post('/ui/schedules/' + b.dataset.run + '/run');
@@ -107,25 +123,22 @@
         cell.innerHTML = '<span class="badge badge-info">running…</span>';
         watch();
       } catch (err) { b.disabled = false; vcoAlert(err.message); }
-    });
-  });
-  $$('[data-enable]').forEach(function (i) {
-    i.addEventListener('change', async function () {
-      try { await AskAdmin.post('/ui/schedules/' + i.dataset.enable + '/enabled', { on: i.checked }); location.reload(); }
-      catch (err) { i.checked = !i.checked; vcoAlert(err.message); }
-    });
-  });
-  $$('[data-del]').forEach(function (b) {
-    b.addEventListener('click', async function () {
+      return;
+    }
+    if (b.dataset.del) {
       if (!(await vcoConfirm('Delete the scheduled prompt "' + b.dataset.name + '" and its run history? The chats it made are kept.',
         { ok: 'Delete', danger: true }))) return;
-      try { await AskAdmin.post('/ui/schedules/' + b.dataset.del + '/delete'); location.reload(); }
+      try {
+        await AskAdmin.post('/ui/schedules/' + b.dataset.del + '/delete');
+        var tr = b.closest('tr'), hist = document.getElementById('hist-' + b.dataset.del);
+        if (hist) hist.parentNode.removeChild(hist);
+        tr.parentNode.removeChild(tr);
+        if (!list.querySelector('tr[data-id]')) AskAdmin.refresh('#sched-list');   // the empty card
+      }
       catch (err) { vcoAlert(err.message); }
-    });
-  });
-  var LABELS = { ok: 'sent', unchanged: 'no change', not_sent: 'not sent', error: 'failed', running: 'running' };
-  $$('[data-history]').forEach(function (b) {
-    b.addEventListener('click', async function () {
+      return;
+    }
+    if (b.dataset.history) {   // History: the newest runs, in a row under the prompt
       var row = document.getElementById('hist-' + b.dataset.history);
       if (!row.hidden) { row.hidden = true; b.setAttribute('aria-expanded', 'false'); return; }
       var cell = row.firstElementChild;
@@ -154,21 +167,21 @@
       t.appendChild(tb);
       var wrap = el('div', 'table-wrap'); wrap.appendChild(t);
       cell.appendChild(wrap);
-    });
+    }
   });
 
-  // While something runs, refresh the list when it ends.
+  // While something runs, update the rows when it ends (in place, so an open form keeps its changes).
   var timer = 0;
   function watch() {
     if (timer) return;
     timer = setInterval(async function () {
+      if (document.hidden) return;
       try {
         var d = await (await fetch('/ui/schedules', { cache: 'no-store' })).json();
         if (!d.items.some(function (s) { return s.running; })) {
           clearInterval(timer); timer = 0;
-          // Don't reload over an open form with unsaved changes.
-          if (!form) location.reload();
-          else document.querySelectorAll('.sched-last .badge-info').forEach(function (b) { b.textContent = 'finished: reload to see'; });
+          var ids = Array.prototype.map.call(document.querySelectorAll('.sched-last .badge-info'), function (x) { return x.closest('tr').dataset.id; });
+          if (ids.length) AskAdmin.refresh(ids.map(rowSel));
         }
       } catch (e) {}
     }, 3000);

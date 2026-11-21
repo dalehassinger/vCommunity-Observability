@@ -10,6 +10,8 @@
   --m-sub: #6e6e73;
   --m-accent: #007aff;      /* system blue                   */
   --m-accent-hover: #0068d9;
+  --m-fill: #0064d1;        /* accent behind white text: 5.6:1 (system blue #007aff is only 4.0:1) */
+  --m-fill-hover: #0058b8;
   --m-green: #34c759;
   --m-field: #ffffff;
   --m-field-border: rgba(60, 60, 67, .22);
@@ -85,9 +87,9 @@
 /* Buttons: push buttons, no capitals */
 .mac-ui .btn { text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 500; border-radius: 7px;
   padding: 5px 14px; min-height: 28px; transition: background-color .15s ease, filter .15s ease; }
-.mac-ui .btn-primary { background: var(--m-accent); border: 0; color: #fff;
+.mac-ui .btn-primary { background: var(--m-fill); border: 0; color: #fff;
   box-shadow: 0 .5px 1.5px rgba(0, 0, 0, .2), inset 0 .5px 0 rgba(255, 255, 255, .25); }
-.mac-ui .btn-primary:hover { background: var(--m-accent-hover); }
+.mac-ui .btn-primary:hover { background: var(--m-fill-hover); }
 [data-theme="dark"] .mac-ui .btn-primary { color: #fff; }
 .mac-ui .btn-outline, .mac-ui .btn-secondary, .mac-ui .btn:not(.btn-primary):not(.btn-danger) {
   background: var(--m-bezel); color: var(--m-text); border: .5px solid var(--m-bezel-border); box-shadow: 0 .5px 1.5px rgba(0, 0, 0, .12); }
@@ -257,7 +259,7 @@ main.content:has(> .mac-ui), main.content.mac-ui { background: #f2f2f7; }
 .mac-ui .example { background: var(--m-group); border: 0; border-radius: 12px; box-shadow: var(--m-shadow); color: var(--m-text);
   font-family: inherit; transition: box-shadow .15s ease, transform .15s ease; }
 .mac-ui .example:hover { background: var(--m-group); box-shadow: var(--m-shadow), 0 4px 14px rgba(0, 0, 0, .08); transform: translateY(-1px); }
-.mac-ui .msg.user .bubble { background: var(--m-accent); color: #fff; border-radius: 18px 18px 4px 18px; padding: 9px 14px; }
+.mac-ui .msg.user .bubble { background: var(--m-fill); color: #fff; border-radius: 18px 18px 4px 18px; padding: 9px 14px; }
 [data-theme="dark"] .mac-ui .msg.user .bubble { color: #fff; }
 .mac-ui .answer { background: var(--m-group); border: 0; border-radius: 16px; box-shadow: var(--m-shadow); }
 .mac-ui .msg.failed .answer { box-shadow: var(--m-shadow), inset 3px 0 0 var(--m-red); }
@@ -324,15 +326,25 @@ main.content:has(> .mac-ui), main.content.mac-ui { background: #f2f2f7; }
 :root, [data-theme="light"] {
   --header-bg: rgba(246, 246, 248, .86); --header-fg: #1d1d1f; --header-accent: #007aff;
   --nav-bg: #ececf0; --nav-fg: #1d1d1f; --nav-muted: #86868b; --nav-active-bg: rgba(0, 0, 0, .06);
+  --nav-active-fill: #0064d1; --header-solid: #f6f6f8;
 }
 [data-theme="dark"] {
   --header-bg: rgba(44, 44, 46, .86); --header-fg: #f5f5f7; --header-accent: #0a84ff;
   --nav-bg: #252527; --nav-fg: #f5f5f7; --nav-muted: #8e8e93; --nav-active-bg: rgba(255, 255, 255, .07);
+  --nav-active-fill: #0064d1; --header-solid: #2c2c2e;
 }
 .app-header { border-bottom: .5px solid rgba(0, 0, 0, .14); color: var(--header-fg);
   -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", system-ui, sans-serif; }
 [data-theme="dark"] .app-header { border-bottom-color: rgba(0, 0, 0, .6); box-shadow: inset 0 -.5px 0 rgba(255, 255, 255, .06); }
+/* The Ask chat and the Logs page scroll all the time (a streaming answer, the live tail), and a blurred
+   sticky bar is composited again on every scroll step: those two pages get a solid bar instead. */
+.chat-page .app-header, .logs-page .app-header { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--header-solid); }
+
+/* Light / dark button: a moon in the light theme (press for dark), a sun in the dark theme. */
+.hdr-theme .theme-sun { display: none; }
+[data-theme="dark"] .hdr-theme .theme-sun { display: block; }
+[data-theme="dark"] .hdr-theme .theme-moon { display: none; }
 .brand-name { font-size: 15px; font-weight: 400; letter-spacing: -.01em; }
 .brand-name b { font-weight: 700; }
 .brand .logo { color: var(--header-accent); }
@@ -352,7 +364,7 @@ main.content:has(> .mac-ui), main.content.mac-ui { background: #f2f2f7; }
 .app-switch-item:focus-visible, .hdr-menu-btn:focus-visible, .hdr-seg:focus-visible { outline: 2px solid var(--header-accent); }
 .hdr-menu-list { border-radius: 10px; padding: 5px; -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
   box-shadow: 0 12px 34px rgba(0, 0, 0, .22), 0 0 0 .5px rgba(0, 0, 0, .12); }
-.hdr-menu-list a:hover, .hdr-menu-list a:focus-visible { background: var(--header-accent); }
+.hdr-menu-list a:hover, .hdr-menu-list a:focus-visible { background: var(--nav-active-fill); }
 
 /* Sidebar: grey Mac source list, rounded selection in the accent colour, icons in the accent colour */
 .sidenav { background: var(--nav-bg); border-right: .5px solid rgba(0, 0, 0, .1); padding: 8px 0 24px;
@@ -365,7 +377,8 @@ main.content:has(> .mac-ui), main.content.mac-ui { background: #f2f2f7; }
 .nav-link.sub { padding-left: 28px; }
 .nav-link svg { color: var(--header-accent); flex: none; }
 .nav-link:hover { background: var(--nav-active-bg); }
-.nav-link.active, .nav-link.active:hover { background: var(--header-accent); color: #fff; font-weight: 500; border-left: 0; }
+/* Selected row: a darker blue than the accent so its white text passes WCAG AA (4.5:1) in both themes. */
+.nav-link.active, .nav-link.active:hover { background: var(--nav-active-fill); color: #fff; font-weight: 500; border-left: 0; }
 .nav-link.active svg { color: #fff; }
 .nav-link.new-chat { color: var(--header-accent); font-weight: 500; }
 .nav-link.chat-link { padding-top: 5px; padding-bottom: 5px; font-size: 13px; }
@@ -380,4 +393,4 @@ main.content:has(> .mac-ui), main.content.mac-ui { background: #f2f2f7; }
   box-shadow: 0 12px 34px rgba(0, 0, 0, .5), 0 0 0 .5px rgba(0, 0, 0, .6); }
 .hdr-menu-list a { color: #1d1d1f; font-size: 13px; padding-top: 4px; padding-bottom: 4px; border-radius: 6px; }
 [data-theme="dark"] .hdr-menu-list a { color: #f5f5f7; }
-.hdr-menu-list a:hover, .hdr-menu-list a:focus-visible { background: var(--header-accent); color: #fff; }
+.hdr-menu-list a:hover, .hdr-menu-list a:focus-visible { background: var(--nav-active-fill); color: #fff; }

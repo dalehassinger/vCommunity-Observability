@@ -52,9 +52,18 @@
         level(m.pressure_pct != null ? m.pressure_pct : m.used_pct, 70, 85)));
     }
     var gpuShare = o.models && o.models.length ? Math.round(avg(o.models.map(function (x) { return x.gpu_pct; }))) : null;
-    box.appendChild(kpi('Ollama', o.ok ? (o.models.length + (o.models.length === 1 ? ' model' : ' models')) : 'Offline',
+    if (!o.off) box.appendChild(kpi('Ollama', o.ok ? (o.models.length + (o.models.length === 1 ? ' model' : ' models')) : 'Offline',
       o.ok ? (o.models.length ? bytes(o.mem) + ' loaded · ' + gpuShare + '% on GPU' : 'Nothing loaded · v' + (o.version || '?')) : (o.error || ''),
       !o.ok ? 'crit' : gpuShare != null && gpuShare < 100 ? 'warn' : 'ok'));
+    var ls = n.lmstudio;
+    if (ls) {
+      var lp = ls.procs, detail = [];
+      if (ls.mem) detail.push(bytes(ls.mem) + (ls.mem_from === 'processes' ? ' in use' : ' loaded'));
+      if (lp) detail.push((lp.cpu_pct_of_host != null ? lp.cpu_pct_of_host + '% of host CPU' : lp.cpu_pct + '% CPU'));
+      if (!detail.length && ls.ok) detail.push(ls.models.length ? ls.models.map(function (m) { return m.name; }).join(', ') : 'Nothing loaded');
+      box.appendChild(kpi('LM Studio', ls.ok ? (ls.models.length + (ls.models.length === 1 ? ' model' : ' models')) : 'Offline',
+        ls.ok ? detail.join(' · ') : (ls.error || ''), ls.ok ? 'ok' : 'crit'));
+    }
     var tps = avg(recent.map(function (a) { return a.tok_s; })), secs = avg(recent.map(function (a) { return a.seconds; }));
     box.appendChild(kpi('Answer speed', tps == null ? '–' : tps.toFixed(1) + ' tok/s',
       recent.length ? 'last ' + recent.length + ' answers · ' + (secs == null ? '?' : secs.toFixed(1)) + ' s each' : 'No answers yet', tps == null ? '' : tps < 5 ? 'warn' : 'ok'));
@@ -125,12 +134,18 @@
     b = base();
     b.yAxis = b._axis('%', '{value}', { min: 0, max: 100 });
     b.series = [line('CPU', series('h_cpu'), 0, true), line('GPU', series('h_gpu')), line('Ollama CPU', series('h_ollama_cpu'))];
+    // Ollama and LM Studio lines are their processes' share of the whole host (all cores = 100%).
+    // LM Studio's lines only once it has been sampled (turned on, or its processes seen by the agent).
+    // LM Studio's lines whenever it is turned on (empty until the host agent v0.3.0+ reports it), or while its history has data.
+    var lmOn = !!data.now.lmstudio;
+    if (lmOn || hasData(['lm_mem']) || data.history.some(function (s) { return s.h_lms_cpu > 0; })) b.series.push(line('LM Studio CPU', series('h_lms_cpu')));
     draw('host-load', b, hasData(['h_cpu', 'h_gpu']) ? null : 'No host agent data yet.');
     // Host memory
     b = base();
     b.yAxis = [b._axis('GB', '{value}', { min: 0 }), b._axis('pressure %', '{value}', { min: 0, max: 100, splitLine: { show: false } })];
     b.series = [line('Used', series('h_mem', GB), 0, true), line('Ollama models', series('o_mem', GB)), line('Pressure', series('h_press'), 1)];
-    draw('host-mem', b, hasData(['h_mem', 'o_mem']) ? null : 'No host agent data yet.');
+    if (lmOn || hasData(['lm_mem'])) b.series.splice(2, 0, line('LM Studio', series('lm_mem', GB)));
+    draw('host-mem', b, hasData(['h_mem', 'o_mem', 'lm_mem']) ? null : 'No host agent data yet.');
     // Answers
     var ans = data.answers;
     b = base();
@@ -197,8 +212,22 @@
     return t;
   }
   function renderOllama() {
-    var box = document.getElementById('perf-ollama'), o = data.now.ollama || {};
+    var box = document.getElementById('perf-ollama'), o = data.now.ollama || {}, ls = data.now.lmstudio;
     box.innerHTML = '';
+    if (ls) {
+      // LM Studio (when turned on): its loaded models. Its API has no memory or GPU figures; the
+      // host agent's numbers for LM Studio's processes are shown under the table when it runs.
+      box.appendChild(el('h3', 'perf-sub', 'LM Studio'));
+      if (!ls.ok) box.appendChild(el('p', 'subtle', 'LM Studio did not answer at ' + (ls.url || '?') + ': ' + (ls.error || 'unknown error')));
+      else if (!ls.models.length) box.appendChild(el('p', null, 'No model is loaded right now. LM Studio loads one with the next question.'));
+      else box.appendChild(table(['Model', 'Type', 'Quantization', 'Context', 'Max context'], ls.models.map(function (m) {
+        return [m.name || '?', m.type || '–', m.quant || '–', m.context ? String(m.context) : '–', m.max_context ? String(m.max_context) : '–'];
+      })));
+      if (ls.procs) box.appendChild(el('p', 'subtle', 'LM Studio processes (app, helpers and model engines): ' + ls.procs.processes + ' · ' + ls.procs.cpu_pct + '% CPU (one core = 100%) · ' + bytes(ls.procs.rss) + ' memory.'));
+      else box.appendChild(el('p', 'subtle', 'Install the host agent to see LM Studio\'s CPU and memory (LM Studio\'s API has no memory or GPU figures).'));
+      box.appendChild(el('h3', 'perf-sub', 'Ollama'));
+    }
+    if (o.off) { box.appendChild(el('p', 'subtle', 'Ollama is turned off in Settings.')); return; }
     if (!o.ok) { box.appendChild(el('p', 'subtle', 'Ollama did not answer: ' + (o.error || 'unknown error'))); return; }
     box.appendChild(el('p', 'subtle', 'Version ' + (o.version || '?') + ' · chat model ' + data.chat_model + '. A GPU share under 100% means part of the model runs on the CPU (much slower): use a smaller model or a smaller Model context.'));
     if (!o.models.length) { box.appendChild(el('p', null, 'No model is loaded right now. Ollama loads one with the next question.')); return; }
@@ -220,6 +249,7 @@
       ['Memory pressure', pct(m.pressure_pct)], ['Swap', bytes(m.swap_used) + ' of ' + bytes(m.swap_total)],
       ['GPU', h.gpu ? pct(h.gpu.pct) + (h.gpu.mem_used != null ? ' · ' + bytes(h.gpu.mem_used) + ' in use' : '') : 'not reported'],
       ['Ollama processes', (h.ollama ? h.ollama.processes + ' · ' + h.ollama.cpu_pct + '% CPU (one core = 100%) · ' + bytes(h.ollama.rss) : '–')],
+      ['LM Studio processes', (h.lmstudio ? h.lmstudio.processes + ' · ' + h.lmstudio.cpu_pct + '% CPU (one core = 100%) · ' + bytes(h.lmstudio.rss) : 'Agent v0.3.0 or later needed')],
       ['Disk (' + (d.path || '/') + ')', bytes(d.free) + ' free of ' + bytes(d.total)],
       ['Network', h.net ? bytes(h.net.rx_bps) + '/s in · ' + bytes(h.net.tx_bps) + '/s out' : '–'],
       ['Power and temperature', h.power && h.power.total_w != null ? h.power.total_w.toFixed(1) + ' W' + (h.temp && h.temp.gpu_c != null ? ' · GPU ' + h.temp.gpu_c.toFixed(0) + ' °C · CPU ' + (h.temp.cpu_c || 0).toFixed(0) + ' °C' : '') : 'Install macmon for these (brew install macmon)'],

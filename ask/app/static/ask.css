@@ -36,9 +36,14 @@ body { height: auto; min-height: 100%; }
 .saved-edit { flex: none; border: 0; background: none; color: var(--primary); font-size: 12px; padding: 0 10px; cursor: pointer; border-radius: 4px; }
 .saved-edit:hover, .saved-edit:focus-visible { background: var(--hover, rgba(0,114,163,.08)); outline: none; }
 .msg.user { flex-wrap: wrap; }
-.msg.user .save-prompt { flex-basis: 100%; text-align: right; font-size: 12px; margin-top: -6px; opacity: 0; transition: opacity .15s; }
-.msg.user:hover .save-prompt, .msg.user .save-prompt:focus-visible { opacity: 1; }
-@media (hover: none) { .msg.user .save-prompt { opacity: 1; } }
+/* Save prompt: always shown (mouse users had to find it by hovering), quiet until pointed at. */
+.msg.user .save-prompt { flex-basis: 100%; text-align: right; font-size: 12px; margin-top: -6px; color: var(--subtle); }
+.msg.user .save-prompt::before { content: ""; display: inline-block; vertical-align: -1px; width: 9px; height: 11px; margin-right: 5px; background: currentColor;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 72%, 0 100%); }
+.msg.user .save-prompt:hover, .msg.user .save-prompt:focus-visible { color: var(--link); }
+/* A saved answer as the server painted it (plain text) until ask.js turns it into markdown. */
+.md.md-plain { white-space: pre-wrap; }
+.msg.assistant.pending .answer-stats:empty { display: none; }
 .saved-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
 .saved-bar-end { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 .saved-search { font: inherit; font-size: 13px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 4px;
@@ -562,3 +567,7 @@ body.chart-open { overflow: hidden; }
 .saved-table .pin-cell { width: 34px; }
 .saved-row-warn { margin-top: 4px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Performance page: LM Studio / Ollama sub-headings in the Models card. */
+.perf-sub { font-size: 13px; font-weight: 600; margin: 14px 0 6px; }
+.perf-sub:first-child { margin-top: 0; }

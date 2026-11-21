@@ -74,7 +74,7 @@ class ToolRounds(unittest.TestCase):
 
     def ask(self, stubborn=False):
         chat_id = self.db.new_chat("t", "mcp:powershell-mcp")
-        with mock.patch.object(rag, "Ollama", lambda url: FakeOllama(url, stubborn)):
+        with mock.patch.object(rag.llm, "client", lambda cfg: FakeOllama(cfg["ollama_url"], stubborn)):
             return rag.answer(self.db, CFG, chat_id, "Host status?", [], ["powershell-mcp"]), chat_id
 
     def test_last_turn_is_told_to_answer_and_answer_is_only_that(self):

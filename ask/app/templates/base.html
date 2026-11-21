@@ -81,11 +81,19 @@
   </nav>
   <span class="hdr-sep" aria-hidden="true"></span>
   {% endif %}
-  <button class="hdr-seg hdr-theme" aria-label="Switch light or dark theme" title="Light / dark" onclick="
+  {# Light / dark: a moon while the page is light, a sun while it is dark (CSS in mac-ui.css);
+     aria-pressed says whether the dark theme is on. #}
+  <button class="hdr-seg hdr-theme" id="theme-btn" aria-label="Dark theme" aria-pressed="false" title="Switch to the dark theme" onclick="
       var r=document.documentElement, t=r.getAttribute('data-theme')==='dark'?'light':'dark';
-      r.setAttribute('data-theme',t); try{localStorage.setItem('vco-theme',t)}catch(e){}">
-    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z" fill="currentColor"/></svg>
+      r.setAttribute('data-theme',t); try{localStorage.setItem('vco-theme',t)}catch(e){}
+      this.setAttribute('aria-pressed',t==='dark'); this.title=t==='dark'?'Switch to the light theme':'Switch to the dark theme';">
+    <svg class="theme-moon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z" fill="currentColor"/></svg>
+    <svg class="theme-sun" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="currentColor"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
   </button>
+  <script>
+    (function () { var b = document.getElementById('theme-btn'), d = document.documentElement.getAttribute('data-theme') === 'dark';
+      b.setAttribute('aria-pressed', d); if (d) b.title = 'Switch to the light theme'; })();
+  </script>
   </div>
 </header>
 

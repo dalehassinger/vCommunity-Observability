@@ -35,8 +35,9 @@
         fold.textContent = folded ? 'Show list' : 'Hide list';
         if (save) { try { localStorage.setItem('ask.scope.folded', folded ? '1' : '0'); } catch (e) { /* private window */ } }
       };
-      // Folded on a phone unless the reader chose otherwise: the list would cover the chat.
-      var folded0 = window.matchMedia('(max-width: 600px)').matches;
+      // Folded on a phone or a short screen (a laptop) unless the reader chose otherwise: the
+      // list sits in the sticky composer and would leave only a strip of the answer above it.
+      var folded0 = window.matchMedia('(max-width: 600px), (max-height: 820px)').matches;
       try { var f = localStorage.getItem('ask.scope.folded'); if (f !== null) folded0 = f === '1'; } catch (e) { /* private window */ }
       setFold(folded0, false);
       fold.addEventListener('click', function () { setFold(!scopePick.classList.contains('folded'), true); });
@@ -93,16 +94,69 @@
   }
 
   // [2] or [1, 3] in the answer become links to the matching source card.
-  function renderMarkdown(target, md, prefix) {
+  function mdHtml(md, prefix) {
     var withCites = md.replace(/\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\](?!\()/g, function (_, nums) {
       return nums.split(',').map(function (n) {
         n = n.trim();
         return '<a class="cite" href="#' + prefix + '-' + n + '" data-n="' + n + '">' + n + '</a>';
       }).join('');
     });
-    target.innerHTML = DOMPurify.sanitize(marked.parse(withCites), { ADD_ATTR: ['data-n'] });
-    target.querySelectorAll('a[href^="http"]').forEach(function (a) { a.target = '_blank'; a.rel = 'noopener'; });
+    return DOMPurify.sanitize(marked.parse(withCites), { ADD_ATTR: ['data-n'] });
+  }
+  function outLinks(root) {
+    root.querySelectorAll('a[href^="http"]').forEach(function (a) { a.target = '_blank'; a.rel = 'noopener'; });
+  }
+  function renderMarkdown(target, md, prefix) {
+    target.classList.remove('md-plain');
+    target.innerHTML = mdHtml(md, prefix);
+    outLinks(target);
     addCodeCopy(target);
+  }
+
+  // Streaming render: the finished blocks of the answer are parsed once and kept; only the last,
+  // still growing block is parsed again on each paint. A block ends at a blank line that is not
+  // inside a code fence and is not followed by an indented line (a list or code continuation).
+  // Splitting can show a list or quote in two parts while it streams; the whole answer is parsed
+  // once more when it is done, which joins them.
+  function blockEnd(md) {
+    var re = /\n/g, fence = null, cut = 0, m, start = 0;
+    while (true) {
+      m = re.exec(md);
+      var end = m ? m.index : md.length;
+      var line = md.slice(start, end);
+      var f = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+      if (f) {
+        if (!fence) fence = f[1];
+        else if (f[1][0] === fence[0] && f[1].length >= fence.length && /^ {0,3}[`~]+\s*$/.test(line)) fence = null;
+      } else if (!fence && !line.trim() && m) {
+        var next = md.slice(end + 1, md.indexOf('\n', end + 1) < 0 ? md.length : md.indexOf('\n', end + 1));
+        if (next && !/^[ \t]/.test(next) && md.indexOf('\n', end + 1) >= 0) cut = end + 1;
+      }
+      if (!m) break;
+      start = end + 1;
+    }
+    return cut;
+  }
+  function streamer(target, prefix) {
+    var doneLen = 0, tail = [];
+    target.classList.remove('md-plain');
+    target.innerHTML = '';
+    function nodes(md) {
+      var t = document.createElement('template');
+      t.innerHTML = mdHtml(md, prefix);
+      outLinks(t.content);
+      return Array.prototype.slice.call(t.content.childNodes);
+    }
+    return function (content) {
+      tail.forEach(function (n) { if (n.parentNode) n.parentNode.removeChild(n); });
+      var cut = blockEnd(content);
+      if (cut > doneLen) {
+        nodes(content.slice(doneLen, cut)).forEach(function (n) { target.appendChild(n); });
+        doneLen = cut;
+      }
+      tail = nodes(content.slice(doneLen));
+      tail.forEach(function (n) { target.appendChild(n); });
+    };
   }
 
   function statusBadge(status) {
@@ -664,18 +718,22 @@
     histPos = -1;
     var row = el('div', 'msg user');
     row.appendChild(el('div', 'bubble', text));
-    // "Save prompt": a new saved prompt from this question and the sources picked now.
+    // "Save prompt": a new saved prompt from this question and the sources picked now
+    // (always shown; the click is handled once on the thread, see below).
     var save = el('button', 'link-btn save-prompt', 'Save prompt');
     save.type = 'button';
     save.title = 'Keep this question with the sources picked below, to ask it again with one click (Saved menu)';
-    save.onclick = function () {
-      try { sessionStorage.setItem('ask.saved.draft', JSON.stringify({ prompt: text, scope: scopeValue() })); } catch (e) { /* private window */ }
-      location.href = '/saved?new=1&from=chat';
-    };
     row.appendChild(save);
     thread.appendChild(row);
     return row;
   }
+  thread.addEventListener('click', function (e) {
+    var save = e.target.closest('.save-prompt');
+    if (!save) return;
+    var text = save.parentNode.querySelector('.bubble').textContent;
+    try { sessionStorage.setItem('ask.saved.draft', JSON.stringify({ prompt: text, scope: scopeValue() })); } catch (err) { /* private window */ }
+    location.href = '/saved?new=1&from=chat';
+  });
 
   function addAssistant() {
     var prefix = 'm' + (++msgSeq);
@@ -705,6 +763,51 @@
     renderMarkdown(a.text, m.content, a.prefix);
     sourceCards(a.sources, m.sources, a.prefix, a.strip);
     if (m.stats && m.stats.error) a.row.classList.add('failed');
+    statsLine(a.stats, m);
+  }
+
+  // A saved chat arrives painted as plain text by the server (chat.html). Its rows are taken
+  // over here: the newest turns get markdown, source cards and stats at once, older ones only
+  // when they come near the screen, so a long chat opens without parsing every answer first.
+  var EAGER = 6;
+  function adoptSaved(msgs) {
+    var rows = thread.querySelectorAll('.msg[data-i]');
+    if (rows.length !== msgs.length) return false;
+    var lazy = [];
+    Array.prototype.forEach.call(rows, function (row, i) {
+      var m = msgs[i];
+      if (m.role === 'user') {
+        if (m.content && sentQs[sentQs.length - 1] !== m.content) sentQs.push(m.content);
+        return;
+      }
+      var q = function (sel) { return row.querySelector(sel); };
+      var a = { row: row, strip: q('.src-strip'), text: q('.md'), sources: q('.src-wrap'), stats: q('.answer-stats'),
+                thinking: q('.thinking'), thinkPre: q('.think-text'), prefix: 'm' + (++msgSeq), m: m };
+      if (i >= rows.length - EAGER) hydrate(a); else lazy.push(a);
+    });
+    if (!lazy.length) return true;
+    if (!('IntersectionObserver' in window)) { lazy.forEach(hydrate); return true; }
+    var byRow = new Map();
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (!en.isIntersecting) return;
+        io.unobserve(en.target);
+        var a = byRow.get(en.target);
+        // A row above the screen grows when it is parsed: keep what the reader sees in place.
+        var above = en.boundingClientRect.bottom < 0, h = above ? en.target.offsetHeight : 0;
+        hydrate(a);
+        if (above) window.scrollBy(0, en.target.offsetHeight - h);
+      });
+    }, { rootMargin: '800px 0px' });
+    lazy.forEach(function (a) { byRow.set(a.row, a); io.observe(a.row); });
+    return true;
+  }
+  function hydrate(a) {
+    var m = a.m;
+    a.row.classList.remove('pending');
+    if (m.thinking) { a.thinking.hidden = false; a.thinkPre.textContent = m.thinking; }
+    renderMarkdown(a.text, m.content || '', a.prefix);
+    sourceCards(a.sources, m.sources, a.prefix, a.strip);
     statsLine(a.stats, m);
   }
 
@@ -769,17 +872,19 @@
     busy(true);
     controller = new AbortController();
     var content = '', thinking = '', meta = {}, pending = false, isNew = !chatId;
-    // Streaming render: markdown is parsed again over the whole answer, so do it at most
-    // every 100 ms (plus a last time on done), and scroll in the same frame as the render.
-    var lastPaint = 0, timer = 0;
+    // Streaming render: at most every 100 ms, only the last (unfinished) block of markdown is
+    // parsed again (see streamer); the whole answer is parsed once when it is done. The scroll
+    // happens in the same frame as the render.
+    var lastPaint = 0, timer = 0, live = null;
     function cancelPaint() {
       pending = false;
       if (timer) { clearTimeout(timer); timer = 0; }
     }
-    function paint() {
+    function paint(full) {
       cancelPaint();
       lastPaint = performance.now();
-      renderMarkdown(a.text, content || '', a.prefix);
+      if (full) { renderMarkdown(a.text, content || '', a.prefix); live = null; }
+      else { if (!live) live = streamer(a.text, a.prefix); live(content || ''); }
       if (thinking) a.thinkPre.textContent = thinking;
       scrollDown();
     }
@@ -788,9 +893,14 @@
       pending = true;
       timer = setTimeout(function () {
         timer = 0;
-        requestAnimationFrame(function () { if (pending) paint(); });
+        requestAnimationFrame(function () { if (pending) paint(false); });
       }, Math.max(0, 100 - (performance.now() - lastPaint)));
     }
+    // Screen readers: this answer is the live region, and it is busy until it is done, so the
+    // finished answer is read once instead of every token. Older answers are not live.
+    Array.prototype.forEach.call(thread.querySelectorAll('.md[aria-live]'), function (n) { n.removeAttribute('aria-live'); });
+    a.text.setAttribute('aria-live', 'polite');
+    a.text.setAttribute('aria-busy', 'true');
     try {
       var res = await fetch('/ui/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
@@ -836,6 +946,7 @@
               .sort(function (x, y) { return x.n - y.n; });
             sourceCards(a.sources, meta.sources, a.prefix, a.strip);
             if (!content) {
+              live = null;   // the status line replaces the text; the next token starts the render again
               a.text.innerHTML = '';
               var tl = el('span', 'subtle');
               if (payload.status === 'waiting') {
@@ -850,7 +961,7 @@
             }
           } else if (ev === 'page') {
             content = payload.content || content;
-            paint();
+            paint(true);
             meta.sources = (meta.sources || []).concat([payload.card]);
             sourceCards(a.sources, meta.sources, a.prefix, a.strip);
           } else if (ev === 'report') {
@@ -865,7 +976,7 @@
             content += payload;
             schedulePaint();
           } else if (ev === 'done') {
-            paint();
+            paint(true);
             statsLine(a.stats, { model: payload.model, stats: payload.stats, content: content });
           } else if (ev === 'error') {
             cancelPaint();
@@ -879,7 +990,7 @@
       }
     } catch (e) {
       if (e.name === 'AbortError') {
-        paint();
+        paint(true);
         a.stats.textContent = 'Stopped';
       } else {
         cancelPaint();
@@ -889,6 +1000,7 @@
       }
     } finally {
       controller = null;
+      a.text.setAttribute('aria-busy', 'false');
       busy(false);
     }
   }
@@ -1146,8 +1258,13 @@
   var modelBox = document.getElementById('model-menu');
   if (modelBox) modelBox.addEventListener('click', function (e) { if (e.target.closest('.model-item')) run.model = ''; });
 
-  (window.ASK.messages || []).forEach(renderSaved);
-  if (window.ASK.messages && window.ASK.messages.length) scrollDown();
+  var savedMsgs = window.ASK.messages || [];
+  if (savedMsgs.length && !adoptSaved(savedMsgs)) {
+    // The painted rows don't match (should not happen): draw the chat the old way.
+    Array.prototype.forEach.call(thread.querySelectorAll('.msg[data-i]'), function (r) { r.parentNode.removeChild(r); });
+    savedMsgs.forEach(renderSaved);
+  }
+  if (savedMsgs.length) scrollDown();
   input.focus();
   var qs = new URLSearchParams(location.search);
   if (qs.get('saved') && !chatId) openSaved(qs.get('saved'), qs.get('edit') === '1');

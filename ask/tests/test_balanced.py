@@ -47,11 +47,11 @@ class Balanced(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.db = DB(Path(self.tmp.name) / "ask.db")
         self.n = 0
-        self._ollama = rag.Ollama
-        rag.Ollama = FakeOllama
+        self._client = rag.llm.client
+        rag.llm.client = lambda cfg: FakeOllama(cfg.get("ollama_url"))
 
     def tearDown(self):
-        rag.Ollama = self._ollama
+        rag.llm.client = self._client
         self.tmp.cleanup()
 
     def add(self, src: str, title: str, *sections: str) -> None:

@@ -32,12 +32,12 @@
     }
     scope.refresh(false);
 
-    // Chat models from Ollama.
+    // Chat models from Ollama and LM Studio (whichever are on).
     var model = $('#f-model');
-    fetch('/ui/ollama', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+    fetch('/ui/models', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
       var cur = model.dataset.current, found = !cur;
       (d.models || []).filter(function (m) { return m.kind === 'chat'; }).forEach(function (m) {
-        var o = el('option', null, m.name + ((m.capabilities || []).indexOf('tools') < 0 ? ' (no tools)' : ''));
+        var o = el('option', null, (m.label || m.name) + (m.provider === 'lmstudio' ? ' · LM Studio' : '') + ((m.capabilities || []).indexOf('tools') < 0 ? ' (no tools)' : ''));
         o.value = m.name;
         if (m.name === cur) { o.selected = true; found = true; }
         model.appendChild(o);
@@ -85,13 +85,17 @@
     refresh();
   }
   function setTag(t, save) {
+    tagBox = $('#saved-tags');
     if (tagBox && !tagBox.querySelector('[data-tag="' + CSS.escape(t) + '"]')) t = '';
     tag = t;
     $$('.tag-chip', tagBox).forEach(function (c) { var on = c.dataset.tag === tag; c.classList.toggle('on', on); c.setAttribute('aria-pressed', on ? 'true' : 'false'); });
     if (save) { try { localStorage.setItem('ask.saved.tag', tag); } catch (e) { /* private window */ } }
     filter();
   }
-  if (tagBox) tagBox.addEventListener('click', function (e) { var c = e.target.closest('.tag-chip'); if (c) setTag(c.dataset.tag, true); });
+  // Clicks in the list are handled once on the card (delegated), so they keep working after
+  // refresh() swaps the table body or the tag chips in place.
+  var listCard = $('#saved-list');
+  if (listCard) listCard.addEventListener('click', function (e) { var c = e.target.closest('#saved-tags .tag-chip'); if (c) setTag(c.dataset.tag, true); });
   if (qBox) {
     qBox.addEventListener('input', filter);
     qBox.addEventListener('keydown', function (e) {
@@ -111,40 +115,50 @@
     if (all) { all.checked = !!n && n === total; all.indeterminate = !!n && n < total; }
   }
   var lastBox = null;
-  $$('.saved-box').forEach(function (b) {
-    b.addEventListener('click', function (e) {
-      // Shift-click ticks the range from the last box clicked.
-      if (e.shiftKey && lastBox && lastBox !== b) {
-        var list = $$('.saved-box').filter(function (x) { return !x.closest('tr').hidden; }), i = list.indexOf(lastBox), j = list.indexOf(b);
-        list.slice(Math.min(i, j), Math.max(i, j) + 1).forEach(function (x) { x.checked = b.checked; });
-      }
-      lastBox = b;
-      refresh();
-    });
+  if (listCard) listCard.addEventListener('click', function (e) {
+    var b = e.target.closest('.saved-box');
+    if (!b) return;
+    // Shift-click ticks the range from the last box clicked.
+    if (e.shiftKey && lastBox && lastBox !== b && lastBox.isConnected) {
+      var list = $$('.saved-box').filter(function (x) { return !x.closest('tr').hidden; }), i = list.indexOf(lastBox), j = list.indexOf(b);
+      list.slice(Math.min(i, j), Math.max(i, j) + 1).forEach(function (x) { x.checked = b.checked; });
+    }
+    lastBox = b;
+    refresh();
   });
   if (all) all.addEventListener('change', function () { rows().forEach(function (r) { if (!r.hidden) r.querySelector('.saved-box').checked = all.checked; }); refresh(); });
+  // Swap the rows and tag chips for fresh ones from the server (pin order, import), keeping the
+  // search and tag filter. No page reload.
+  function reloadList() {
+    return AskAdmin.refresh(['#saved-list tbody', '#saved-tags']).then(function () { setTag(tag, false); });
+  }
   async function remove(ids, text) {
     if (!(await vcoConfirm(text, { ok: 'Delete', danger: true }))) return;
-    try { await AskAdmin.post('/ui/saved/delete', { ids: ids }); location.reload(); }
+    try {
+      await AskAdmin.post('/ui/saved/delete', { ids: ids });
+      // Deleted rows leave in place; the last one shows the empty card.
+      rows().forEach(function (r) { if (ids.indexOf(Number(r.dataset.id)) >= 0) r.parentNode.removeChild(r); });
+      if (!rows().length) { AskAdmin.refresh('#saved-list'); return; }
+      filter();
+    }
     catch (err) { vcoAlert(err.message); }
   }
   if (delBtn) delBtn.addEventListener('click', function () {
     var ids = ticked().map(function (b) { return Number(b.value); });
     remove(ids, 'Delete ' + ids.length + ' saved prompt' + (ids.length === 1 ? '' : 's') + '? The chats they made are kept.');
   });
-  $$('[data-del]').forEach(function (b) {
-    b.addEventListener('click', function () {
-      remove([Number(b.dataset.del)], 'Delete the saved prompt "' + b.dataset.name + '"? The chats it made are kept.');
-    });
+  if (listCard) listCard.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-del]');
+    if (b) remove([Number(b.dataset.del)], 'Delete the saved prompt "' + b.dataset.name + '"? The chats it made are kept.');
   });
-  // Pin / unpin (★): pinned prompts list first.
-  $$('[data-pin]').forEach(function (b) {
-    b.addEventListener('click', function () {
-      fetch('/ui/saved/' + b.dataset.pin + '/pin', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                                   body: JSON.stringify({ on: b.dataset.on !== '1' }) })
-        .then(function (r) { if (!r.ok) throw new Error(r.statusText); location.reload(); })
-        .catch(function (err) { vcoAlert(err.message); });
-    });
+  // Pin / unpin (★): pinned prompts list first, so the rows are fetched again in their new order.
+  if (listCard) listCard.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-pin]');
+    if (!b) return;
+    fetch('/ui/saved/' + b.dataset.pin + '/pin', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                 body: JSON.stringify({ on: b.dataset.on !== '1' }) })
+      .then(function (r) { if (!r.ok) throw new Error(r.statusText); return reloadList(); })
+      .catch(function (err) { vcoAlert(err.message); });
   });
   // Import: a JSON file made by Export (here or in another Ask).
   var impBtn = $('#saved-import-btn'), impFile = $('#saved-import'), impMsg = $('#saved-import-msg');
@@ -158,8 +172,9 @@
       try {
         var r = await AskAdmin.post('/ui/saved/import', data);
         var text = 'Imported ' + f.name + ': ' + r.added + ' added, ' + r.replaced + ' replaced' + (r.skipped.length ? ', ' + r.skipped.length + ' skipped (' + r.skipped.slice(0, 3).join('; ') + ')' : '') + '.';
-        if (r.skipped.length) { say(impMsg, text, false); setTimeout(function () { location.reload(); }, 4000); }
-        else { try { sessionStorage.setItem('ask.saved.imported', text); } catch (e) { /* private window */ } location.reload(); }
+        say(impMsg, text, !r.skipped.length);
+        // The first prompts on an empty page change its whole layout, so that one case reloads.
+        if (rows().length) reloadList(); else location.reload();
       } catch (err) { say(impMsg, err.message, false); }
     });
     try {

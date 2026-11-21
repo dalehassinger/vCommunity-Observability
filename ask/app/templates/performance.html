@@ -22,7 +22,7 @@
 <div class="perf-note" id="perf-agent-note" hidden></div>
 
 <div class="perf-grid">
-  <div class="card"><div class="card-header">Host CPU, GPU and Ollama</div><div class="card-block"><div class="perf-chart" data-chart="host-load"></div></div></div>
+  <div class="card"><div class="card-header">Host CPU, GPU, Ollama{% if settings and settings.lmstudio_enabled %} and LM Studio{% endif %}</div><div class="card-block"><div class="perf-chart" data-chart="host-load"></div></div></div>
   <div class="card"><div class="card-header">Host memory</div><div class="card-block"><div class="perf-chart" data-chart="host-mem"></div></div></div>
   <div class="card"><div class="card-header">Answer speed</div><div class="card-block"><div class="perf-chart" data-chart="answers"></div></div></div>
   <div class="card"><div class="card-header">Prompt size per answer</div><div class="card-block"><div class="perf-chart" data-chart="prompt"></div></div></div>
@@ -62,7 +62,7 @@
 </div>
 
 <div class="perf-grid">
-  <div class="card"><div class="card-header">Ollama</div><div class="card-block" id="perf-ollama"></div></div>
+  <div class="card"><div class="card-header">Models (Ollama{% if settings and settings.lmstudio_enabled %}, LM Studio{% endif %})</div><div class="card-block" id="perf-ollama"></div></div>
   <div class="card"><div class="card-header">Host</div><div class="card-block" id="perf-host"></div></div>
 </div>
 {% endblock %}

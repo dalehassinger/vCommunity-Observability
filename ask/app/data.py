@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .db import DB
-from .ollama import Ollama
+from . import llm
 
 MAX_ROWS = 500            # rows a query may return
 ROWS_TO_MODEL = 60        # rows sent to the model as the answer's source
@@ -231,7 +231,7 @@ def query(cfg: dict[str, Any], src: dict[str, Any], question: str) -> dict[str, 
                    + ("the category (time order)." if kind == "line" else "the value, largest first."))
     msgs = [{"role": "system", "content": system},
             {"role": "user", "content": f"Tables:\n\n{describe(tables)}\n\nQuestion: {question}"}]
-    ollama = Ollama(cfg["ollama_url"])
+    ollama = llm.client(cfg)
     err = ""
     sql = ""
     for attempt in range(2):
@@ -334,7 +334,7 @@ def dashboard(cfg: dict[str, Any], src: dict[str, Any], question: str) -> dict[s
     allowed = {t["table"] for t in src["tables"]}
     msgs = [{"role": "system", "content": PLAN_SYSTEM},
             {"role": "user", "content": f"Tables:\n\n{describe(tables)}\n\nDashboard request: {question}"}]
-    ollama = Ollama(cfg["ollama_url"])
+    ollama = llm.client(cfg)
     plan: list[dict[str, Any]] = []
     for attempt in range(2):
         reply = ollama.chat(cfg["chat_model"], msgs, options={"temperature": 0, "num_ctx": cfg["num_ctx"]},

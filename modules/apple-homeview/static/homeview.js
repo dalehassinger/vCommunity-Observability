@@ -126,8 +126,9 @@
 
   // -- page builders --------------------------------------------------------------------
   function heading(eyebrow, title, id) {
-    return '<div class="page-heading"><div><p class="eyebrow"' + (id ? ' id="' + id + '-eyebrow"' : '') + '>' + esc(eyebrow) +
-      '</p><h1' + (id ? ' id="' + id + '-title"' : '') + '>' + esc(title) + '</h1></div><span class="page-count">' +
+    // data-live: text the clock fills in (and the page count): the minute refresh leaves it alone.
+    return '<div class="page-heading"><div><p class="eyebrow"' + (id ? ' id="' + id + '-eyebrow" data-live' : '') + '>' + esc(eyebrow) +
+      '</p><h1' + (id ? ' id="' + id + '-title" data-live' : '') + '>' + esc(title) + '</h1></div><span class="page-count" data-live>' +
       '<b class="pc-now">01</b> <span class="pc-all">/ 01</span></span></div>';
   }
 
@@ -193,7 +194,7 @@
     return '<section class="page" data-section="home">' + heading('WELCOME HOME', 'Good morning, ' + OWNER + '.', 'home') +
       '<div class="home-grid">' +
       '<article class="clock-card card"><div class="card-top"><span class="eyebrow">MAKE TIME FOR TODAY</span></div>' +
-      '<div class="time-row"><time class="hv-clock">--:--</time><span class="hv-period">AM</span></div><div class="clock-bottom"><span class="hv-weekday">Sunday</span></div><div class="clock-art" aria-hidden="true"></div>' + miniStack(d) + '</article>' +
+      '<div class="time-row"><time class="hv-clock" data-live>--:--</time><span class="hv-period" data-live>AM</span></div><div class="clock-bottom"><span class="hv-weekday" data-live>Sunday</span></div><div class="clock-art" aria-hidden="true"></div>' + miniStack(d) + '</article>' +
       '<article class="card weather hv-vcenter"><div class="card-top"><h2>vCenter</h2><span class="tag live-tag">LIVE</span></div>' +
       (t ? '<div class="hv-vc-name">' + esc(vc ? vc.name : 'vCenter') + '</div><p class="hv-vc-ver">' + esc(vc ? 'vCenter ' + vc.version + ' · build ' + vc.build : '') + '</p>' +
         '<div class="hv-mini-stats"><div><strong>' + t.hosts_connected + '<small>/' + t.hosts + '</small></strong><span>Hosts connected</span></div>' +
@@ -426,31 +427,62 @@
   }
   if (shortQuery.addEventListener) shortQuery.addEventListener('change', onLayout); else if (shortQuery.addListener) shortQuery.addListener(onLayout);
 
+  // Only the page on screen is in the document. The others are kept as HTML strings and put in
+  // when shown. On the minute refresh the page on screen is updated in place (morph): only the
+  // text and attributes that changed are written, so numbers change without a redraw, the list's
+  // scroll position and an open Show or Sort menu stay, and nothing flickers.
+  var mountedKey = '', mountedHtml = '';
+  function morph(a, b) {
+    if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName) { a.parentNode.replaceChild(b, a); return; }
+    if (a.nodeType === 3 || a.nodeType === 8) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return; }
+    if (a.nodeType !== 1) return;
+    if (a.hasAttribute('data-live')) return;            // the clock and page count fill these
+    var i, at;
+    for (i = a.attributes.length - 1; i >= 0; i--) { at = a.attributes[i].name; if (!b.hasAttribute(at)) a.removeAttribute(at); }
+    for (i = 0; i < b.attributes.length; i++) { at = b.attributes[i]; if (a.getAttribute(at.name) !== at.value) a.setAttribute(at.name, at.value); }
+    if (a.tagName === 'SELECT') { if (a.value !== b.value && b.value) a.value = b.value; }
+    var ak = a.childNodes, bk = Array.prototype.slice.call(b.childNodes);
+    for (i = 0; i < bk.length; i++) { if (i < ak.length) morph(ak[i], bk[i]); else a.appendChild(bk[i]); }
+    while (ak.length > bk.length) a.removeChild(a.lastChild);
+  }
+  function mount(p) {
+    var key = p.section + '-' + p.sub, node = main.firstElementChild;
+    if (key === mountedKey && p.html === mountedHtml && node) return;
+    var t = document.createElement('template');
+    t.innerHTML = p.html;
+    var fresh = t.content.firstElementChild;
+    if (key === mountedKey && node) morph(node, fresh);
+    else { main.textContent = ''; main.appendChild(fresh); main.scrollTop = 0; }
+    mountedKey = key; mountedHtml = p.html;
+    updateClock(true);
+  }
+
   function render(keepCurrent) {
     var keep = keepCurrent && pages[current] ? { section: pages[current].section, sub: pages[current].sub } : null;
     pages = build(data);
-    main.innerHTML = pages.map(function (p) { return p.html; }).join('');
     var present = SECTIONS.filter(function (s) { return pages.some(function (p) { return p.section === s.id; }); });
-    navBox.innerHTML = present.map(function (s) {
+    var navHtml = present.map(function (s) {
       var n = pages.filter(function (p) { return p.section === s.id; }).length;
       return '<a href="#' + s.id + '" class="nav-item" data-nav="' + s.id + '">' + icon(s.icon) + '<span>' + s.label + '</span>' + (n > 1 ? '<small>' + n + ' pages</small>' : '') + '</a>';
     }).join('');
+    if (navBox._html !== navHtml) { navBox.innerHTML = navHtml; navBox._html = navHtml; }
     navBox.style.setProperty('--n', present.length);
     if (keep) {
       current = 0;
       for (var i = 0; i < pages.length; i++) if (pages[i].section === keep.section && pages[i].sub <= keep.sub) current = i;
     } else current = indexFromHash();
     show(current, true);
-    updateClock();
   }
 
   function show(i, quiet) {
     current = (i + pages.length) % pages.length;
-    var nodes = main.children, p = pages[current];
-    for (var k = 0; k < nodes.length; k++) {
-      nodes[k].hidden = k !== current;
-      var pc = nodes[k].querySelector('.page-count');
-      if (pc) { pc.querySelector('.pc-now').textContent = pad2(k + 1); pc.querySelector('.pc-all').textContent = '/ ' + pad2(pages.length); }
+    var p = pages[current];
+    mount(p);
+    var pc = main.firstElementChild && main.firstElementChild.querySelector('.page-count');
+    if (pc) {
+      var now = pad2(current + 1), all = '/ ' + pad2(pages.length);
+      if (pc.querySelector('.pc-now').textContent !== now) pc.querySelector('.pc-now').textContent = now;
+      if (pc.querySelector('.pc-all').textContent !== all) pc.querySelector('.pc-all').textContent = all;
     }
     navBox.querySelectorAll('.nav-item').forEach(function (a) {
       var on = a.dataset.nav === p.section;
@@ -468,7 +500,7 @@
   // The page title and page count sit in the top row, beside "HomeView" (the in-page heading is hidden).
   var headTitle = document.getElementById('hv-page-title');
   function syncHeader() {
-    var node = main.children[current]; if (!node) return;
+    var node = main.firstElementChild; if (!node) return;
     var h = node.querySelector('.page-heading h1');
     var text = h ? h.textContent : '';
     if (headTitle.textContent !== text) headTitle.textContent = text;
@@ -505,21 +537,35 @@
     document.getElementById('data-note').textContent = text;
   }
 
-  // -- clock (unchanged logic from HomeView) ---------------------------------------
-  function updateClock() {
-    var now = new Date();
-    var parts = new Intl.DateTimeFormat('en-US', { timeZone: TIMEZONE, hour: 'numeric', minute: '2-digit', hour12: true }).formatToParts(now);
+  // -- clock: the formatters are made once, and the page is written only when the minute
+  // changes (a timer set for the start of the next minute), in the page on screen only.
+  var F_TIME = new Intl.DateTimeFormat('en-US', { timeZone: TIMEZONE, hour: 'numeric', minute: '2-digit', hour12: true });
+  var F_HOUR = new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: TIMEZONE });
+  var F_WEEKDAY = new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone: TIMEZONE });
+  var F_DATE = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: TIMEZONE });
+  var lastMinute = -1;
+  function setText(node, text) { if (node && node.textContent !== text) node.textContent = text; }
+  function updateClock(force) {
+    var now = new Date(), minute = Math.floor(now.getTime() / 60000);
+    if (!force && minute === lastMinute) return;
+    lastMinute = minute;
+    var page = main.firstElementChild;
+    if (!page) return;
+    var parts = F_TIME.formatToParts(now);
     var part = function (t) { var x = parts.find(function (p) { return p.type === t; }); return x ? x.value : ''; };
-    var hour = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: TIMEZONE }).format(now));
-    document.querySelectorAll('.hv-clock').forEach(function (c) { c.textContent = part('hour') + ':' + part('minute'); c.dateTime = now.toISOString(); });
-    document.querySelectorAll('.hv-period').forEach(function (c) { c.textContent = part('dayPeriod'); });
-    document.querySelectorAll('.hv-weekday').forEach(function (c) { c.textContent = new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone: TIMEZONE }).format(now); });
-    var eb = document.getElementById('home-eyebrow'), ti = document.getElementById('home-title');
-    if (eb) eb.textContent = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: TIMEZONE }).format(now).toUpperCase();
-    if (ti) ti.textContent = 'Good ' + (hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening') + ', ' + OWNER + '.';
+    var clock = page.querySelector('.hv-clock');
+    if (clock) { setText(clock, part('hour') + ':' + part('minute')); clock.dateTime = now.toISOString(); }
+    setText(page.querySelector('.hv-period'), part('dayPeriod'));
+    setText(page.querySelector('.hv-weekday'), F_WEEKDAY.format(now));
+    setText(page.querySelector('#home-eyebrow'), F_DATE.format(now).toUpperCase());
+    var hour = Number(F_HOUR.format(now));
+    setText(page.querySelector('#home-title'), 'Good ' + (hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening') + ', ' + OWNER + '.');
     if (pages.length) syncHeader();
   }
-  setInterval(updateClock, 1000);
+  (function tick() {
+    updateClock(false);
+    setTimeout(tick, 60000 - Date.now() % 60000 + 30);
+  })();
 
   // -- auto-cycle (seconds per page from the Settings page; on/off remembered on this screen)
   var cycleTimer = null, cycling = true;
@@ -590,7 +636,7 @@
     if (Math.abs(dx) > 80) show(current + (dx < 0 ? 1 : -1));
   }, { passive: true });
   document.addEventListener('visibilitychange', function () {
-    if (document.hidden) clearInterval(cycleTimer); else { updateClock(); fitDisplay(); load(); resetCycle(); }
+    if (document.hidden) clearInterval(cycleTimer); else { updateClock(true); fitDisplay(); load(); resetCycle(); }
   });
 
   // -- data ---------------------------------------------------------------------------

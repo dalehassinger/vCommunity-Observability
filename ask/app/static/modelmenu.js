@@ -1,5 +1,5 @@
 /* vCommunity Ask chat page: the chat model button under the prompt is a menu. Opening it lists the chat models
-   installed in Ollama (GET /ui/ollama); picking one saves the Chat model setting
+   of Ollama and LM Studio, whichever are turned on (GET /ui/models); picking one saves the Chat model setting
    (POST /ui/settings, same as the Settings page) and applies from the next question.
    With ASK_API_TOKEN set, the token entered on Settings or Sources (kept in this
    browser) is sent; without it the save is refused and the menu says so. */
@@ -22,18 +22,22 @@
   async function load() {
     msg('Loading models…');
     try {
-      var d = await (await fetch('/ui/ollama', { cache: 'no-store' })).json();
-      if (!d.ok) { msg(d.error || 'Ollama did not answer', 'err'); return; }
+      var d = await (await fetch('/ui/models', { cache: 'no-store' })).json();
+      if (!d.ok) { msg(d.error || 'No model provider answered', 'err'); return; }
       var chat = d.models.filter(function (m) { return m.kind === 'chat'; });
-      if (!chat.length) { msg('No chat models installed in Ollama.', 'err'); return; }
+      if (!chat.length) { msg('No chat models installed in Ollama or LM Studio.', 'err'); return; }
       list.innerHTML = '';
       var cur = box.dataset.current;
+      var both = chat.some(function (m) { return m.provider === 'lmstudio'; }) && chat.some(function (m) { return m.provider !== 'lmstudio'; });
+      var lastProv = null;
       chat.forEach(function (m) {
+        // With both providers on, a small heading before each provider's models.
+        if (both && m.provider !== lastProv) { list.appendChild(el('div', 'model-msg model-group', m.provider === 'lmstudio' ? 'LM Studio' : 'Ollama')); lastProv = m.provider; }
         var b = el('button', 'model-item' + (same(m.name, cur) ? ' on' : ''));
         b.type = 'button';
         b.setAttribute('role', 'menuitemradio');
         b.setAttribute('aria-checked', same(m.name, cur) ? 'true' : 'false');
-        b.appendChild(el('span', 'model-name', m.name));
+        b.appendChild(el('span', 'model-name', m.label || m.name));
         var tags = [];
         if (m.parameter_size) tags.push(m.parameter_size);
         if ((m.capabilities || []).indexOf('tools') < 0) tags.push('no tools');
@@ -43,6 +47,10 @@
           ? 'This model cannot call tools: web search and MCP tools will not work with it' : '';
         b.addEventListener('click', function () { pick(m.name); });
         list.appendChild(b);
+      });
+      Object.keys(d.providers || {}).forEach(function (p) {
+        var info = d.providers[p];
+        if (info.on && !info.ok) list.appendChild(el('div', 'model-msg err', info.label + ' did not answer.'));
       });
       list.appendChild(el('a', 'model-foot', 'More model settings')).href = '/settings';
       loaded = true;
@@ -64,7 +72,7 @@
           : (typeof d.detail === 'string' ? d.detail : res.statusText));
       }
       box.dataset.current = name;
-      label.textContent = name;
+      label.textContent = name.replace(/^lmstudio:/, '');
       loaded = false;
       box.open = false;
       // The Settings page holds the old value in its form: reload it so a later Save keeps this one.
