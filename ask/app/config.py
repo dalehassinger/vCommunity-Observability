@@ -77,6 +77,15 @@ SETTINGS: dict[str, dict[str, Any]] = {
     # MCP tools: per-tool policy as JSON {"server/tool": "allow" | "ask" | "off"} (MCP tools page),
     # how many tool turns one answer may take, and how much of one tool result the model reads.
     "mcp_tools":        {"default": "{}", "type": "str"},
+    # MCP servers Ask reaches itself over HTTP (mcp_http.py): "name = url" per line.
+    "mcp_http_servers": {"default": "", "env": "ASK_MCP_HTTP_SERVERS", "type": "str"},
+    # Local draw.io editor (jgraph/drawio container): "Open in draw.io" links from the draw.io
+    # MCP server (app.diagrams.net) are pointed here, so diagrams open without the internet.
+    "drawio_editor_url": {"default": "", "env": "ASK_DRAWIO_URL", "type": "str"},
+    # Where draw.io diagrams open from answers: editor = the web editor link (drawio_editor_url,
+    # else app.diagrams.net); desktop = a .drawio file opened in draw.io Desktop on the Mac (host
+    # agent) or downloaded. The tool card always offers both.
+    "drawio_open": {"default": "editor", "env": "ASK_DRAWIO_OPEN", "type": "str"},
     "mcp_max_rounds":   {"default": 6, "type": "int"},
     "mcp_result_chars": {"default": 16000, "type": "int"},
     "observability_url": {"default": "", "env": "ASK_OBSERVABILITY_URL", "type": "str"},

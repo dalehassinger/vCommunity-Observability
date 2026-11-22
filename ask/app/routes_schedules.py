@@ -58,7 +58,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> None:
         return page(request, "schedules.html", "/schedules", items=schedules.list(), current=current,
                     from_saved=from_saved, webhooks=schedules.notifier.webhooks(),
                     show_form=bool(current) or new, frequencies=sched.FREQUENCIES, weekdays=sched.WEEKDAYS,
-                    default_tz=sched.DEFAULT_TZ, mcp_servers=mcp.quick_servers(s["agent_url"]),
+                    default_tz=sched.DEFAULT_TZ, mcp_servers=mcp.quick_servers(s["agent_url"], s["mcp_http_servers"]),
                     web_search=websearch.status(s), brave_search=websearch.brave_status(s), local_fetch=websearch.local_status(s),
                     mail_token=bool(sched.Notifier.token()))
 

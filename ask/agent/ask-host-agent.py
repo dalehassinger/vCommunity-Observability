@@ -20,6 +20,10 @@ the same format as an .mcp.json file) run here, on the host, and Ask calls their
   POST /mcp/<server>/reload    restart the server and list its tools again
 A server restarts by itself when its script (or a .ps1 next to it) or the config changes.
 
+draw.io Desktop (0.4.0): POST /drawio/open {"name": "<file>.drawio", "xml": "..."} saves a
+diagram Ask made into ~/Documents/vCommunity-Ask/Diagrams (--diagrams-dir) and opens it with
+`open -a draw.io` (--drawio-app), so "Open in draw.io Desktop" in the chat opens the app.
+
   python3 ask-host-agent.py --token-file ~/.config/ask-host-agent/token [--port 9101]
 
 Install it as a LaunchAgent with ask/agent/Install-AskAgent.ps1 or install.sh."""
@@ -40,7 +44,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 MAC = sys.platform == "darwin"
 
 
@@ -565,7 +569,9 @@ class McpHub:
         return s
 
 
-def make_handler(collector: Collector, token: str, hub: "McpHub | None" = None):
+def make_handler(collector: Collector, token: str, hub: "McpHub | None" = None,
+                 diagrams_dir: str = os.path.expanduser("~/Documents/vCommunity-Ask/Diagrams"),
+                 drawio_app: str = "draw.io"):
     class Handler(BaseHTTPRequestHandler):
         server_version = f"ask-host-agent/{VERSION}"
 
@@ -590,6 +596,8 @@ def make_handler(collector: Collector, token: str, hub: "McpHub | None" = None):
             return False
 
         def do_POST(self):
+            if self.path.split("?")[0] == "/drawio/open":
+                return self._drawio_open()
             # MCP bridge: POST /mcp/<server>/call {"tool", "arguments", "timeout"} and /mcp/<server>/reload
             parts = self.path.split("?")[0].strip("/").split("/")
             if len(parts) != 3 or parts[0] != "mcp" or parts[2] not in ("call", "reload"):
@@ -626,6 +634,40 @@ def make_handler(collector: Collector, token: str, hub: "McpHub | None" = None):
             except (RuntimeError, TimeoutError, OSError) as e:
                 return self._send(200, {"ok": False, "error": str(e), "ms": int((time.time() - t0) * 1000)})
 
+        def _drawio_open(self):
+            # POST /drawio/open {"name": "<file>.drawio", "xml": "<mxfile ...>"}: save the diagram in
+            # the diagrams folder and open it in draw.io Desktop (macOS `open`).
+            if not self._authorized():
+                return
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(min(n, 20_000_000)) or b"{}") if n else {}
+            except ValueError:
+                return self._send(400, {"error": "body is not JSON"})
+            name, xml = str(body.get("name") or ""), str(body.get("xml") or "")
+            if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,120}\.drawio$", name) or not xml.lstrip().startswith("<"):
+                return self._send(400, {"error": "name (<file>.drawio) and xml are needed"})
+            try:
+                os.makedirs(diagrams_dir, exist_ok=True)
+                path = os.path.join(diagrams_dir, name)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(xml)
+            except OSError as e:
+                return self._send(500, {"error": f"cannot write {diagrams_dir}: {e}"})
+            if sys.platform != "darwin":
+                return self._send(200, {"ok": False, "error": "draw.io Desktop is opened on macOS only", "path": path})
+            for cmd in (["open", "-a", drawio_app, path], ["open", path]):
+                try:
+                    r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+                except (OSError, subprocess.TimeoutExpired) as e:
+                    err = str(e)
+                    continue
+                if r.returncode == 0:
+                    return self._send(200, {"ok": True, "path": path, "app": cmd[2] if len(cmd) > 3 else "default"})
+                err = (r.stderr or r.stdout).strip()[:300]
+            return self._send(200, {"ok": False, "path": path,
+                                    "error": f"draw.io Desktop could not be opened ({err}). Is it installed in /Applications?"})
+
         def do_GET(self):
             path = self.path.split("?")[0]
             if path == "/health":
@@ -657,6 +699,10 @@ def main() -> None:
     ap.add_argument("--once", action="store_true", help="Print one sample as JSON and exit (for testing)")
     ap.add_argument("--mcp-config", default=os.environ.get("ASK_AGENT_MCP_CONFIG", os.path.expanduser("~/.config/ask-host-agent/mcp.json")),
                     help="An .mcp.json style file of MCP servers to offer to Ask (stdio servers: command, args, env)")
+    ap.add_argument("--diagrams-dir", default=os.environ.get("ASK_AGENT_DIAGRAMS", os.path.expanduser("~/Documents/vCommunity-Ask/Diagrams")),
+                    help="Where diagrams from Ask are saved before draw.io Desktop opens them")
+    ap.add_argument("--drawio-app", default=os.environ.get("ASK_AGENT_DRAWIO_APP", "draw.io"),
+                    help="The draw.io Desktop app name for `open -a`")
     ap.add_argument("--mcp-list", action="store_true",
                     help="Start the MCP servers of --mcp-config, print their tools and errors, and exit (for testing)")
     a = ap.parse_args()
@@ -690,7 +736,7 @@ def main() -> None:
     if len(token) < 16:
         sys.exit(f"No token (at least 16 characters): set ASK_AGENT_TOKEN or write one to {a.token_file}")
     threading.Thread(target=c.loop, daemon=True).start()
-    srv = ThreadingHTTPServer((a.bind, a.port), make_handler(c, token, McpHub(a.mcp_config)))
+    srv = ThreadingHTTPServer((a.bind, a.port), make_handler(c, token, McpHub(a.mcp_config), a.diagrams_dir, a.drawio_app))
     print(f"ask-host-agent {VERSION} on {a.bind}:{a.port}", flush=True)
     srv.serve_forever()
 

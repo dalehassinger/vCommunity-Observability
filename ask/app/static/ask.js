@@ -2,6 +2,29 @@
    renders markdown with the vendored marked + DOMPurify, and shows source cards. */
 (function () {
   'use strict';
+
+  // draw.io diagrams saved as files (/diagrams/<name>.drawio, in answers and on tool cards):
+  // a click asks the host agent to open the file in draw.io Desktop on the Mac. When that
+  // can't be done (no agent, older agent, not a Mac) the file is downloaded instead.
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a[href]');
+    if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    var u;
+    try { u = new URL(a.getAttribute('href'), location.href); } catch (err) { return; }
+    var m = /^\/diagrams\/([A-Za-z0-9][A-Za-z0-9_.-]*\.drawio)$/.exec(u.pathname);
+    if (!m || u.origin !== location.origin || u.searchParams.has('download')) return;
+    e.preventDefault();
+    var label = a.textContent;
+    a.textContent = 'Opening in draw.io Desktop…';
+    fetch('/ui/diagrams/' + encodeURIComponent(m[1]) + '/open', { method: 'POST' })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { if (!r.ok) throw new Error(d.detail || r.statusText); return d; }); })
+      .then(function () { a.textContent = label; a.title = 'Opened in draw.io Desktop'; })
+      .catch(function (err) {
+        a.textContent = label;
+        a.title = err.message + ' (downloaded instead)';
+        location.href = '/diagrams/' + encodeURIComponent(m[1]) + '?download=1';
+      });
+  });
   // Smooth scrolling only when the OS "reduce motion" setting is off.
   function scrollMode() { return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'; }
   var thread = document.getElementById('thread');
@@ -103,8 +126,37 @@
     });
     return DOMPurify.sanitize(marked.parse(withCites), { ADD_ATTR: ['data-n'] });
   }
+  var DIAGRAM_PATH = /^\/diagrams\/[A-Za-z0-9][A-Za-z0-9_.-]*\.drawio(?:\/web)?$/;
   function outLinks(root) {
     root.querySelectorAll('a[href^="http"]').forEach(function (a) { a.target = '_blank'; a.rel = 'noopener'; });
+    // A diagram path the model wrote as code (`/diagrams/<name>.drawio/web`) becomes a link.
+    root.querySelectorAll('code').forEach(function (c) {
+      var t = c.textContent.trim();
+      if (c.closest('pre') || c.closest('a') || !DIAGRAM_PATH.test(t)) return;
+      var a = document.createElement('a');
+      a.href = t; a.textContent = /\/web$/.test(t) ? 'Open the diagram in draw.io' : 'Open the diagram in draw.io Desktop';
+      c.replaceWith(a);
+    });
+    // The web editor link opens in a new tab (the Desktop link is handled by the click listener above).
+    root.querySelectorAll('a[href^="/diagrams/"]').forEach(function (a) {
+      if (/\/web$/.test(a.getAttribute('href'))) { a.target = '_blank'; a.rel = 'noopener'; }
+    });
+  }
+  // Diagrams from draw.io tool calls: their buttons under the answer, not only inside Tool calls.
+  function diagramBar(tools) {
+    var seen = {}, bar = el('div', 'report-links diagram-links');
+    tools.forEach(function (s) {
+      (s.links || []).forEach(function (l) {
+        if (!/^\/diagrams\//.test(l.url || '') || seen[l.url]) return;
+        seen[l.url] = 1;
+        var a = el('a', 'btn btn-sm', l.title || l.url);
+        a.href = l.url;
+        if (/\/web$/.test(l.url)) { a.target = '_blank'; a.rel = 'noopener'; }
+        if (/[?]download=1$/.test(l.url)) a.setAttribute('download', '');
+        bar.appendChild(a);
+      });
+    });
+    return bar.children.length ? bar : null;
   }
   function renderMarkdown(target, md, prefix) {
     target.classList.remove('md-plain');
@@ -665,6 +717,8 @@
       det.appendChild(grid);
     });
     if (hits.length || linked.length) container.appendChild(det);
+    var dbar = tools.length ? diagramBar(tools) : null;
+    if (dbar) container.appendChild(dbar);
     if (tools.length) {
       // Tool calls: folded like the sources, but open while a tool waits for Run or Cancel.
       var td = el('details', 'sources tool-calls');

@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS saved_prompts (
 """
 
 MAX_URLS = 10
-MAX_VARS = 8
+MAX_VARS = 30
 # {city} or {city=Dillsburg}: a name (letter first, then letters, digits, _), an optional default.
 VAR_RE = re.compile(r"\{([A-Za-z][A-Za-z0-9_]{0,30})(?:=([^{}\n]{0,100}))?\}")
 MAX_TAGS = 10

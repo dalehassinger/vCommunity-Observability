@@ -34,6 +34,7 @@
     var b = el('div', 'card-block');
     var info = el('p', 'subtle mcp-cmd');
     info.appendChild(el('code', null, s.command));
+    if (s.transport === 'http') info.appendChild(el('span', 'badge', 'HTTP'));
     if (s.server && s.server.name) info.appendChild(el('span', null, ' · ' + s.server.name + (s.server.version ? ' ' + s.server.version : '')));
     b.appendChild(info);
     if (s.error) b.appendChild(el('div', 'alert alert-danger', s.error));
@@ -78,8 +79,20 @@
     catch (e) { box.innerHTML = ''; box.appendChild(el('div', 'alert alert-danger', e.message)); return; }
     document.getElementById('m-rounds').value = d.max_rounds;
     document.getElementById('m-chars').value = d.result_chars;
+    var http = document.getElementById('m-http');
+    if (http && document.activeElement !== http && !http.dataset.edited) http.value = d.http_servers || '';
+    var dio = document.getElementById('m-drawio');
+    if (dio && document.activeElement !== dio && !dio.dataset.edited) dio.value = d.drawio_editor_url || '';
+    var dl = document.getElementById('m-drawio-libs');
+    if (dl) {
+      var libs = d.drawio_libs || [];
+      dl.textContent = libs.length ? libs.map(function (l) { return l.file + (l.error ? ' (not read: ' + l.error + ')' : ' (' + l.shapes + ' shapes)'); }).join(', ')
+        : 'None yet. Put draw.io library files (.xml) in ./drawio-libs.';
+    }
+    var dop = document.getElementById('m-drawio-open');
+    if (dop && !dop.dataset.edited) dop.value = d.drawio_open || 'editor';
     var problems = [];
-    if (!d.agent_url) problems.push('No Host agent URL (Settings).');
+    if (!d.agent_url) { if (!(d.http_servers || '').trim()) problems.push('No Host agent URL (Settings).'); }
     else if (!d.agent_token_set) problems.push('ASK_AGENT_TOKEN is not set in .env, so the host agent refuses Ask.');
     if (d.error) problems.push(d.error);
     note.hidden = !problems.length;
@@ -89,7 +102,8 @@
       var e = el('div', 'card');
       var eb = el('div', 'card-block');
       eb.appendChild(el('p', null, 'No MCP servers yet. List them on the Mac in ~/.config/ask-host-agent/mcp.json ' +
-        '(the same format as an .mcp.json file), or install the agent with -McpConfig pointing at your .mcp.json. See the README, "MCP tools".'));
+        '(the same format as an .mcp.json file), or install the agent with -McpConfig pointing at your .mcp.json, ' +
+        'or list an HTTP MCP server below (for example drawio = http://drawio-mcp:3001/mcp). See the README, "MCP tools".'));
       if (d.config) eb.appendChild(el('p', 'subtle', 'The agent reads: ' + d.config));
       e.appendChild(eb); box.appendChild(e);
     }
@@ -98,11 +112,20 @@
   }
 
   document.getElementById('mcp-refresh').onclick = function () { load(true); };
+  ['m-http', 'm-drawio', 'm-drawio-open'].forEach(function (id) {
+    document.getElementById(id).addEventListener('change', function () { this.dataset.edited = '1'; msg.textContent = 'Not saved yet.'; msg.className = 'form-msg'; });
+    document.getElementById(id).addEventListener('input', function () { this.dataset.edited = '1'; msg.textContent = 'Not saved yet.'; msg.className = 'form-msg'; });
+  });
   document.getElementById('mcp-save').onclick = async function () {
     try {
-      await AskAdmin.post('/ui/mcp/policy', { policy: changed,
+      var http = document.getElementById('m-http');
+      var dio = document.getElementById('m-drawio');
+      await AskAdmin.post('/ui/mcp/policy', { policy: changed, mcp_http_servers: http.value, drawio_editor_url: dio.value.trim(),
+        drawio_open: document.getElementById('m-drawio-open').value,
         mcp_max_rounds: document.getElementById('m-rounds').value, mcp_result_chars: document.getElementById('m-chars').value });
       changed = {};
+      delete dio.dataset.edited; delete document.getElementById('m-drawio-open').dataset.edited;
+      if (http.dataset.edited) { delete http.dataset.edited; load(true); }
       msg.textContent = 'Saved. Takes effect on the next question.'; msg.className = 'form-msg ok';
     } catch (e) { msg.textContent = 'Not saved: ' + e.message; msg.className = 'form-msg bad'; }
   };

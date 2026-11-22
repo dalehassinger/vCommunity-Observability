@@ -1,5 +1,7 @@
 """MCP tools: Ask calls the tools of MCP servers that run on the host, through the Ask
-host agent (ask/agent, `/mcp` endpoints, same token as the Performance page).
+host agent (ask/agent, `/mcp` endpoints, same token as the Performance page), and of MCP
+servers it reaches itself over HTTP (mcp_http.py, the `mcp_http_servers` setting; for
+example the draw.io MCP container). Every function takes `http` = that setting's text.
 
 - servers(): what the agent offers (cached for a short while so pages stay fast);
 - the tool policy: every tool is "allow", "ask" (a Run / Cancel card in the chat first)
@@ -20,6 +22,8 @@ from typing import Any
 
 import requests
 
+from . import mcp_http
+
 CACHE_SECONDS = 20
 POLICIES = ("allow", "ask", "off")
 _cache: dict[str, Any] = {"at": 0.0, "url": "", "data": None}
@@ -31,7 +35,20 @@ def _headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {tok}"} if tok else {}
 
 
-def servers(url: str, *, fresh: bool = False, timeout: float = 60, wait: bool = True) -> dict[str, Any]:
+def servers(url: str, *, fresh: bool = False, timeout: float = 60, wait: bool = True, http: str = "") -> dict[str, Any]:
+    """{"ok", "error", "servers": [...]}: the host agent's servers, then the HTTP ones."""
+    specs, bad = mcp_http.parse(http)
+    agent = _agent_servers(url, fresh=fresh, timeout=timeout, wait=wait) if (url or "").strip() or not specs else \
+        {"ok": True, "error": "", "servers": []}
+    if not specs and not bad:
+        return agent
+    names = {s["name"] for s in agent["servers"]}
+    rows = [r for r in mcp_http.rows(http, fresh=fresh, timeout=min(timeout, 15)) if r["name"] not in names]
+    errors = [e for e in [agent.get("error")] + ["MCP HTTP servers: " + "; ".join(bad)] * bool(bad) if e]
+    return {**agent, "ok": agent["ok"] or bool(rows), "error": " ".join(errors), "servers": agent["servers"] + rows}
+
+
+def _agent_servers(url: str, *, fresh: bool = False, timeout: float = 60, wait: bool = True) -> dict[str, Any]:
     """{"ok", "error", "servers": [{name, running, error, tools, stderr, ...}]}. A failure keeps
     the last good list (marked stale) so the chat page still shows the tools menu."""
     url = (url or "").rstrip("/")
@@ -59,8 +76,14 @@ def servers(url: str, *, fresh: bool = False, timeout: float = 60, wait: bool = 
     return data
 
 
-def quick_servers(url: str) -> list[dict[str, Any]]:
+def quick_servers(url: str, http: str = "") -> list[dict[str, Any]]:
     """For page renders: the cached list, or a short request (never blocks a page long)."""
+    agent = _quick_agent(url)
+    names = {s["name"] for s in agent}
+    return agent + [r for r in mcp_http.cached_rows(http) if r["name"] not in names] if (http or "").strip() else agent
+
+
+def _quick_agent(url: str) -> list[dict[str, Any]]:
     url = (url or "").rstrip("/")
     with _lock:
         if _cache["data"] and _cache["url"] == url:
@@ -69,14 +92,19 @@ def quick_servers(url: str) -> list[dict[str, Any]]:
             return []
     if not url:
         return []
-    d = servers(url, timeout=3, wait=False)
+    d = _agent_servers(url, timeout=3, wait=False)
     if not d["ok"]:
         with _lock:
             _cache.update(failed_url=url, failed_at=time.time())
     return d["servers"]
 
 
-def reload(url: str, name: str) -> dict[str, Any]:
+def reload(url: str, name: str, http: str = "") -> dict[str, Any]:
+    mcp_http.configured(http)
+    srv = mcp_http.get(name)
+    if srv:
+        srv.refresh(fresh=True)
+        return srv.row()
     r = requests.post(f"{url.rstrip('/')}/mcp/{name}/reload", headers=_headers(), timeout=120)
     r.raise_for_status()
     with _lock:
@@ -128,8 +156,17 @@ def ollama_tools(srv_list: list[dict[str, Any]], picked: list[str], policy: dict
     return tools, index
 
 
-def call(url: str, server: str, tool: str, args: dict[str, Any], timeout: float = 180) -> dict[str, Any]:
+def call(url: str, server: str, tool: str, args: dict[str, Any], timeout: float = 180, http: str = "") -> dict[str, Any]:
     """{"ok", "text" (what the model reads), "error", "ms"}."""
+    mcp_http.configured(http)
+    srv = mcp_http.get(server)
+    if srv:
+        t0 = time.time()
+        try:
+            res = srv.call(tool, args, timeout)
+        except mcp_http.McpHttpError as e:
+            return {"ok": False, "error": str(e), "text": "", "ms": int((time.time() - t0) * 1000)}
+        return _result(res, int((time.time() - t0) * 1000))
     try:
         r = requests.post(f"{url.rstrip('/')}/mcp/{server}/call", headers=_headers(),
                           json={"tool": tool, "arguments": args, "timeout": timeout}, timeout=timeout + 15)
@@ -138,19 +175,26 @@ def call(url: str, server: str, tool: str, args: dict[str, Any], timeout: float 
         return {"ok": False, "error": f"Cannot reach the host agent: {e.__class__.__name__}: {e}", "text": "", "ms": 0}
     if r.status_code >= 400 or not d.get("ok"):
         return {"ok": False, "error": d.get("error") or f"host agent returned {r.status_code}", "text": "", "ms": d.get("ms", 0)}
-    res = d.get("result") or {}
+    return _result(d.get("result") or {}, d.get("ms", 0))
+
+
+def _result(res: dict[str, Any], ms: int) -> dict[str, Any]:
+    """An MCP tools/call result as {"ok", "text", "error", "ms"}."""
     parts = []
     for c in res.get("content") or []:
         if c.get("type") == "text":
             parts.append(c.get("text") or "")
+        elif c.get("type") == "resource" and isinstance(c.get("resource"), dict) and c["resource"].get("text") \
+                and not str(c["resource"].get("mimeType") or "").startswith("text/html"):
+            parts.append(c["resource"]["text"])
         else:
             parts.append(f"({c.get('type')} content left out)")
     text = "\n".join(parts).strip()
     if not text and res.get("structuredContent") is not None:
         text = json.dumps(res["structuredContent"], default=str)
     if res.get("isError"):
-        return {"ok": False, "error": text or "the tool failed", "text": "", "ms": d.get("ms", 0)}
-    return {"ok": True, "text": text, "error": "", "ms": d.get("ms", 0)}
+        return {"ok": False, "error": text or "the tool failed", "text": "", "ms": ms}
+    return {"ok": True, "text": text, "error": "", "ms": ms}
 
 
 def pretty(text: str) -> str:

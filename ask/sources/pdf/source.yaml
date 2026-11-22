@@ -4,7 +4,8 @@
 # ASK_SOURCE_UPLOAD_DIR (the folder the Knowledge sources page saves uploads into).
 # Text comes from the PDF with pypdf; scanned pages (no text layer) are read with
 # Tesseract OCR (pdftoppm renders the page, tesseract reads it). Both are in the image
-# and run offline. One document per PDF, one "## Page N" section per page.
+# and run offline. One document per PDF (or per chapter / N pages with 'Split into
+# documents'), one "## Page N" section per page.
 name: pdf
 title: PDF documents
 description: Indexes PDF files (guides, design documents, runbooks) uploaded on this page or from a folder. Scanned pages are read with OCR (Tesseract). Answers cite the page.
@@ -49,7 +50,27 @@ options:
     label: Max pages per file
     type: number
     min: 1
-    default: 2000
+    default: 10000
+    hint: "Pages after this are not read. Raising it later reads only the new pages."
+  - key: split
+    label: Split into documents
+    type: select
+    choices: ["off", chapters, pages]
+    default: "off"
+    hint: "off = one document per PDF. chapters = one document per bookmark (chapter) of the PDF, or every 'Pages per document' pages when it has no bookmarks. pages = every 'Pages per document' pages. Use it for big manuals: an answer takes at most 2 sections from one document, so smaller documents let it use more parts of the book."
+  - key: split_level
+    label: Bookmark level
+    type: number
+    min: 1
+    max: 4
+    default: 1
+    hint: "Only for 'chapters'. 1 = top-level bookmarks (chapters), 2 = also their sub-bookmarks (sections), and so on."
+  - key: split_pages
+    label: Pages per document
+    type: number
+    min: 1
+    default: 50
+    hint: "For 'pages', and for 'chapters' when a PDF has no bookmarks. A chapter longer than this is cut into parts of this size."
   - key: uploads
     label: When a file is uploaded again
     type: select

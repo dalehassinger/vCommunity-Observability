@@ -23,7 +23,7 @@ import time
 from typing import Any, Iterator
 from urllib.parse import quote
 
-from . import data, mcp, overview, syslog_out, websearch, webusage
+from . import data, drawio, drawio_libs, mcp, overview, syslog_out, websearch, webusage
 from . import reports as reports_mod
 from .db import DB
 from .indexer import embed_prefixes
@@ -490,6 +490,10 @@ def tool_messages(cfg: dict[str, Any], items: list[dict[str, Any]], question: st
         notes.append(FETCH_NOTE)
     if websearch.LOCAL_SCOPE in servers:
         notes.append(LOCAL_NOTE)
+    if names and any(s == "drawio" or "drawio" in s.lower() or "draw" in s.lower() for s in names):
+        lib = drawio_libs.note()
+        if lib:
+            notes.append(lib)
     note = "\n\n".join(notes)
     if items:
         msgs = build_messages(cfg, items, question, history)
@@ -528,7 +532,7 @@ def answer_stream(db: DB, cfg: dict[str, Any], chat_id: str, question: str,
         mcp_index: dict[str, Any] = {}
         servers = [t for t in (tools or []) if t not in websearch.SCOPES]
         if servers:
-            info = mcp.servers(cfg.get("agent_url") or "", fresh=True)
+            info = mcp.servers(cfg.get("agent_url") or "", fresh=True, http=cfg.get("mcp_http_servers") or "")
             policy = mcp.load_policy(cfg.get("mcp_tools"))
             mcp_tools, mcp_index = mcp.ollama_tools(info["servers"], servers, policy)
             if not mcp_tools:
@@ -751,15 +755,44 @@ def run_tool(cfg: dict[str, Any], chat_id: str, call: dict[str, Any], card: dict
         return
     card["status"] = "running"
     yield sse("tool", {k: v for k, v in card.items() if k != "_for_model"})
-    res = mcp.call(cfg.get("agent_url") or "", server, tool["name"], args)
+    call_args, lib_notes = args, []
+    if tool["name"] == "create_diagram":
+        # The user's own draw.io shapes: cells with style lib=<name> become the real shapes.
+        call_args, used, unknown = drawio_libs.expand_args(args)
+        if unknown:
+            lib_notes.append("Not in the shape library (drawn as plain boxes): " + ", ".join(sorted(set(unknown)))
+                             + ". Use only the names listed in the system prompt.")
+        if used:
+            card["note"] = f"Your draw.io shapes used: {len(used)} ({', '.join(sorted(set(used))[:8])}" + \
+                (", ..." if len(set(used)) > 8 else "") + ")"
+    res = mcp.call(cfg.get("agent_url") or "", server, tool["name"], call_args, http=cfg.get("mcp_http_servers") or "")
     card["ms"] = res["ms"]
     if res["ok"]:
         limit = max(1000, int(cfg.get("mcp_result_chars") or 16000))
-        text = res["text"]
+        # draw.io diagrams: saved as .drawio files with short links to the (local) web editor
+        # and to draw.io Desktop (drawio.py). Setting drawio_open picks which one the model passes on.
+        editor_url = cfg.get("drawio_editor_url") or ""
+        editor_title = "Open in draw.io (local web editor)" if editor_url else "Open in draw.io (web)"
+        mode = "desktop" if (cfg.get("drawio_open") or "editor") == "desktop" else "editor"
+        try:
+            text, links, notes = drawio.to_files(res["text"], drawio.title_from(args), mode, editor_title)
+        except (OSError, RuntimeError) as e:
+            log.warning("draw.io file not saved: %s", e)
+            text, links, notes = res["text"], [], []
+        if not links:          # no diagram file (Mermaid, CSV, or not draw.io): the editor link as is
+            text = local_drawio(text, editor_url)
+            links = tool_links(text)
+            for l in links:
+                if l["title"] == "Open in draw.io":
+                    l["title"] = editor_title
+        notes = lib_notes + notes
         cut = len(text) > limit
         card.update(status="ok", result=mcp.pretty(text)[:20000], chars=len(text), cut=cut)
+        if links:
+            card["links"] = links
         card["_for_model"] = (f"[{n}] Result of {tool['name']} (MCP server {server})"
-                              + (f", first {limit} of {len(text)} characters" if cut else "") + f":\n{text[:limit]}")
+                              + (f", first {limit} of {len(text)} characters" if cut else "") + f":\n{text[:limit]}"
+                              + "".join("\n\n" + x for x in notes))
     else:
         card.update(status="error", error=res["error"][:2000])
         card["_for_model"] = f"[{n}] The tool {tool['name']} failed: {res['error'][:2000]}"
@@ -767,6 +800,35 @@ def run_tool(cfg: dict[str, Any], chat_id: str, call: dict[str, Any], card: dict
 
 
 URL_IN_TEXT = re.compile(r"https?://[^\s<>\"')\]]+")
+
+
+DRAWIO_WEB = re.compile(r"https://(?:app|embed|www)\.(?:diagrams\.net|draw\.io)/", re.I)
+
+
+def local_drawio(text: str, editor: str) -> str:
+    """Point draw.io editor links (https://app.diagrams.net/?...#R<diagram>) at the local draw.io
+    editor, so the diagram opens without the internet. The diagram is in the part after the #,
+    which the editor reads in the browser, so any draw.io editor opens the same link."""
+    editor = (editor or "").strip()
+    if not editor or not re.match(r"^https?://", editor):
+        return text
+    return DRAWIO_WEB.sub(editor.rstrip("/") + "/", text or "")
+
+
+def tool_links(text: str, limit: int = 5) -> list[dict[str, str]]:
+    """Links in an MCP tool's result, shown on its card (the draw.io MCP server answers with an
+    "Open in draw.io" link that holds the whole diagram after the #)."""
+    out: list[dict[str, str]] = []
+    for u in URL_IN_TEXT.findall(text or ""):
+        u = u.rstrip(".,;:")
+        if any(x["url"] == u for x in out):
+            continue
+        host = re.sub(r"^https?://([^/:#?]+).*$", r"\1", u).lower()
+        title = "Open in draw.io" if host.endswith(("diagrams.net", "draw.io")) or "#R" in u or "#create=" in u else u[:100]
+        out.append({"url": u, "title": title})
+        if len(out) >= limit:
+            break
+    return out
 
 
 def norm_url(url: str) -> str:

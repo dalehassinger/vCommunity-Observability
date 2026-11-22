@@ -237,6 +237,7 @@
       } else if (o.type === 'date' || o.type === 'number') {
         input = document.createElement('input'); input.type = o.type; input.value = v;
         if (o.min != null) input.min = o.min;
+        if (o.max != null) input.max = o.max;
         if (o.step != null) input.step = o.step;
       } else {
         input = document.createElement('input'); input.type = 'text'; input.value = v;

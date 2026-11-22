@@ -7,7 +7,8 @@
   <div>
     <div class="breadcrumb">Knowledge</div>
     <h1>MCP tools</h1>
-    <p class="subtle">Tools of the MCP servers that run on your Mac, through the Ask host agent. Pick
+    <p class="subtle">Tools of the MCP servers that run on your Mac (through the Ask host agent) and of the MCP servers
+      Ask reaches over HTTP, such as the draw.io container. Pick
       <b>Tools: &lt;server&gt;</b> in the chat's Sources menu and the model can call them. Edit the server's script and
       press <b>Reload tools</b> (or just ask again: a changed script restarts the server by itself).</p>
   </div>
@@ -20,6 +21,37 @@
 
 <div class="perf-note" id="mcp-note" hidden></div>
 <div id="mcp-servers"><p class="subtle">Asking the host agent…</p></div>
+
+<div class="card">
+  <div class="card-header">MCP servers over HTTP</div>
+  <div class="card-block">
+    <div class="field"><label for="m-http">Servers</label>
+      <div><textarea id="m-http" rows="3" spellcheck="false" placeholder="drawio = http://drawio-mcp:3001/mcp"></textarea>
+        <div class="hint">MCP servers Ask calls itself (Streamable HTTP), one per line: <code>name = url</code>. The name is what the
+          Sources chips show (<b>Tools: name</b>). From inside Docker use the container's name, for example
+          <code>drawio = http://drawio-mcp:3001/mcp</code> for the draw.io MCP container, or <code>host.docker.internal</code>
+          for a server on the Mac. A header can follow the URL: <code>name = url | Authorization: Bearer …</code>.
+          Saved with <b>Save</b> below; press <b>Refresh</b> to see the tools.</div></div></div>
+    <div class="field"><label for="m-drawio-open">Open diagrams in</label>
+      <div><select id="m-drawio-open">
+          <option value="editor">draw.io web editor (local container)</option>
+          <option value="desktop">draw.io Desktop app on the Mac</option>
+        </select>
+        <div class="hint">Which link the answer gives for a diagram from the draw.io MCP server. Either way the tool card has
+          both: <b>Open in draw.io (local web editor)</b> and <b>Open in draw.io Desktop</b> (Ask saves the diagram as a
+          <code>.drawio</code> file and the host agent opens it in the app; without the agent the file is downloaded).</div></div></div>
+    <div class="field"><label>Shape libraries</label>
+      <div><div id="m-drawio-libs" class="subtle">…</div>
+        <div class="hint">Your own draw.io libraries (<code>*.xml</code> saved from draw.io) in the <code>drawio-libs</code> folder
+          next to <code>docker-compose.yml</code>. Ask tells the model their shape names and puts the real shapes into its
+          diagrams; the web editor opens with them in its sidebar. Files are read again when they change.</div></div></div>
+    <div class="field"><label for="m-drawio">draw.io editor</label>
+      <div><input type="url" id="m-drawio" spellcheck="false" placeholder="http://localhost:8082">
+        <div class="hint">The draw.io MCP server answers with links to the public editor (app.diagrams.net). With a local
+          draw.io editor here (the <code>drawio</code> container, <code>jgraph/drawio</code>), Ask points those links at it, so
+          diagrams open without the internet. Use the address your browser opens. Empty = keep the public links.</div></div></div>
+  </div>
+</div>
 
 <div class="card">
   <div class="card-header">Answers with tools</div>

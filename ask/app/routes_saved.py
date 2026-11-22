@@ -70,7 +70,7 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> None:
         s = settings()
         current = saved.get(edit) if edit else None
         return page(request, "saved.html", "/saved", items=with_status(saved.list()), current=current, all_tags=saved.all_tags(),
-                    show_form=bool(current) or new, mcp_servers=mcp.quick_servers(s["agent_url"]),
+                    show_form=bool(current) or new, mcp_servers=mcp.quick_servers(s["agent_url"], s["mcp_http_servers"]),
                     web_search=websearch.status(s), brave_search=websearch.brave_status(s), local_fetch=websearch.local_status(s))
 
     @app.get("/ui/saved", include_in_schema=False)

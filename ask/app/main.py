@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlparse
 
+import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, Security
 from fastapi.openapi.docs import get_swagger_ui_html
@@ -33,7 +34,7 @@ from .db import DB
 from .indexer import NAME_RE, Indexer, discover_plugins
 from . import llm
 from .ollama import OllamaError
-from . import control, mcp, rag, syslog_out, websearch, webusage
+from . import control, drawio, drawio_libs, mcp, mcp_http, rag, syslog_out, websearch, webusage
 from .reports import Reports
 from .perf import SAMPLE_SECONDS, Sampler
 from .evalrun import MAX_PROMPTS, EvalRunner
@@ -141,7 +142,8 @@ def create_app() -> FastAPI:
         return discover_plugins(cfg.sources_dirs)
 
     indexer = Indexer(db, cfg.data_dir, plugins, settings)
-    upload_max = int(float(os.environ.get("ASK_UPLOAD_MAX_MB") or 50) * 1024 * 1024)
+    drawio.init(cfg.data_dir / "diagrams")
+    upload_max = int(float(os.environ.get("ASK_UPLOAD_MAX_MB") or 200) * 1024 * 1024)
 
     def uploaded_files(name: str) -> list[dict[str, Any]]:
         d = indexer.upload_dir(name)
@@ -294,7 +296,7 @@ def create_app() -> FastAPI:
         cfg = settings()
         names = {s["name"] for s in db.list_sources() if s.get("enabled", True)}
         names |= {sc for sc in websearch.SCOPES if websearch.status_of(cfg, sc)["available"]}
-        names |= {"mcp:" + s["name"] for s in mcp.quick_servers(cfg["agent_url"])}
+        names |= {"mcp:" + s["name"] for s in mcp.quick_servers(cfg["agent_url"], cfg["mcp_http_servers"])}
         return names
 
     def split_scope(scope: Any) -> tuple[list[str] | None, list[str]]:
@@ -329,7 +331,7 @@ def create_app() -> FastAPI:
         s = settings()
         examples = example_questions(s)[:max(0, min(24, int(s.get("chat_examples_count", 6) or 0)))]
         return page(request, "chat.html", "/chat", chat=None, messages=[], examples=examples, stats=db.stats(),
-                    mcp_servers=mcp.quick_servers(settings()["agent_url"]), web_search=websearch.status(settings()),
+                    mcp_servers=mcp.quick_servers(settings()["agent_url"], settings()["mcp_http_servers"]), web_search=websearch.status(settings()),
                     brave_search=websearch.brave_status(settings()), local_fetch=websearch.local_status(settings()))
 
     @app.get("/chat/{chat_id}", response_class=HTMLResponse, include_in_schema=False)
@@ -338,7 +340,7 @@ def create_app() -> FastAPI:
         if not chat:
             return RedirectResponse("/chat")
         return page(request, "chat.html", f"/chat/{chat_id}", chat=chat, messages=db.messages(chat_id),
-                    examples=[], stats=db.stats(), mcp_servers=mcp.quick_servers(settings()["agent_url"]),
+                    examples=[], stats=db.stats(), mcp_servers=mcp.quick_servers(settings()["agent_url"], settings()["mcp_http_servers"]),
                     web_search=websearch.status(settings()), brave_search=websearch.brave_status(settings()), local_fetch=websearch.local_status(settings()))
 
     @app.get("/sources", response_class=HTMLResponse, include_in_schema=False)
@@ -440,13 +442,15 @@ def create_app() -> FastAPI:
     # -- MCP tools ---------------------------------------------------------------
     def mcp_payload(fresh: bool) -> dict[str, Any]:
         s = settings()
-        info = mcp.servers(s["agent_url"], fresh=fresh)
+        info = mcp.servers(s["agent_url"], fresh=fresh, http=s["mcp_http_servers"])
         policy = mcp.load_policy(s["mcp_tools"])
         for srv in info["servers"]:
             for t in srv.get("tools") or []:
                 t["policy"] = mcp.policy_of(policy, srv["name"], t)
                 t["read_only"] = mcp.read_only(t)
         return {**info, "agent_url": s["agent_url"], "agent_token_set": bool(os.environ.get("ASK_AGENT_TOKEN")),
+                "http_servers": s["mcp_http_servers"], "drawio_editor_url": s.get("drawio_editor_url") or "",
+                "drawio_open": s.get("drawio_open") or "editor", "drawio_libs": drawio_libs.summary(),
                 "max_rounds": s["mcp_max_rounds"], "result_chars": s["mcp_result_chars"]}
 
     @app.get("/tools", response_class=HTMLResponse, include_in_schema=False)
@@ -470,6 +474,31 @@ def create_app() -> FastAPI:
         old = mcp.load_policy(settings()["mcp_tools"])
         old.update(pol)
         db.set_setting("mcp_tools", json.dumps(old, sort_keys=True))
+        if "mcp_http_servers" in body:
+            text = str(body.get("mcp_http_servers") or "").strip()
+            _, bad = mcp_http.parse(text)
+            if bad:
+                raise HTTPException(400, "HTTP MCP servers: " + "; ".join(bad))
+            if text == (cfg.defaults.get("mcp_http_servers") or ""):
+                db.delete_setting("mcp_http_servers")
+            else:
+                db.set_setting("mcp_http_servers", text)
+        if "drawio_editor_url" in body:
+            url = str(body.get("drawio_editor_url") or "").strip()
+            if url and not re.match(r"^https?://[^\s/]+", url):
+                raise HTTPException(400, "draw.io editor URL: start it with http:// or https://")
+            if url == (cfg.defaults.get("drawio_editor_url") or ""):
+                db.delete_setting("drawio_editor_url")
+            else:
+                db.set_setting("drawio_editor_url", url)
+        if body.get("drawio_open") not in (None, ""):
+            mode = str(body["drawio_open"])
+            if mode not in ("editor", "desktop"):
+                raise HTTPException(400, "drawio_open: editor or desktop")
+            if mode == (cfg.defaults.get("drawio_open") or "editor"):
+                db.delete_setting("drawio_open")
+            else:
+                db.set_setting("drawio_open", mode)
         for key, lo, hi in (("mcp_max_rounds", 1, 20), ("mcp_result_chars", 1000, 200000)):
             if body.get(key) not in (None, ""):
                 try:
@@ -489,7 +518,7 @@ def create_app() -> FastAPI:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", name):
             raise HTTPException(400, "Bad server name")
         try:
-            return {"ok": True, "server": mcp.reload(settings()["agent_url"], name)}
+            return {"ok": True, "server": mcp.reload(settings()["agent_url"], name, settings()["mcp_http_servers"])}
         except Exception as e:  # noqa: BLE001 - shown on the page
             raise HTTPException(502, f"Reload failed: {e}")
 
@@ -672,6 +701,60 @@ def create_app() -> FastAPI:
             raise HTTPException(404)
         return FileResponse(f, headers={"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
                                         "Cache-Control": "max-age=3600"})
+
+    # -- draw.io diagrams (.drawio files from the draw.io MCP server, see drawio.py) --
+    @app.get("/diagrams/{name}", include_in_schema=False)
+    def diagram_file(name: str):
+        f = drawio.path(name)
+        if not f:
+            raise HTTPException(404, "No such diagram")
+        return FileResponse(f, media_type="application/vnd.jgraph.mxfile", filename=name,
+                            headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
+
+    @app.get("/diagrams/{name}/web", include_in_schema=False)
+    def diagram_web(request: Request, name: str):
+        """Open a saved diagram in the draw.io web editor (the local editor container when
+        drawio_editor_url is set), with your shape libraries in its sidebar."""
+        base = str(request.base_url).rstrip("/")
+        editor = follow_host(settings().get("drawio_editor_url") or "", request.url.hostname)
+        link = drawio.editor_link(name, editor, drawio_libs.files(), base)
+        if not link:
+            raise HTTPException(404, "No such diagram")
+        return RedirectResponse(link, status_code=302)
+
+    @app.get("/drawio-libs/{file}", include_in_schema=False)
+    def drawio_library(file: str):
+        """Your draw.io shape libraries, for the editor's sidebar (it fetches them cross-origin)."""
+        if file not in drawio_libs.files():
+            raise HTTPException(404, "No such library")
+        return FileResponse(drawio_libs.DIR / file, media_type="application/xml",
+                            headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store",
+                                     "X-Content-Type-Options": "nosniff"})
+
+    @app.post("/ui/diagrams/{name}/open", include_in_schema=False)
+    def diagram_open(request: Request, name: str):
+        """Open the diagram in draw.io Desktop on the Mac, through the host agent."""
+        same_origin(request)
+        f = drawio.path(name)
+        if not f:
+            raise HTTPException(404, "No such diagram")
+        url = (settings().get("agent_url") or "").strip()
+        if not url:
+            raise HTTPException(409, "No host agent (Settings > Host agent URL), so the file is downloaded instead")
+        try:
+            r = requests.post(url.rstrip("/") + "/drawio/open", headers=mcp._headers(), timeout=20,
+                              json={"name": name, "xml": f.read_text(encoding="utf-8")})
+        except requests.RequestException as e:
+            raise HTTPException(502, f"The host agent did not answer ({e.__class__.__name__})")
+        if r.status_code == 404:
+            raise HTTPException(409, "The host agent is older than 0.4.0: re-run the agent installer")
+        try:
+            d = r.json()
+        except ValueError:
+            d = {}
+        if r.status_code != 200 or not d.get("ok"):
+            raise HTTPException(502, d.get("error") or f"Host agent: HTTP {r.status_code}")
+        return {"ok": True, "path": d.get("path", "")}
 
     # -- UI endpoints (used by the pages) --------------------------------------
     @app.post("/ui/chat", include_in_schema=False)

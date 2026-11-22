@@ -49,6 +49,11 @@ services:
       # Ollama runs on the Mac itself (it uses the GPU there). Rancher Desktop (moby)
       # and Docker Desktop reach the Mac at host.docker.internal.
       ASK_OLLAMA_URL: ${ASK_OLLAMA_URL:-http://host.docker.internal:11434}
+      # MCP servers Ask calls over HTTP (MCP tools page wins): the draw.io MCP container below.
+      ASK_MCP_HTTP_SERVERS: ${ASK_MCP_HTTP_SERVERS:-drawio=http://drawio-mcp:3001/mcp}
+      # "Open in draw.io" links go to the local draw.io editor below, not app.diagrams.net
+      # (the address your browser opens; MCP tools page wins; empty = public editor).
+      ASK_DRAWIO_URL: ${ASK_DRAWIO_URL:-http://localhost:8082}
     # Linux Docker hosts only: uncomment so host.docker.internal resolves. Do NOT use it on
     # Rancher Desktop or Docker Desktop: it overrides their own mapping to the Mac and Ollama is refused.
     # extra_hosts:
@@ -59,6 +64,31 @@ services:
       - ./ask-sources:/sources                 # optional: extra or patched source plug-ins
       - ./exports:/exports:ro                  # the dashboards' exports, read by "spreadsheet" sources
       - ./control:/app/control                 # Apps on / off switches, shared with vco
+      - ./drawio-libs:/app/drawio-libs:ro      # your draw.io shape libraries (*.xml) for diagrams Ask makes
       # - ./ask/config/ask.yaml:/app/config/ask.yaml:ro   # optional: your own copy of ask.example.yaml
+    restart: unless-stopped
+    init: true
+
+  # draw.io MCP server (jgraph/drawio-mcp): lets MCP clients on the Mac (Claude Code, Claude
+  # Desktop, VS Code) and vCommunity Ask (http://drawio-mcp:3001/mcp) create draw.io diagrams. Same as
+  #   docker run -d --name drawio-mcp -p 127.0.0.1:3001:3001 jgraph/drawio-mcp
+  # The Mac reaches it at 127.0.0.1:3001 only (not the network); vco-ask by its name on the compose
+  # network. Start only this one: docker compose up -d drawio-mcp
+  drawio-mcp:
+    image: ${DRAWIO_MCP_IMAGE:-jgraph/drawio-mcp:latest}
+    container_name: drawio-mcp
+    ports:
+      - "127.0.0.1:${DRAWIO_MCP_PORT:-3001}:3001"
+    restart: unless-stopped
+    init: true
+
+  # draw.io editor (jgraph/drawio, Apache-2.0): the full diagrams.net editor served from this
+  # container, so the diagrams Ask makes with the draw.io MCP server open without the internet.
+  # http://localhost:8082 on the Mac. Start only this one: docker compose up -d drawio
+  drawio:
+    image: ${DRAWIO_IMAGE:-jgraph/drawio:latest}
+    container_name: drawio
+    ports:
+      - "127.0.0.1:${DRAWIO_PORT:-8082}:8080"
     restart: unless-stopped
     init: true

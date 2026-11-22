@@ -25,6 +25,8 @@ The core stays small. Every feature is an **add-on module** that can be written 
 - [Modules included](#modules-included)
 - [Logs (syslog server)](#logs-syslog-server)
 - [vCommunity Ask (local AI chat)](#vcommunity-ask-local-ai-chat)
+- [draw.io MCP server (third container)](#drawio-mcp-server-third-container)
+- [draw.io editor (fourth container)](#drawio-editor-fourth-container)
 - [Configuration reference](#configuration-reference)
 - [Docker image and runtime](#docker-image-and-runtime)
 - [Using it from MP Builder](#using-it-from-mp-builder)
@@ -220,11 +222,11 @@ With Rancher Desktop's `containerd` engine, set `ASK_OLLAMA_URL=http://host.lima
 
 ```bash
 docker context use rancher-desktop     # Rancher Desktop only
-docker compose up -d --build           # builds and starts both containers (first build takes several minutes)
-docker compose ps                      # both should show "healthy" after a minute
+docker compose up -d --build           # builds vco and vco-ask, pulls drawio-mcp and drawio, starts all four (first build takes several minutes)
+docker compose ps                      # vco and vco-ask should show "healthy" after a minute
 ```
 
-The commands are the same in PowerShell. With the `containerd` engine use `nerdctl compose up -d --build`. To start only one container, name it: `docker compose up -d --build vco` or `... vco-ask`. If PowerShell fails to build with `Illegal instruction`, see [Troubleshooting](#troubleshooting).
+The commands are the same in PowerShell. With the `containerd` engine use `nerdctl compose up -d --build`. To start only one container, name it: `docker compose up -d --build vco`, `... vco-ask` `docker compose up -d drawio-mcp` or `docker compose up -d drawio`. If PowerShell fails to build with `Illegal instruction`, see [Troubleshooting](#troubleshooting).
 
 Quick health checks: http://localhost:8080/api/core/health and http://localhost:8081/api/health.
 
@@ -760,7 +762,7 @@ A prompt that works, kept with its sources so you can ask it again with one clic
 | Name | Shown in the **Saved** menu and as the new chat's title. Empty uses the start of the prompt |
 | Sources | The same grouped buttons as the chat: knowledge sources, **Web fetch (Ollama)**, **Web fetch (local)**, **Web search (Ollama)**, **Web search (Brave)**, MCP tools, **No sources** or **All sources**. Each saved prompt keeps its own pick |
 | Pages to fetch | Optional, one full URL per line (at most 10). They are added under the prompt as *Read these pages with web_fetch: - url*. Needs **Web fetch (Ollama)**, **Web fetch (local)** or **Web search (Ollama)** picked. Each page is one Ollama web fetch call (free with Web fetch (local)) |
-| Prompt | Written exactly as you would type it in the chat. A value that changes can be a variable: `{city}`, or `{city=Dillsburg}` with a default (letters, digits and `_`, at most 8 per prompt). Variables work in the pages too, for example `https://example.com/weather/{city}` (the value is URL-encoded there) |
+| Prompt | Written exactly as you would type it in the chat. A value that changes can be a variable: `{city}`, or `{city=Dillsburg}` with a default (letters, digits and `_`, at most 30 per prompt; the fill-in window scrolls when there are many). Variables work in the pages too, for example `https://example.com/weather/{city}` (the value is URL-encoded there) |
 | Model | Empty uses the chat model in use. Another model is used for that chat only; the **Chat model** setting is not changed |
 | Tags | Optional words such as *sports, weather, news* (commas between, at most 10; stored in lower case). Used to filter the list and the Saved menu |
 
@@ -1004,7 +1006,7 @@ A normal answer only sees the best few matching chunks (**Chunks to retrieve**, 
 The `spreadsheet` source plug-in reads `.xlsx` and `.csv` files, for example an RVTools export or the dashboards' **DBH Insights** XLSX export. It can read them in two ways (the **Files from** option):
 
 - **folder (default).** A folder inside the container. Compose mounts the dashboards' `./exports` folder read-only at `/exports`, so a scheduled DBH Insights export is picked up automatically: Ask re-checks the folder on the source's **Re-sync every** interval (as low as 0.25 h, 15 minutes) and re-indexes only when a matching file is new or changed (name, size and modified time). With `0` (never) a new export is not picked up until you press **Sync now**.
-- **upload.** Drag a file onto the source's card on the **Knowledge sources** page (or click **choose a file**). Ask saves it under `data/uploads/<source>/` and re-indexes. By default a new upload replaces the earlier files (**When a file is uploaded again** = `replace`); `keep` keeps them all. **Remove** deletes an uploaded file. Uploading needs the API token when `ASK_API_TOKEN` is set. Only `.xlsx` and `.csv` are accepted, up to `ASK_UPLOAD_MAX_MB` (default 50).
+- **upload.** Drag a file onto the source's card on the **Knowledge sources** page (or click **choose a file**). Ask saves it under `data/uploads/<source>/` and re-indexes. By default a new upload replaces the earlier files (**When a file is uploaded again** = `replace`); `keep` keeps them all. **Remove** deletes an uploaded file. Uploading needs the API token when `ASK_API_TOKEN` is set. Only `.xlsx` and `.csv` are accepted, up to `ASK_UPLOAD_MAX_MB` (default 200).
 
 **Add a spreadsheet source.** On **Knowledge sources** press **Add source**, pick **Spreadsheet (xlsx / csv)**, keep the defaults to read the newest `dbh-insights-*.xlsx` from `/exports` (or set **Files from** to `upload`), and save. Spreadsheet sources are not created automatically. **Spreadsheet sources are used only when you pick them.** **All sources** in the chat's Sources list (and `"sources": "all"` in the API) searches every source except spreadsheets, so RVTools rows never crowd out documentation answers. To ask about a spreadsheet, tick it in the Sources list (or pass its name in the API); you can tick it together with other sources.
 
@@ -1108,7 +1110,7 @@ A **PDF documents** source (plug-in `pdf`) indexes PDF files such as product gui
 
 1. [pypdf](https://github.com/py-pdf/pypdf) (BSD-3-Clause, pure Python) reads each page's text layer.
 2. A page with almost no text (under 25 characters: a scanned or photographed page) is rendered to a grayscale image with `pdftoppm` (poppler-utils) and read with [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) (Apache-2.0). Both are installed in the Ask image and run offline.
-3. Each PDF becomes one document, titled from the PDF's Title property (or the file name), with one `## Page N` section per page (`## Page N (OCR)` for OCR pages). The page sections become the chunks, so answers name the page.
+3. Each PDF becomes one document, titled from the PDF's Title property (or the file name), with one `## Page N` section per page (`## Page N (OCR)` for OCR pages). The page sections become the chunks, so answers name the page. With **Split into documents** a PDF becomes several documents instead (one per chapter or per N pages, see [Big manuals](#big-manuals-split-into-documents)); page numbers stay those of the whole PDF.
 4. The source card under an answer has **Open PDF, page N**, which opens the file in the browser at that page (`/files/<source>/<file>.pdf#page=N`). Ask serves only the PDFs of `pdf` sources.
 
 | Option | Default | Meaning |
@@ -1119,10 +1121,25 @@ A **PDF documents** source (plug-in `pdf`) indexes PDF files such as product gui
 | `ocr` | `auto` | `auto` = OCR only pages with no text layer; `always` = OCR every page (for PDFs whose text layer is garbled; slow); `off` = never |
 | `ocr_languages` | `eng` | Tesseract languages joined with `+`, for example `eng+deu`. The image has English; for others build with `--build-arg OCR_LANGS="tesseract-ocr-deu"` (see below) |
 | `ocr_dpi` | `200` | Render resolution for OCR. 300 reads small print better but is slower |
-| `max_pages_per_file` | `2000` | Pages after this are ignored |
+| `max_pages_per_file` | `10000` | Pages after this are ignored (logged in the sync log). Raising it later reads only the new pages; the cached pages are kept |
+| `split` (Split into documents) | `off` | `off` = one document per PDF; `chapters` = one document per bookmark (chapter), or every `split_pages` pages when the PDF has no bookmarks; `pages` = every `split_pages` pages |
+| `split_level` (Bookmark level) | `1` | Only for `chapters`. `1` = top-level bookmarks, `2` = also their sub-bookmarks (sections), up to `4` |
+| `split_pages` (Pages per document) | `50` | For `pages`, and for `chapters` without bookmarks. A chapter longer than this is cut into parts of this size |
 | `uploads` | `keep` | `keep` = every uploaded PDF is indexed (same file name overwrites); `replace` = a new upload removes the earlier files |
 
 **Speed.** Text pages take milliseconds. OCR takes a few seconds per page on Apple Silicon, so a 300-page scanned manual can take 15 to 30 minutes the first time. Results are cached per file (by content hash) in `data/sources/<source>/cache/`, so re-syncs only read new or changed PDFs, and a sync with no file changes answers "no changes" at once. A sync may run 60 minutes: the plug-in stops a few minutes before that, indexes what it has (the version shows "N to finish next sync") and continues where it stopped on the next sync (press **Sync now** to continue right away).
+
+#### Big manuals: split into documents
+
+An answer takes at most 2 sections from any one document. A 9,000-page manual indexed as one document can therefore only ever give 2 of its pages to an answer, which is fine for pinpoint questions but weak for broad ones. **Split into documents** fixes that without splitting the file by hand:
+
+- `chapters` reads the PDF's bookmarks (the outline shown in a PDF viewer's sidebar). Each bookmark at **Bookmark level** or above starts a document, pages before the first bookmark become **Front matter**, and a chapter longer than **Pages per document** is cut into parts. A document is titled `<book>: <chapter> (part 2 of 5, pp. 52-101)`, so the chapter name helps search and shows on the source card.
+- `pages` makes a document every **Pages per document** pages (`<book> (pp. 1-50)`).
+- **Open PDF, page N** still opens the whole PDF at the right page.
+- Changing the option re-indexes the source from the cached text (no PDF is read again). Ids are `<file>@p<first page>`, for example `vcf-admin@p00052`; with `off` the id stays the file name, so existing sources are not changed.
+- Past the time limit, the pages read so far are indexed as their documents and the rest follow on the next sync.
+
+Recommended for a large manual (thousands of pages): put it in `./ask-knowledge/<name>/`, add a **PDF documents** source with **Files from** = `folder` and **Folder** = `/knowledge/<name>`, keep **OCR** at `auto`, **Split into documents** = `chapters`, **Bookmark level** `1` (or `2` when chapters are very long) and **Pages per document** `50`. Give it its own source so it can be picked by name, and re-sync it weekly or monthly.
 
 **More OCR languages.** Debian packages `tesseract-ocr-<lang>` add languages (`deu`, `fra`, `spa`, `nld`, `jpn` ...):
 
@@ -1366,6 +1383,17 @@ This list is the server as of 2026-11-17. The **MCP tools** page always shows th
 
 **Ideas for questions:** "Which VMs have snapshots older than 14 days?", "Why was app01 slow in the last 2 hours?" (`Get-VM-Diagnostics`), "Which Linux VMs have pending kernel updates?", "Compare VMware Tools versions inside the VMs with vCenter", "How many days until NFS-01 is full?". To add a tool, write the function with `.SYNOPSIS` and `.PARAMETER` help, add its name to `$FunctionsToExpose`, and press **Reload tools**. If it changes things, also add it to the write list in `MCP-StdioRuntime.ps1` (the `$writes` line), so it is marked as changing things and defaults to Ask first.
 
+### MCP servers over HTTP (draw.io)
+
+Ask can also reach MCP servers itself over HTTP (the MCP **Streamable HTTP** transport), without the host agent. This is for servers that run as containers, such as the [draw.io MCP server](#drawio-mcp-server-third-container): the model can then draw diagrams in an answer.
+
+- **Set up:** MCP tools page, card **MCP servers over HTTP**, one server per line, `name = url`, then **Save** and **Refresh**. `docker-compose.yml` already sets `ASK_MCP_HTTP_SERVERS=drawio=http://drawio-mcp:3001/mcp` for `vco-ask` (the containers reach each other by name on the compose network), so the **drawio** server is there once the `drawio-mcp` container runs. What you save on the page wins over the variable. A header can follow the URL: `name = url | Authorization: Bearer ...`. For a server on the Mac use `host.docker.internal` instead of `127.0.0.1`.
+- **Use it:** tick **drawio** under **MCP tools** in the chat's Sources and ask, for example *Draw a diagram of how a vCenter, three ESX hosts and a vSAN datastore connect* or *Make a flowchart of the ESX patching steps from my runbook source*. Tick a knowledge source too and the model draws from what it finds there.
+- **What you get:** `create_diagram` turns the Mermaid, draw.io XML, PlantUML or CSV the model writes into a draw.io diagram and answers with a link. The tool card shows it as **Open in draw.io** (links in any MCP result are listed on its card); the whole diagram is in the link after the `#`, so the diagram itself is not sent to a server. The draw.io MCP server always links to the public editor (app.diagrams.net); Ask points those links at the local [draw.io editor](#drawio-editor-fourth-container) instead (`ASK_DRAWIO_URL`, compose default `http://localhost:8082`, or **draw.io editor** on the MCP tools page), so diagrams open with no internet. The model gets the local link too, so the link it writes in the answer is local. The draw.io server's inline viewer (an MCP App page) is not shown in Ask; the model reads only the text. `search_shapes` finds draw.io shape styles (for example AWS or VMware icons) for XML diagrams, `get_drawio_reference` gives the model the format rules.
+- **Policies** work as for the host agent's servers. `create_diagram` is not marked read-only by the server, so it starts as **Ask first** (a Run / Cancel card); set it to **Allowed** on the MCP tools page if you don't want the question. Scheduled prompts need **Allowed**.
+- **How it works** (`ask/app/mcp_http.py`): `initialize` (keeps the `Mcp-Session-Id`), `notifications/initialized`, `tools/list` (cached 20 s, with paging), `tools/call`. Answers can be JSON or an event stream (SSE). A session the server has forgotten (HTTP 404 after a restart) is started again once. A server that doesn't answer shows **not running** with the error on the MCP tools page; a name the host agent also uses is skipped (the agent's server wins).
+- `GET /api/mcp` lists the HTTP servers with the agent's (`"transport": "http"`). Tested with a stand-in server (`ask/scripts/fake_mcp_http.py`, `ask/tests/test_mcp_http.py`), not with the real draw.io container.
+
 ### Web search (Ollama)
 
 Ask can let the chat model search the web with **Ollama's web search** ([docs](https://docs.ollama.com/capabilities/web-search)), for questions the knowledge sources don't cover, such as current versions, release notes or news. It works like the [MCP tools](#mcp-tools-your-own-mcp-servers): the model gets two read-only tools and decides when to call them.
@@ -1466,11 +1494,16 @@ Settings → **Monthly web budget (US$)** (`ASK_WEB_BUDGET`, default 0 = no budg
 | `ASK_OLLAMA_URL`, `ASK_CHAT_MODEL`, `ASK_EMBED_MODEL` | Override the yaml defaults (the Settings page still wins) |
 | `ASK_OLLAMA_ENABLED`, `ASK_LMSTUDIO_ENABLED`, `ASK_LMSTUDIO_URL` | Ollama on (default 1), [LM Studio](#lm-studio) on (default 0) and its URL (default `http://127.0.0.1:1234`); the Settings page wins |
 | `ASK_LMSTUDIO_API_KEY` | Bearer token for an LM Studio server that requires one |
+| `ASK_DRAWIO_LIBS` | Folder of your draw.io shape libraries (default `/app/drawio-libs`; compose mounts `./drawio-libs` there read-only) |
+| `ASK_DRAWIO_OPEN` | Which link answers give for a draw.io diagram: `editor` (default, `ASK_DRAWIO_URL`) or `desktop` (a `.drawio` file opened in draw.io Desktop through the host agent). The tool card always has both. MCP tools page wins |
+| `ASK_DRAWIO_TIDY` | `1` (default) lays out diagrams that use your shape library on a clean grid and sizes containers to fit; `0` keeps the model's coordinates |
+| `ASK_DRAWIO_URL` | Local draw.io editor that **Open in draw.io** links point to instead of app.diagrams.net (the address your browser opens). Compose sets `http://localhost:8082` (the `drawio` container); empty keeps the public editor. The MCP tools page (**draw.io editor**) wins |
+| `ASK_MCP_HTTP_SERVERS` | MCP servers Ask reaches over HTTP, `name = url` per line or comma-separated; compose sets `drawio=http://drawio-mcp:3001/mcp`. The MCP tools page wins. See [MCP servers over HTTP (draw.io)](#mcp-servers-over-http-drawio) |
 | `ASK_HOST_ALIAS` | Inside the container, Ollama and LM Studio URLs naming `127.0.0.1` / `localhost` go to this host instead (default `host.docker.internal`; `host.lima.internal` with containerd; `off` keeps them as typed) |
 | `ASK_OBSERVABILITY_URL` | Sidebar link to the dashboards |
 | `ASK_CONFIG`, `ASK_DATA_DIR`, `ASK_SHARED_DIR` | Config file, data folder, folder holding the shared `app.css` (set in the image) |
 | `ASK_GITHUB_TOKEN` (any name) | Read-only token for a private repository; put the variable's **name** in the source's "Token env var" |
-| `ASK_UPLOAD_MAX_MB` | Largest upload (spreadsheet, PDF or API spec) in MB (default 50). Raise it for large scanned PDFs |
+| `ASK_UPLOAD_MAX_MB` | Largest upload (spreadsheet, PDF or API spec) in MB (default 200). Raise it for large scanned PDFs |
 | `ASK_CHAT_EXAMPLES` | How many example question boxes an empty New chat shows (default 6, 0 hides them; the Settings page wins) |
 | `ASK_RECENT_CHATS` | How many chats the sidebar lists under Recent chats (default 10, 1 to 200; the Settings page wins) |
 | `ASK_SQLITE_CACHE_MB` | SQLite page cache per connection, in MB (default 64). Each worker thread keeps one connection, so the cache stays warm across a question's searches. Lower it on a small machine |
@@ -1540,7 +1573,7 @@ The publish date comes from the feed first, then the page itself (`article:publi
 
 For a blog whose markdown is in a Git repository (Hugo, Jekyll and similar), `markdown-repo` gives cleaner text with no crawling; `web-site` is for sites you don't have the source for.
 
-**`pdf`.** Reads PDF files from uploads or a folder: pypdf for the text layer, Tesseract OCR (via `pdftoppm`) for scanned pages, one document per PDF with one `## Page N` section per page, cached per file. See [PDF documents (with OCR)](#pdf-documents-with-ocr) for the options.
+**`pdf`.** Reads PDF files from uploads or a folder: pypdf for the text layer, Tesseract OCR (via `pdftoppm`) for scanned pages, one document per PDF (or per chapter / N pages with **Split into documents**) with one `## Page N` section per page, cached per file. See [PDF documents (with OCR)](#pdf-documents-with-ocr) for the options.
 
 **`openapi`.** Reads OpenAPI 3 / Swagger 2 specs (JSON or YAML) from uploads or a folder: one document per API call (request, parameters, body and response fields with `$ref` schemas expanded, JSON example, PowerShell call) plus an overview per spec. See [API specs (OpenAPI)](#api-specs-openapi) for the options.
 
@@ -1579,6 +1612,98 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8081/api/ask -Headers $h -C
 - Volumes: `./ask-data` → `/app/data` (index, chats, clones), `./ask-knowledge` → `/knowledge` (read-only, local folders), `./ask-sources` → `/sources` (extra or patched plug-ins), `./exports` → `/exports` (read-only, the dashboards' exports for `spreadsheet` sources), `./control` → `/app/control` (Apps on / off, shared with the dashboards).
 - Front-end libraries are vendored once, in `core/static/vendor/`, with their licences: Swagger UI, marked 18.1.3 (MIT), DOMPurify 3.4.17 (Apache-2.0/MPL-2.0) and Apache ECharts 6.1.0 (Apache-2.0, `echarts.min.js` with its LICENSE and NOTICE). The dashboards serve them at `/static/vendor/`, Ask at `/shared/vendor/`. Every answer, document and About page is sanitised by DOMPurify before display.
 - On a Linux Docker host, uncomment `extra_hosts: host.docker.internal:host-gateway` in `docker-compose.yml`. Leave it commented on Rancher Desktop and Docker Desktop: it replaces their own mapping to the Mac, and Ollama then refuses the connection.
+
+## draw.io MCP server (third container)
+
+`docker-compose.yml` also runs **drawio-mcp**, the draw.io MCP server from the draw.io team ([`jgraph/drawio-mcp`](https://hub.docker.com/r/jgraph/drawio-mcp)). MCP clients on the Mac (Claude Code, Claude Desktop, VS Code and others) use it to create and edit draw.io diagrams. It is the same container as
+
+```bash
+docker run -d --name drawio-mcp -p 127.0.0.1:3001:3001 jgraph/drawio-mcp
+```
+
+but started, restarted and updated with the rest of the stack.
+
+| Setting | Default | Notes |
+| --- | --- | --- |
+| Image | `jgraph/drawio-mcp:latest` | `DRAWIO_MCP_IMAGE` in `.env` pins another tag. It is pulled from Docker Hub, not built here |
+| Port | `127.0.0.1:3001` | `DRAWIO_MCP_PORT` in `.env` changes the Mac's port. Bound to `127.0.0.1`, so only the Mac itself can reach it, not the network |
+| Restart | `unless-stopped` | Comes back after a Rancher Desktop or Mac restart |
+
+```bash
+docker compose up -d drawio-mcp        # start (or update after: docker compose pull drawio-mcp)
+docker compose logs -f drawio-mcp      # shows the server starting and the address it listens on
+docker compose stop drawio-mcp         # stop it; docker compose rm -sf drawio-mcp removes it
+```
+
+If you started it earlier with the `docker run` line above, remove that container first (`docker rm -f drawio-mcp`): both use the name `drawio-mcp` and port 3001.
+
+**Connect an MCP client** with the HTTP address the log shows, for example in Claude Code `claude mcp add --transport http drawio http://127.0.0.1:3001/mcp` (check the path in `docker compose logs drawio-mcp`; it has not been tested from this project).
+
+**vCommunity Ask uses it too.** `vco-ask` reaches it at `http://drawio-mcp:3001/mcp` over the compose network (`ASK_MCP_HTTP_SERVERS` in `docker-compose.yml`), so **drawio** shows under **MCP tools** in the chat's Sources once the container runs. See [MCP servers over HTTP (draw.io)](#mcp-servers-over-http-drawio).
+
+**Dark sites:** `scripts/New-OfflineBundle.ps1` pulls the image and saves it as `dist/drawio-mcp.tar.gz` next to the other two, plus the editor as `dist/drawio.tar.gz` (add `-SkipDrawio` to leave both out, `-DrawioImage` / `-DrawioEditorImage` for other tags). At the site, `docker load -i dist/drawio-mcp.tar.gz` before `docker compose up -d --no-build`. Without it, `docker compose up -d` stops on the missing image: start the other two by name (`docker compose up -d --no-build vco vco-ask`).
+
+## draw.io editor (fourth container)
+
+The draw.io MCP server makes diagrams, but its links open the public editor at app.diagrams.net, which needs the internet. `docker-compose.yml` therefore also runs **drawio**, the complete draw.io editor from the draw.io team ([`jgraph/drawio`](https://hub.docker.com/r/jgraph/drawio), Apache-2.0), served from the container.
+
+| | Value | Notes |
+| --- | --- | --- |
+| Address | `http://localhost:8082` | Bound to `127.0.0.1` only. `DRAWIO_PORT` in `.env` changes the port (then also set `ASK_DRAWIO_URL`) |
+| Image | `jgraph/drawio:latest` | `DRAWIO_IMAGE` pins another tag. Pulled from Docker Hub, not built here |
+| Ask links | `ASK_DRAWIO_URL=http://localhost:8082` | Set by compose for `vco-ask`; the MCP tools page (**draw.io editor**) wins; empty = app.diagrams.net |
+
+```bash
+docker compose up -d drawio            # start (update: docker compose pull drawio && docker compose up -d drawio)
+docker compose logs -f drawio
+```
+
+How it fits together: Ask calls `create_diagram` on **drawio-mcp**; the answer holds a link such as `https://app.diagrams.net/?pv=0&grid=0#R<diagram>`. Ask swaps `https://app.diagrams.net/` (also `embed.`/`www.` and `draw.io` hosts) for the `ASK_DRAWIO_URL` address before the model and the tool card see it, so **Open in draw.io** opens `http://localhost:8082/?pv=0&grid=0#R<diagram>` in the local editor. The diagram is read in the browser from the part after the `#`. **Save** in the editor downloads a `.drawio` file (File > Export as for PNG, SVG or PDF).
+
+- Open Ask from another computer? `localhost` then means that computer: set `ASK_DRAWIO_URL` (or the MCP tools page field) to the Mac's name, for example `http://mac.lab.local:8082`, and publish the port on the network (`"${DRAWIO_PORT:-8082}:8080"` without `127.0.0.1:`).
+- Links in answers saved before the change still point to app.diagrams.net.
+- Not tested yet with the real containers (only with a stand-in MCP server).
+
+### Local web editor or draw.io Desktop
+
+Every diagram can open either way. Ask also unpacks the diagram from the link (`#R<compressed XML>`, or `#create=` with XML) and saves it as a `.drawio` file in `ask-data/diagrams/` (newest 500 kept), served at `/diagrams/<name>.drawio`. The tool card of each `create_diagram` call shows:
+
+- **Open in draw.io (local web editor)**: the editor container above (or app.diagrams.net when no editor URL is set).
+- **Open in draw.io Desktop**: the [draw.io Desktop app](https://github.com/jgraph/drawio-desktop/releases) on the Mac. Ask sends the file to the host agent (**v0.4.0** or later, `POST /drawio/open`), which saves it in `~/Documents/vCommunity-Ask/Diagrams/` and runs `open -a draw.io <file>`. Without the agent (or with an older one, or not on a Mac) the browser downloads the file instead; double-click it to open it in draw.io Desktop.
+- **Download <name>.drawio**: the file itself.
+
+**Open diagrams in** on the MCP tools page (setting `drawio_open`, `ASK_DRAWIO_OPEN`) picks which link the model puts in the answer: `editor` (default, the web editor link) or `desktop` (the `/diagrams/...` file link; a click on it in the answer opens draw.io Desktop the same way). In `desktop` mode a Mermaid or CSV diagram can't become a file (only the web editor converts those), so the model is told to call the tool again with draw.io XML.
+
+**Buttons under the answer.** Every diagram's **Open in draw.io (local web editor)**, **Open in draw.io Desktop** and **Download** buttons also show right under the answer (not only inside **Tool calls**), and a `/diagrams/...` path the model writes as code becomes a link.
+
+**Short links.** The model and the answer get short Ask links (`/diagrams/<name>/web` for the web editor, `/diagrams/<name>` for Desktop) instead of the long editor link, so a big diagram is never cut off. `/diagrams/<name>/web` redirects to the editor (`ASK_DRAWIO_URL`, with `localhost` swapped for the host your browser used) with the diagram and your shape libraries.
+
+### Your own shape libraries
+
+Put draw.io library files (`.xml`, `<mxlibrary>`, as saved from draw.io with File → New Library or exported from a library) in **`./drawio-libs`** next to `docker-compose.yml` (mounted read-only at `/app/drawio-libs`, `ASK_DRAWIO_LIBS`). Files are read again when they change; no restart. The MCP tools page lists them with their shape counts.
+
+- **The model uses them.** With a draw.io tool picked, the system prompt lists every shape name and asks the model to place one with a cell whose style is `lib=<exact name>` (for example `style="lib=vCenter Server;"`). Before `create_diagram` runs, Ask (`ask/app/drawio_libs.py`) swaps each such cell for the library's real cells at the model's position and size, keeping the model's label, its `<object>` attributes and the children placed inside (containers). Names match without regard to case or dashes. Unknown names become plain boxes and the model is told which ones. The tool card notes "Your draw.io shapes used: N (...)".
+- **Spacing.** The model is told the icons are about 64 x 64 with their name under them and that container headers are about 46 px tall, and a cell placed on a container's header band is moved just below it.
+- **Automatic tidy layout.** Models still crowd shapes or blow icons up, so after the swap Ask lays the shapes out itself (`drawio_libs.tidy`, on by default, `ASK_DRAWIO_TIDY=0` turns it off). Inside every container, deepest first: icons go back to 64 x 64, shapes whose tops are within 40 px share a row (kept in the model's left-to-right order), each icon gets a 140 px wide slot so its name fits, rows are 130 px apart, the first row starts 20 px below the header, containers side by side in a row get the same height, and each container is resized to fit what it holds (at least wide enough for its title). Top-level shapes (for example two sites) are then put on rows 40 px apart so the grown containers don't overlap. The model's grouping and order are kept; its exact coordinates are not. Diagrams built from a *Starter —* layout are left as they are.
+- **Containers and starters.** Entries with several cells (a container with its header icon, or a whole starter layout such as *Starter — Two-instance VCF Fleet*) are copied whole, with new ids.
+- **Image entries** (`"data": "data:image/..."`) become image shapes.
+- **In the editor sidebar.** `/diagrams/<name>/web` opens the web editor with `clibs=` pointing at `/drawio-libs/<file>` on Ask (served with `Access-Control-Allow-Origin: *`, plus `cors=` for Ask's address), so you can drag more of your shapes in. In draw.io Desktop open a library once with File → Open Library from → Device; Desktop keeps it.
+- Example prompt: *Using my shape library, draw a VCF management domain with vCenter Server, NSX Manager, SDDC Manager and a vSphere Cluster inside a Management Domain container.* Or *Use the shape "Starter — Two-instance VCF Fleet".*
+- The shape list goes into the system prompt (about 8,000 characters for a 215-shape library), so very large libraries use more of the context.
+- Not tested with the real draw.io containers yet: expansion was checked against a 215-shape VCF library (all shapes, ids unique, every parent present).
+
+Update the host agent once for **Open in draw.io Desktop**: run `ask/agent/Install-AskAgent.ps1` (or `install.sh`) again. Agent options: `--diagrams-dir` (`ASK_AGENT_DIAGRAMS`) and `--drawio-app` (`ASK_AGENT_DRAWIO_APP`, default `draw.io`). Opening the app was not tested on a real Mac yet (the agent part was tested on Linux, where it only saves the file).
+
+
+### Writing diagram prompts
+
+- **Pick the tool.** In the chat's Sources, tick **drawio** under **MCP tools**. Without it the model can't draw, and with web search ticked it may suggest the public editor instead.
+- **Words only.** Describe what to draw in plain sentences; no XML or code is needed. Say *using my shape library* so the model uses your shapes, then describe the boxes from the outside in: *The outside box is a VCF Fleet container named Fleet 01. Inside it are two VCF Instance containers side by side, named Site A and Site B. Each holds a Management Domain container with vCenter Server, NSX Manager and SDDC Manager.* End with *Call create_diagram once and give me the link it returns.*
+- **Layout is Ask's job.** You don't need to give sizes or positions: the tidy layout above spaces the shapes and sizes the containers. Say only what sits side by side and what sits under what.
+- **Names under shapes.** The model's label is kept when Ask swaps in your shape, so name things in the prompt: *Name the ESX hosts ESX01, ESX02 and ESX03.*
+- **A questionnaire prompt.** Put the names you change at the top, one per line (*Fleet name: Fleet 01*, *Instance 1 name: Site A*, ...), and write the description below using those answers. Or save it as a **Saved prompt** with `{variables}` (`{Fleet=Fleet 01}`, `{Hosts=3}`, up to 30): Ask asks for each value in a pop-up when you run it and remembers your last answers.
+- **Editing in draw.io.** To rename a shape, select it and press F2 or Enter (or double-click it), type, then click an empty spot. Or use Edit → Edit Data (Cmd+M) and change the label. Your library is in the left sidebar of the local web editor (opened through Ask's link), so you can drag in more shapes.
+- **If the answer has no link,** the model stopped before calling `create_diagram`; ask again with *Call create_diagram now*. `search_shapes` only searches draw.io's built-in shapes, not your library, so a "shape not found" from it doesn't mean your library is missing (the MCP tools page lists the libraries Ask found).
 
 ## Configuration reference
 
@@ -1827,7 +1952,8 @@ The core (`core/services.py`) starts every service of an available module with t
 - **On a connected machine**, build both images and save them as gzipped tarballs with `.sha256` files:
   ```powershell
   ./scripts/New-OfflineBundle.ps1 -Version 0.1.0 -Target core-pwsh
-  # dist/vco-core-pwsh-0.1.0.tar.gz and dist/vco-ask-0.1.0.tar.gz (add -SkipAsk for the dashboards image only)
+  # dist/vco-core-pwsh-0.1.0.tar.gz, dist/vco-ask-0.1.0.tar.gz, dist/drawio-mcp.tar.gz and dist/drawio.tar.gz
+  # (add -SkipAsk for no Ask image, -SkipDrawio for no draw.io images)
   ```
 - **Copy to the dark site:**
 
@@ -1891,7 +2017,7 @@ The core (`core/services.py`) starts every service of an available module with t
 | Ask: spreadsheet source indexes 0 files | No file matches **File names** in the folder. The default is `dbh-insights-*.xlsx`; for RVTools set it to `*.xlsx` or `RVTools*.xlsx`. Check the folder with `docker compose exec vco-ask ls /exports` |
 | Ask: PDF source indexes 0 pages or a PDF is missing | Check the log (`docker compose logs vco-ask`): "password protected" (remove the password and upload again), "cannot read" (a damaged file: re-save it as PDF), "no text found" with OCR `off` (a scanned PDF: set **OCR** to `auto`). OCR quality: raise **OCR resolution** to 300 |
 | Ask: "tesseract failed" or "Failed loading language" in the log | The language in **OCR languages** isn't installed. Use `eng`, or rebuild with `--build-arg OCR_LANGS="tesseract-ocr-<lang>"` (see [PDF documents](#pdf-documents-with-ocr)) |
-| Ask: upload refused | Spreadsheet sources take `.xlsx` and `.csv` (an `.xlsx` must be a real Excel file, not a renamed one), PDF sources take `.pdf` (a real PDF), API spec sources take `.json`, `.yaml` and `.yml` that parse and contain `openapi` or `swagger` plus `paths`, up to `ASK_UPLOAD_MAX_MB` (default 50), and the API token must be entered when `ASK_API_TOKEN` is set |
+| Ask: upload refused | Spreadsheet sources take `.xlsx` and `.csv` (an `.xlsx` must be a real Excel file, not a renamed one), PDF sources take `.pdf` (a real PDF), API spec sources take `.json`, `.yaml` and `.yml` that parse and contain `openapi` or `swagger` plus `paths`, up to `ASK_UPLOAD_MAX_MB` (default 200), and the API token must be entered when `ASK_API_TOKEN` is set |
 | Ask: "The sources do not contain the individual rows" after a spreadsheet import | The question went through search, which only finds a few matching rows plus the sheet overview. Ask it as a data question ("show all hosts from the vHost sheet", "how many ...") with the spreadsheet source selected; the answer then has a **Query and result** card. Sheets with more rows than **Max searchable rows per sheet** (default 5000, for example a large vInfo) are not searchable at all, only queryable |
 | Ask or the dashboards still behave like the old version after a rebuild | Fixed from 2026-11-05: script and stylesheet URLs carry `?v=<fingerprint>`, so browsers load the new files. Once, after updating to this version, reload the page with **Shift+Reload** (Cmd+Shift+R) to drop the old cached copy |
 | Ask: no **Open HTML report** link under the answer | The question didn't say *report* or *dashboard*, or it went through search instead of a data question (pick the spreadsheet source). If the answer's stats show `report_error`, the report could not be written: check that `data/reports` is writable (`./ask-data` volume) and look at `docker compose logs vco-ask` |
@@ -2006,6 +2132,18 @@ requirements.in/.txt    direct dependencies / hashed lock file
 
 | Date | Change |
 | --- | --- |
+| 2026-11-22 | README: new **Writing diagram prompts** section (words-only prompts, questionnaire and saved-prompt `{variables}`, naming shapes, editing labels in draw.io, missing links). Ask and Observability About pages mention the draw.io editor, draw.io Desktop and your own shape libraries. |
+| 2026-11-22 | Saved prompts: up to **30** `{variables}` per prompt (was 8, `saved.MAX_VARS`); the fill-in window scrolls. |
+| 2026-11-22 | draw.io shape libraries: **automatic tidy layout** (`drawio_libs.tidy`, `ASK_DRAWIO_TIDY`, default on): icons reset to 64 x 64, rows on a 140 px grid with room for names, containers resized to fit, top-level containers kept apart. Starter layouts untouched. Test `TidyLayout` in `ask/tests/test_drawio_libs.py`. |
+| 2026-11-22 | draw.io shape libraries: the model is told icon and label sizes, spacing and the container header height; cells placed on a container's header band are moved below it (`drawio_libs._clear_headers`). |
+| 2026-11-22 | Ask chat: draw.io diagram buttons (web editor, Desktop, Download) shown under the answer (`diagramBar` in `ask.js`); a `/diagrams/...` path in backticks becomes a link; the model is told to write a Markdown link. |
+| 2026-11-22 | **Your own draw.io shape libraries** in `./drawio-libs` (compose mount `/app/drawio-libs`, `ASK_DRAWIO_LIBS`): new `ask/app/drawio_libs.py` lists the shape names for the model (style `lib=<name>`) and swaps those cells for the real library cells before `create_diagram` (icons, containers with children, starter layouts, image entries; unknown names reported to the model). Answers and tool cards now use short links: `/diagrams/<name>/web` redirects to the web editor with the diagram, `clibs=` libraries (`GET /drawio-libs/<file>`, CORS) and `cors=`. MCP tools page lists the libraries. Tests `ask/tests/test_drawio_libs.py`. |
+| 2026-11-22 | **draw.io Desktop** as a second way to open diagrams: new `ask/app/drawio.py` unpacks the draw.io MCP server's links (`#R`, `#create=` XML) into `.drawio` files (`ask-data/diagrams/`, `GET /diagrams/<name>`), tool cards show **Open in draw.io (local web editor)**, **Open in draw.io Desktop** and **Download**; a click on a `/diagrams/` link asks the host agent to open it (`POST /ui/diagrams/<name>/open` -> agent **v0.4.0** `POST /drawio/open`, `open -a draw.io`), else downloads it. Setting **Open diagrams in** (`drawio_open` / `ASK_DRAWIO_OPEN`: `editor` default or `desktop`) on the MCP tools page picks the answer's link. Tests `ask/tests/test_drawio.py`; `fake_mcp_http.py` answers XML with an `#R` link. |
+| 2026-11-22 | **draw.io editor** as a fourth container (`drawio`, `jgraph/drawio`, `127.0.0.1:8082`, `DRAWIO_IMAGE`, `DRAWIO_PORT`) so diagrams open offline. Ask points the draw.io MCP server's app.diagrams.net links at it (`rag.local_drawio`, setting `drawio_editor_url` / `ASK_DRAWIO_URL`, compose default `http://localhost:8082`, field **draw.io editor** on the MCP tools page) before the model and the tool card see them. `New-OfflineBundle.ps1` also saves `dist/drawio.tar.gz` (`-DrawioEditorImage`). |
+| 2026-11-22 | Ask **PDF documents** source: new **Split into documents** option (`split` = `off` / `chapters` / `pages`, `split_level`, `split_pages`) makes one document per PDF bookmark (chapter) or every N pages, so answers can use more parts of a big manual (an answer takes at most 2 sections per document). Titles `<book>: <chapter> (part n of m, pp. a-b)`, ids `<file>@p<first page>`, page numbers and **Open PDF, page N** unchanged. **Max pages per file** default 2000 -> 10000; raising it reads only the new pages (cache key no longer includes it). Junk PDF titles ("untitled") fall back to the file name. Number options can set `max` in `source.yaml`. Tests `ask/tests/test_pdf_split.py`. |
+| 2026-11-22 | Ask upload limit (`ASK_UPLOAD_MAX_MB`) default raised from 50 MB to **200 MB** for spreadsheet, PDF and API spec uploads (`ask/app/main.py`). Set the variable in `.env` to use another size. |
+| 2026-11-22 | **Ask uses the draw.io MCP container** as a tools source: new `ask/app/mcp_http.py` (MCP Streamable HTTP client: session id, SSE or JSON answers, session restart after a 404, tools list cache). Setting `mcp_http_servers` / `ASK_MCP_HTTP_SERVERS` (`name = url` per line, optional headers), edited on the MCP tools page (card **MCP servers over HTTP**, HTTP badge on the server card); compose sets `drawio=http://drawio-mcp:3001/mcp` for `vco-ask`. HTTP servers merge with the host agent's in `mcp.servers` / `quick_servers` / `call` / `reload`, so they show in the Sources chips, saved and scheduled prompts. Links in an MCP tool result are shown on its card (**Open in draw.io** for diagrams.net links); embedded text resources are read, HTML (MCP App) pages left out. Tests `ask/tests/test_mcp_http.py` with `ask/scripts/fake_mcp_http.py`. |
+| 2026-11-22 | **draw.io MCP server** as a third container: `drawio-mcp` service in `docker-compose.yml` (`jgraph/drawio-mcp`, `127.0.0.1:3001`, `DRAWIO_MCP_IMAGE`, `DRAWIO_MCP_PORT`, restart unless-stopped). `New-OfflineBundle.ps1` pulls and saves it (`-SkipDrawio`, `-DrawioImage`). Ask can't call it yet (host agent runs stdio MCP servers only). |
 | 2026-11-21 | README and Ask About page describe LM Studio next to Ollama (intro, Ask overview, About page summary). The Performance charts show the LM Studio lines whenever LM Studio is on, even before the host agent reports data. |
 | 2026-11-21 | **LM Studio in performance monitoring**, like Ollama: LM Studio KPI card, LM Studio CPU line (host CPU chart) and memory line (host memory chart), its loaded models in the Models card and **LM Studio processes** in the host table. Host agent **v0.3.0** counts LM Studio's processes (app, helpers, `~/.lmstudio` engines, `llmster` / `lms`) apart from Ollama's (`is_lmstudio`, `parse_ps(text, match)`); re-run the agent installer. The Ollama and LM Studio CPU lines are now a share of the whole host (`cpu_pct_of_host`), so they fit the 0-100 % axis. History keys `lm_mem`, `h_lms_cpu`. |
 | 2026-11-21 | **LM Studio** as a second model provider for Ask, and **Ollama** / **LM Studio** on-off switches on the Settings page (`ollama_enabled`, `lmstudio_enabled`, `lmstudio_url`). New `ask/app/llm.py`: `client(cfg)` routes each call by model name (`lmstudio:` prefix = LM Studio, else Ollama); LM Studio via `/api/v0/models`, `/v1/embeddings` and streamed `/v1/chat/completions` turned into Ollama-shaped chunks (tool calls with ids, reasoning / `<think>` as thinking, usage as stats, `ttl` from Keep model loaded). `127.0.0.1` / `localhost` URLs go to `host.docker.internal` inside the container (`ASK_HOST_ALIAS`). Settings save refuses both providers off, or a chat / embedding model whose provider is off. Model lists grouped by provider in Settings, the model menu, saved and scheduled prompts (`GET /ui/models`, `GET /api/models`); Performance page lists LM Studio's loaded models. Tests: `ask/tests/test_llm.py` with `ask/scripts/fake_lmstudio.py`. |

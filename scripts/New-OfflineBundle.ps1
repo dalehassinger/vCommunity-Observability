@@ -15,11 +15,20 @@
 .EXAMPLE
   ./scripts/New-OfflineBundle.ps1 -Version 0.1.0 -Target core -SkipAsk
   # Dashboards image only, without PowerShell.
+
+.EXAMPLE
+  ./scripts/New-OfflineBundle.ps1 -Version 0.1.0 -SkipDrawio
+  # Without the draw.io images (jgraph/drawio-mcp and the jgraph/drawio editor). By default both
+  # are pulled and saved as dist/drawio-mcp.tar.gz and dist/drawio.tar.gz, so `docker compose up -d`
+  # also works at the dark site.
 #>
 param(
     [Parameter(Mandatory)][string]$Version,
     [ValidateSet('core', 'core-pwsh')][string]$Target = 'core-pwsh',
-    [switch]$SkipAsk
+    [switch]$SkipAsk,
+    [switch]$SkipDrawio,
+    [string]$DrawioImage = 'jgraph/drawio-mcp:latest',
+    [string]$DrawioEditorImage = 'jgraph/drawio:latest'
 )
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force -Path dist | Out-Null
@@ -53,4 +62,14 @@ if (-not $SkipAsk) {
     docker build -f ask/Dockerfile -t $askImage .
     if ($LASTEXITCODE) { throw 'docker build failed (Ask image)' }
     Save-Bundle $askImage "vco-ask-$Version"
+}
+
+# draw.io MCP server: not built here, pulled from Docker Hub (same image as docker-compose.yml)
+if (-not $SkipDrawio) {
+    docker pull $DrawioImage
+    if ($LASTEXITCODE) { throw "docker pull failed for $DrawioImage" }
+    Save-Bundle $DrawioImage 'drawio-mcp'
+    docker pull $DrawioEditorImage
+    if ($LASTEXITCODE) { throw "docker pull failed for $DrawioEditorImage" }
+    Save-Bundle $DrawioEditorImage 'drawio'
 }
