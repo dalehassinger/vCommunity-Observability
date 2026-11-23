@@ -72,7 +72,11 @@ class Decode(unittest.TestCase):
         self.assertTrue(links2[0]["url"].endswith("/web"))
         # the web editor link holds the same diagram, and the libraries for the sidebar
         link = drawio.editor_link(name, "http://localhost:8082/", ["My Lib.xml"], "http://localhost:8081")
-        self.assertTrue(link.startswith("http://localhost:8082/?pv=0&grid=0&clibs=Uhttp%3A%2F%2Flocalhost%3A8081%2Fdrawio-libs%2FMy%2520Lib.xml"), link)
+        # local editor: libraries from the editor's own address (its CSP allows only 'self')
+        self.assertTrue(link.startswith("http://localhost:8082/?pv=0&grid=0&clibs=Uhttp%3A%2F%2Flocalhost%3A8082%2Fdrawio-libs%2FMy%2520Lib.xml#R"), link)
+        # public editor: libraries from Ask, with cors=
+        pub = drawio.editor_link(name, "https://app.diagrams.net", ["My Lib.xml"], "http://localhost:8081")
+        self.assertIn("clibs=Uhttp%3A%2F%2Flocalhost%3A8081%2Fdrawio-libs%2FMy%2520Lib.xml&cors=", pub)
         self.assertIn(XML, drawio.from_link(link)["xml"])
         self.assertTrue(drawio.editor_link(name, "", None).startswith("https://app.diagrams.net/?pv=0&grid=0#R"))
         self.assertIn("[Open the diagram](/diagrams/" + name + ")", notes[0])

@@ -63,6 +63,8 @@ if ($LASTEXITCODE -ne 0) { throw "$python is older than Python 3.9." }
 
 New-Item -ItemType Directory -Force -Path $appDir, $tokenDir, (Split-Path $plistPath), (Split-Path $logFile) | Out-Null
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'ask-host-agent.py') -Destination $appDir -Force
+# The Apple Reminders MCP server goes next to it: the agent (a LaunchAgent) may not read ~/Documents.
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'apple-mcp.py') -Destination $appDir -Force
 
 if (-not (Test-Path $tokenFile)) {
     $bytes = [byte[]]::new(32)

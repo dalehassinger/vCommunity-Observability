@@ -86,6 +86,9 @@ SETTINGS: dict[str, dict[str, Any]] = {
     # else app.diagrams.net); desktop = a .drawio file opened in draw.io Desktop on the Mac (host
     # agent) or downloaded. The tool card always offers both.
     "drawio_open": {"default": "editor", "env": "ASK_DRAWIO_OPEN", "type": "str"},
+    # Apple Notes through the host agent: the "Save to Apple Notes" button and the folder notes go in.
+    "notes_enabled": {"default": True, "env": "ASK_NOTES", "type": "bool"},
+    "notes_folder": {"default": "vCommunity Ask", "env": "ASK_NOTES_FOLDER", "type": "str"},
     "mcp_max_rounds":   {"default": 6, "type": "int"},
     "mcp_result_chars": {"default": 16000, "type": "int"},
     "observability_url": {"default": "", "env": "ASK_OBSERVABILITY_URL", "type": "str"},

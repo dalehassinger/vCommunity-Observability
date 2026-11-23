@@ -136,7 +136,8 @@ def register(app: FastAPI, ctx: SimpleNamespace) -> None:
         "web:ollama", "web:brave", "web:fetch", "mcp:<server>" or "none". frequency: daily, weekdays, weekly
         (weekday mon..sun), monthly (monthday 1-28 or last) or hours (every_hours). Optional: model,
         sync_first, attach_report (default true), only_changed, enabled (default true),
-        send_email (default true; recipients needed then) and send_webhook (default false: posts to
+        send_email (default true; recipients needed then), send_notes (default false: a new note
+        in Apple Notes on the Mac through the host agent) and send_webhook (default false: posts to
         the webhook on Log alerts → Notifications in vCommunity Observability)."""
         return save_schedule(body)
 

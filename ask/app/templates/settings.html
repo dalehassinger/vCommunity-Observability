@@ -139,6 +139,12 @@
       <div class="field"><label for="s-agent_url">Host agent URL{% if 'agent_url' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><input type="text" id="s-agent_url" data-key="agent_url" value="{{ settings.agent_url }}" placeholder="http://host.docker.internal:9101">
           <div class="hint">The optional Ask host agent on the Mac (<code>ask/agent</code>) for the Performance page. Its token goes in <code>.env</code> as <code>ASK_AGENT_TOKEN</code>. Empty turns it off.</div></div></div>
+      <div class="field"><label for="s-notes_enabled">Apple Notes{% if 'notes_enabled' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><label class="switch"><input type="checkbox" role="switch" id="s-notes_enabled" data-key="notes_enabled" {{ 'checked' if settings.notes_enabled else '' }}><span></span>On</label>
+          <div class="hint">A <b>Save to Apple Notes</b> button under every answer, and <b>Apple Notes</b> as a way to deliver <a href="/schedules">scheduled prompts</a>. The host agent (0.5.0 or newer) makes the note on the Mac; macOS asks once to let it control Notes.</div></div></div>
+      <div class="field"><label for="s-notes_folder">Notes folder{% if 'notes_folder' in overridden %}<span class="override">saved</span>{% endif %}</label>
+        <div><input type="text" id="s-notes_folder" data-key="notes_folder" value="{{ settings.notes_folder }}" placeholder="vCommunity Ask">
+          <div class="hint">The folder in Notes (default account) the notes go in. It is made when missing.</div></div></div>
       <div class="field"><label for="s-observability_url">Observability URL{% if 'observability_url' in overridden %}<span class="override">saved</span>{% endif %}</label>
         <div><input type="text" id="s-observability_url" data-key="observability_url" value="{{ settings.observability_url }}" placeholder="http://localhost:8080">
           <div class="hint">Adds a sidebar link back to the vCommunity-Observability dashboards.</div></div></div>

@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -34,7 +34,7 @@ from .db import DB
 from .indexer import NAME_RE, Indexer, discover_plugins
 from . import llm
 from .ollama import OllamaError
-from . import control, drawio, drawio_libs, mcp, mcp_http, rag, syslog_out, websearch, webusage
+from . import applenotes, control, drawio, drawio_libs, mcp, mcp_http, rag, syslog_out, websearch, webusage
 from .reports import Reports
 from .perf import SAMPLE_SECONDS, Sampler
 from .evalrun import MAX_PROMPTS, EvalRunner
@@ -755,6 +755,28 @@ def create_app() -> FastAPI:
         if r.status_code != 200 or not d.get("ok"):
             raise HTTPException(502, d.get("error") or f"Host agent: HTTP {r.status_code}")
         return {"ok": True, "path": d.get("path", "")}
+
+    @app.post("/ui/notes", include_in_schema=False)
+    def ui_notes(request: Request, body: dict = Body(...)):
+        """Save an answer as a new note in Apple Notes on the Mac, through the host agent."""
+        same_origin(request)
+        s = settings()
+        if not s.get("notes_enabled", True):
+            raise HTTPException(409, "Apple Notes is switched off in Settings")
+        answer = str(body.get("answer") or "").strip()
+        if not answer:
+            raise HTTPException(400, "Nothing to save")
+        question = " ".join(str(body.get("question") or "").split())
+        title = (question[:80] + ("…" if len(question) > 80 else "")) if question else "vCommunity Ask answer"
+        chat_id = str(body.get("chat_id") or "")
+        link = (str(request.base_url).rstrip("/") + "/chat/" + quote(chat_id)) if re.match(r"^[\w-]{1,80}$", chat_id) else ""
+        md = answer if not question else f"**Question:** {question}\n\n{answer}"
+        try:
+            result = applenotes.send(s.get("agent_url") or "", title, md, s.get("notes_folder") or "", link,
+                                     "Saved from vCommunity Ask " + time.strftime("%Y-%m-%d %H:%M"))
+        except RuntimeError as e:
+            raise HTTPException(502, str(e))
+        return {"ok": True, "result": result}
 
     # -- UI endpoints (used by the pages) --------------------------------------
     @app.post("/ui/chat", include_in_schema=False)

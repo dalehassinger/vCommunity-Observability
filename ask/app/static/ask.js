@@ -763,6 +763,23 @@
     copy.type = 'button';
     copy.onclick = function () { copyText(m.content || '').then(function () { flash(copy, 'Copy answer'); }, function () {}); };
     container.appendChild(copy);
+    if (window.ASK.notes && m.content) {
+      // "Save to Apple Notes": the host agent on the Mac makes a note of this answer.
+      var note = el('button', 'link-btn', 'Save to Apple Notes');
+      note.type = 'button';
+      note.title = 'A new note in the Notes app on your Mac (folder set in Settings), made by the host agent';
+      note.onclick = function () {
+        var row = container.closest('.msg'), q = row && row.previousElementSibling;
+        var question = q && q.classList.contains('user') ? (q.querySelector('.bubble') || q).textContent : '';
+        note.disabled = true; note.textContent = 'Saving…';
+        fetch('/ui/notes', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                             body: JSON.stringify({ question: question, answer: m.content, chat_id: chatId }) })
+          .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.detail || r.statusText); return d; }); })
+          .then(function (d) { note.textContent = 'Saved to Notes'; note.title = d.result || ''; setTimeout(function () { note.textContent = 'Save to Apple Notes'; note.disabled = false; }, 2500); },
+                function (e) { note.textContent = 'Save to Apple Notes'; note.disabled = false; vcoAlert('Not saved to Apple Notes: ' + e.message); });
+      };
+      container.appendChild(note);
+    }
   }
 
   // This chat's questions, oldest first, for Up / Down arrow recall in the box.

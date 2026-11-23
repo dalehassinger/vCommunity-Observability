@@ -38,6 +38,7 @@ PY="$(command -v python3 || true)"
 
 mkdir -p "$APP_DIR" "$TOKEN_DIR" "$(dirname "$PLIST")" "$(dirname "$LOG")"
 cp "$HERE/ask-host-agent.py" "$APP_DIR/"
+cp "$HERE/apple-mcp.py" "$APP_DIR/"   # Apple Reminders MCP server (the agent may not read ~/Documents)
 if [ ! -f "$TOKEN_FILE" ]; then
   (umask 077; openssl rand -hex 32 > "$TOKEN_FILE")
 fi

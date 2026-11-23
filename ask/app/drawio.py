@@ -147,9 +147,14 @@ def editor_link(name: str, editor: str, libs: list[str] | None = None, base: str
         return None
     editor = (editor or "").strip().rstrip("/") or "https://app.diagrams.net"
     q = "pv=0&grid=0"
-    if libs and base:
+    public = re.search(r"//([^/]+\.)?(diagrams\.net|draw\.io)(:\d+)?(/|$)", editor + "/")
+    if libs and not public:
+        # The local editor container (jgraph/drawio) only lets the page fetch from its own address
+        # (Content-Security-Policy connect-src 'self'), so compose mounts ./drawio-libs into it at
+        # /drawio-libs and the libraries load from there. Documented form: clibs=U<encodeURIComponent(url)>;...
+        q += "&clibs=" + ";".join("U" + quote(f"{editor}/drawio-libs/{quote(x)}", safe="") for x in libs)
+    elif libs and base:
         base = base.rstrip("/")
-        # Documented form: clibs=U<encodeURIComponent(url)>;U<...>
         q += "&clibs=" + ";".join("U" + quote(f"{base}/drawio-libs/{quote(x)}", safe="") for x in libs)
         q += "&cors=" + quote(re.escape(base), safe="")
     return f"{editor}/?{q}#R{quote(compress(f.read_text(encoding='utf-8')), safe='')}"

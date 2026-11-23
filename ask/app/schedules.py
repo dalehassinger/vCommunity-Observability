@@ -35,7 +35,7 @@ from markdown_it import MarkdownIt
 
 from urllib.parse import urlsplit
 
-from . import control, links, perf, rag
+from . import applenotes, control, links, perf, rag
 from .db import DB
 
 log = logging.getLogger("ask.schedules")
@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS schedules (
   avoid_repeats INTEGER NOT NULL DEFAULT 0,
   send_email INTEGER NOT NULL DEFAULT 1, send_webhook INTEGER NOT NULL DEFAULT 0,
   webhook_name TEXT NOT NULL DEFAULT '', homeview INTEGER NOT NULL DEFAULT 0,
+  send_notes INTEGER NOT NULL DEFAULT 0,
   created REAL NOT NULL, updated REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS schedule_runs (
   id INTEGER PRIMARY KEY, schedule INTEGER NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
@@ -158,11 +159,11 @@ def clean(body: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
     s["scope"] = s["scope"].strip() or "all"
     s["model"] = str(body.get("model") or "").strip()
     clean_when(body, s, errors)
-    for k, default in (("send_email", True), ("send_webhook", False)):
+    for k, default in (("send_email", True), ("send_webhook", False), ("send_notes", False)):
         v = body.get(k, default)
         s[k] = 1 if (v is True or str(v).lower() in ("1", "true", "on", "yes")) else 0
-    if not s["send_email"] and not s["send_webhook"]:
-        errors["send_to"] = "Pick Email, Webhook or both."
+    if not s["send_email"] and not s["send_webhook"] and not s["send_notes"]:
+        errors["send_to"] = "Pick Email, Webhook, Apple Notes or more than one."
     s["webhook_name"] = " ".join(str(body.get("webhook_name") or "").split())[:40]
     if s["webhook_name"].lower() == "default":
         s["webhook_name"] = ""
@@ -508,6 +509,9 @@ class Schedules:
             # 2026-11-16: show the latest answer on the Apple HomeView wall display.
             if "homeview" not in have:
                 c.execute("ALTER TABLE schedules ADD COLUMN homeview INTEGER NOT NULL DEFAULT 0")
+            # 2026-11-23: deliver to Apple Notes on the Mac (through the host agent).
+            if "send_notes" not in have:
+                c.execute("ALTER TABLE schedules ADD COLUMN send_notes INTEGER NOT NULL DEFAULT 0")
             # 2026-11-16: the status "email_failed" is now "not_sent" (email or webhook).
             c.execute("UPDATE schedule_runs SET status='not_sent' WHERE status='email_failed'")
 
@@ -724,6 +728,16 @@ class Schedules:
                                                       color="fail" if status == "error" else "ok", link=link))
                 except Exception as e:  # noqa: BLE001
                     sent.append(f"webhook not sent: {e}")
+                    failed_any = True
+            if s.get("send_notes"):
+                title, note_text = build_chat(s, result, public=public, when=when, model=cfg["chat_model"], seconds=seconds)
+                link = f"{public.rstrip('/')}/chat/{result['chat_id']}" if public and result.get("chat_id") else ""
+                note_text = note_text.replace("Open in Ask: <" + link + ">", "").rstrip() if link else note_text
+                try:
+                    sent.append(applenotes.send(cfg.get("agent_url") or "", title.replace("[Ask] ", ""), note_text,
+                                                cfg.get("notes_folder") or "", link, "Scheduled prompt, vCommunity Ask"))
+                except Exception as e:  # noqa: BLE001
+                    sent.append(f"Apple Notes not saved: {e}")
                     failed_any = True
             email = "; ".join(sent)
             if failed_any and status == "ok":

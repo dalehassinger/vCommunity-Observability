@@ -90,5 +90,9 @@ services:
     container_name: drawio
     ports:
       - "127.0.0.1:${DRAWIO_PORT:-8082}:8080"
+    volumes:
+      # Your shape libraries, served by the editor itself at /drawio-libs/<file>. The editor's
+      # Content-Security-Policy only lets it load files from its own address, not from Ask.
+      - ./drawio-libs:/usr/local/tomcat/webapps/draw/drawio-libs:ro
     restart: unless-stopped
     init: true

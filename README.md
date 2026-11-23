@@ -620,7 +620,7 @@ ASK_OLLAMA_URL=http://127.0.0.1:11434 uvicorn app.main:create_app --factory --po
 - **Save prompt** (with a bookmark mark) is always shown under each of your questions; it used to appear only when the mouse was over the question.
 - **Sources list folded on short screens:** on a phone or a screen less than 820 px tall (most laptops), the Sources list under the question box starts folded to its one-line summary, so the answer has room. **Show list** opens it; your own Hide / Show choice is remembered and wins.
 - Every code block in an answer has a **Copy** button at its top right (it also works on a plain `http://` address, where the browser's clipboard API is not allowed).
-- The footer shows the model, the time and tokens per second, and **Copy answer**. With **Show model thinking** on (Settings), thinking models show their reasoning above the answer.
+- The footer shows the model, the time and tokens per second, **Copy answer** and **Save to Apple Notes** (see [Apple Notes](#apple-notes)). With **Show model thinking** on (Settings), thinking models show their reasoning above the answer.
 - Chats are saved: **Recent chats** in the sidebar reopens them, **Delete chat** removes the open one. To remove several, press **Select** next to **Recent chats**: each chat gets a check box (click a chat to tick it, Shift+click ticks a range, **All** ticks every listed chat), then **Delete (n)** removes them after one confirmation. **Cancel** or **Esc** leaves select mode. Follow-up questions see the last turns (Settings → Chat history).
 - **More room:** the menu button at the top left hides the whole sidebar so chats, reports and dashboards use the full width; click it again to bring the sidebar back. Click a sidebar heading (**Recent chats**, **Knowledge**, **Administration**) to fold just that section. Both choices are remembered in the browser.
 - **Web search (Ollama)** and **Web search (Brave)** in the Sources list (group **Web**) let the model search the web when the knowledge sources don't answer. **Web fetch (Ollama)** lets it read only the pages the question names (no searching). See [Web search (Ollama)](#web-search-ollama) and [Web search (Brave)](#web-search-brave).
@@ -709,7 +709,7 @@ A prompt Ask answers on a schedule and emails to you, posts to your chat webhook
 | Prompt | Written exactly as you would type it in the chat. Words like *report* or *dashboard* make an HTML report when a spreadsheet source is picked |
 | Model | Empty uses the **Chat model** from Settings. Another model can be picked for this prompt only (web search and MCP tools need one that can call tools) |
 | Schedule | **Every day**, **Weekdays (Mon–Fri)**, **Every week** (day), **Every month** (day 1–28 or **last**) or **Every N hours**, at a time, in a time zone (default `America/New_York`, or `ASK_SCHEDULE_TZ`) |
-| Send to | **Email** (on by default), **Webhook** (off by default), or both. Webhook posts the answer to a webhook set on **Log alerts → Notifications** in vCommunity Observability: pick **Default** or one of the **Named webhooks** (for example *daily*); **Send a test to the webhook** checks it right away. The list shows Send to as icons (envelope, webhook) |
+| Send to | **Email** (on by default), **Webhook** (off by default), **Apple Notes** (off by default: a new note on the Mac per run, see [Apple Notes](#apple-notes)), or any mix. Webhook posts the answer to a webhook set on **Log alerts → Notifications** in vCommunity Observability: pick **Default** or one of the **Named webhooks** (for example *daily*); **Send a test to the webhook** checks it right away. The list shows Send to as icons (envelope, webhook, note) |
 | Email to | Shown with Email on. One or more addresses, separated by commas (at most 20). **Send a test email** checks the mail path right away |
 | Sync the picked sources first | Starts a sync of each picked source and waits for it (up to 30 minutes) before asking |
 | Attach the HTML report | When the answer made a report or dashboard, the `.html` file is attached (up to 12 MB) |
@@ -1265,6 +1265,51 @@ Then `docker compose up -d vco-ask`. The page finds the agent at `http://host.do
 
 The same numbers are at `GET /api/perf?hours=1` (with the API token), for your own monitoring.
 
+### Apple Notes
+
+Ask answers can become notes in the **Notes** app on your Mac (and, with iCloud, on your iPhone and iPad). Ask runs in a container and can't reach Notes, so the **host agent** (0.5.0 or newer, see [Performance page and host agent](#performance-page-and-host-agent)) makes the note with `osascript`.
+
+- **Save to Apple Notes** under every answer, next to **Copy answer**. The note's title is the question; the body has the question, the answer (headings, lists, bold, links and tables carry over) and an **Open in vCommunity Ask** link back to the chat. The button shows only when Apple Notes is on and a host agent URL is set.
+- **Scheduled prompts:** switch on **Apple Notes** under **Send to**, alone or with Email and Webhook. Each run makes a note titled *<schedule name>: <date>* with the same parts as the email (prompt, answer, sources, Ask link). A failure shows as *not sent* in the run history with the reason.
+- **Settings:** **Apple Notes** on or off (`notes_enabled`, `ASK_NOTES`, default on) and **Notes folder** (`notes_folder`, `ASK_NOTES_FOLDER`, default *vCommunity Ask*). The folder is made in the default Notes account when missing.
+- **First use:** macOS asks once whether the agent (python3) may control Notes. Allow it. If you said no, turn it on in **System Settings → Privacy & Security → Automation**; until then Ask shows *macOS did not allow the agent to control Notes*.
+- **Update the agent once:** run `ask/agent/Install-AskAgent.ps1` (or `install.sh`) again for 0.5.0. An older agent answers *older than 0.5.0*.
+- Charts, reports and draw.io diagrams go in as links back to Ask, not as pictures. The Mac and the agent must be running.
+- Agent API: `POST /notes/create {"title", "html", "folder"}` (token as for the other agent calls). The body goes to `osascript` through a temporary file, so quotes and length are no problem. Raw HTML in an answer is shown as text, not run.
+- Tested with a stand-in agent and a stand-in `osascript` (`ask/tests/test_applenotes.py`); not yet run against the real Notes app.
+
+### Apple Reminders (MCP tools)
+
+`ask/agent/apple-mcp.py` is a small MCP server (Python, standard library only) that lets the model work with **Apple Reminders** lists, for example *Add milk, eggs and coffee to my Groceries list*. The host agent runs it on the Mac like your PowerShell MCP server, and it talks to Reminders with `osascript`.
+
+| Tool | Does | Asks first? |
+| --- | --- | --- |
+| `reminders_lists` | Names of your Reminders lists | No (read-only) |
+| `reminders_list` | Open (not completed) items of a list | No (read-only) |
+| `reminders_add` | Adds items (one per entry); items already open on the list are skipped, so nothing is doubled | Yes, unless you set it to **Always allow** on the MCP tools page |
+| `reminders_complete` | Ticks off open items by name | Yes, as above |
+
+**Set up (once):**
+
+1. Add the server to the agent's MCP config, `~/.config/ask-host-agent/mcp.json` (PowerShell):
+
+   ```powershell
+   $f = "$HOME/.config/ask-host-agent/mcp.json"
+   $j = Get-Content $f -Raw | ConvertFrom-Json -AsHashtable
+   $j.mcpServers.apple = @{ type = 'stdio'; command = 'python3'; env = @{}
+     args = @("$HOME/Library/Application Support/ask-host-agent/apple-mcp.py") }
+   $j | ConvertTo-Json -Depth 10 | Set-Content $f
+   ```
+
+   The agent reads the file again when it changes; no restart. Point it at the copy the installer puts in `~/Library/Application Support/ask-host-agent` (run `Install-AskAgent.ps1` or `install.sh` once): macOS doesn't let the agent, a LaunchAgent, read files under `~/Documents`, so the repo path fails with *Operation not permitted*.
+2. Open **MCP tools** in Ask: the **apple** server should say **running** with its four tools.
+3. In the chat, tick **apple** under **Tools (MCP)** in Sources and ask: *Add milk, eggs, bread and coffee to my Groceries list.* The first time, macOS asks whether python3 may control Reminders: click **Allow** (or later in **System Settings → Privacy & Security → Automation**).
+
+- **No list named?** The tools use `Groceries` (set another default with `APPLE_MCP_DEFAULT_LIST` in the server's `env`). Name the list in the prompt for any other: *add printer paper to my Work list*.
+- **Saved prompt:** *Add these to my Groceries list: {Items}* with the **apple** tools picked asks for the items each time you run it.
+- **Also:** *What's on my Groceries list?* and *I bought the milk and eggs, tick them off.*
+- Tested with a stand-in `osascript` (`ask/tests/test_apple_mcp.py`) and through the host agent's MCP bridge; not yet against the real Reminders app.
+
 ### MCP tools (your own MCP servers)
 
 Ask can call the tools of your own **MCP servers**, for example a PowerShell MCP server whose tools are PowerShell functions (PowerCLI, RVTools, VCF Operations, switches). Pick **Tools: &lt;server&gt;** in the chat's **Sources** menu and the model decides which tools to call, with which arguments, and answers from what they return. Each result is one more numbered source, so `[n]` citations point at it.
@@ -1510,6 +1555,8 @@ Settings → **Monthly web budget (US$)** (`ASK_WEB_BUDGET`, default 0 = no budg
 | `ASK_SQLITE_MMAP_MB` | Memory-mapped I/O for `ask.db`, in MB (default 0 = off). Measure before keeping it, especially on Docker Desktop for Mac |
 | `ASK_AGENT_TOKEN` | Token of the Ask host agent (printed by `Install-AskAgent.ps1`), for the Performance page |
 | `ASK_AGENT_URL` | Where Ask reaches the host agent (default `http://host.docker.internal:9101`) |
+| `ASK_NOTES` | `1` (default) shows **Save to Apple Notes** under answers and allows Apple Notes for scheduled prompts (needs the host agent 0.5.0+) |
+| `ASK_NOTES_FOLDER` | Notes folder for those notes (default `vCommunity Ask`, made when missing) |
 | `OLLAMA_API_KEY` | ollama.com API key for [Web search (Ollama)](#web-search-ollama). Secret: keep it in `.env` only |
 | `X_BEARER_TOKEN` | X API Bearer token for the [X posts](#x-posts-accounts) source. Secret: keep it in `.env` only |
 | `BRAVE_API_KEY` | Brave Search API key for [Web search (Brave)](#web-search-brave). Secret: keep it in `.env` only |
@@ -1687,7 +1734,7 @@ Put draw.io library files (`.xml`, `<mxlibrary>`, as saved from draw.io with Fil
 - **Automatic tidy layout.** Models still crowd shapes or blow icons up, so after the swap Ask lays the shapes out itself (`drawio_libs.tidy`, on by default, `ASK_DRAWIO_TIDY=0` turns it off). Inside every container, deepest first: icons go back to 64 x 64, shapes whose tops are within 40 px share a row (kept in the model's left-to-right order), each icon gets a 140 px wide slot so its name fits, rows are 130 px apart, the first row starts 20 px below the header, containers side by side in a row get the same height, and each container is resized to fit what it holds (at least wide enough for its title). Top-level shapes (for example two sites) are then put on rows 40 px apart so the grown containers don't overlap. The model's grouping and order are kept; its exact coordinates are not. Diagrams built from a *Starter —* layout are left as they are.
 - **Containers and starters.** Entries with several cells (a container with its header icon, or a whole starter layout such as *Starter — Two-instance VCF Fleet*) are copied whole, with new ids.
 - **Image entries** (`"data": "data:image/..."`) become image shapes.
-- **In the editor sidebar.** `/diagrams/<name>/web` opens the web editor with `clibs=` pointing at `/drawio-libs/<file>` on Ask (served with `Access-Control-Allow-Origin: *`, plus `cors=` for Ask's address), so you can drag more of your shapes in. In draw.io Desktop open a library once with File → Open Library from → Device; Desktop keeps it.
+- **In the editor sidebar.** `/diagrams/<name>/web` opens the web editor with your libraries in its left sidebar (`clibs=`), so you can drag more of your shapes in. The local editor container blocks loading files from any other address (its Content-Security-Policy allows only `connect-src 'self'`), so `docker-compose.yml` also mounts `./drawio-libs` into the editor at `/usr/local/tomcat/webapps/draw/drawio-libs` (read-only) and the link points at `http://localhost:8082/drawio-libs/<file>`. Only when the editor is app.diagrams.net does the link point at Ask's `/drawio-libs/<file>` (served with `Access-Control-Allow-Origin: *`, plus `cors=`). The files must be readable by everyone (`chmod 644`), or the editor answers 403. In draw.io Desktop open a library once with File → Open Library from → Device; Desktop keeps it.
 - Example prompt: *Using my shape library, draw a VCF management domain with vCenter Server, NSX Manager, SDDC Manager and a vSphere Cluster inside a Management Domain container.* Or *Use the shape "Starter — Two-instance VCF Fleet".*
 - The shape list goes into the system prompt (about 8,000 characters for a 215-shape library), so very large libraries use more of the context.
 - Not tested with the real draw.io containers yet: expansion was checked against a 215-shape VCF library (all shapes, ids unique, every parent present).
@@ -2102,6 +2149,7 @@ ask/                    vCommunity Ask (second container)
   app/webusage.py       counts web calls for the Performance page's usage and cost panel
   app/schedules.py      scheduled prompts: APScheduler jobs, headless answers saved as chats, the email and webhook (Notifier)
   agent/ask-host-agent.py  Ask host agent for the Mac (standard library only; performance numbers and the MCP bridge), plus Install-AskAgent.ps1 and install.sh
+  agent/apple-mcp.py       Apple Reminders MCP server the agent can run (add to and read Reminders lists)
   config/               ask.example.yaml
   scripts/fake_ollama.py  stand-in for Ollama, for tests (also answers with tool calls)
   scripts/fake_mcp.py   stand-in stdio MCP server (three tools), for tests
@@ -2132,6 +2180,10 @@ requirements.in/.txt    direct dependencies / hashed lock file
 
 | Date | Change |
 | --- | --- |
+| 2026-11-23 | Fix: the agent could not start `apple-mcp.py` from the repo under `~/Documents` (*Operation not permitted*, macOS privacy). The agent installers now copy it to `~/Library/Application Support/ask-host-agent`, and the README points `mcp.json` there. |
+| 2026-11-23 | **Apple Reminders** MCP tools: new `ask/agent/apple-mcp.py` (stdio MCP server, standard library; `reminders_lists`, `reminders_list`, `reminders_add` with duplicate skip, `reminders_complete`; osascript), run by the host agent from `~/.config/ask-host-agent/mcp.json`, so a prompt can add items to the Groceries list. Test `ask/tests/test_apple_mcp.py`. |
+| 2026-11-23 | Ask: **Apple Notes**. **Save to Apple Notes** under every answer and **Apple Notes** under a scheduled prompt's **Send to** (new column `send_notes`). New `ask/app/applenotes.py` (Markdown to note HTML, `POST /ui/notes`); host agent **0.5.0** `POST /notes/create` runs `osascript` (folder made when missing). Settings **Apple Notes** (`ASK_NOTES`) and **Notes folder** (`ASK_NOTES_FOLDER`). Tests `ask/tests/test_applenotes.py`. |
+| 2026-11-22 | Fix: your shape libraries didn't load in the local draw.io editor's sidebar (its CSP blocks fetching from Ask). Compose now mounts `./drawio-libs` into the `drawio` container (`/usr/local/tomcat/webapps/draw/drawio-libs`, read-only) and `drawio.editor_link` points `clibs=` at the editor's own `/drawio-libs/`; app.diagrams.net still loads them from Ask with `cors=`. Tested with the real `jgraph/drawio` image. |
 | 2026-11-22 | README: new **Writing diagram prompts** section (words-only prompts, questionnaire and saved-prompt `{variables}`, naming shapes, editing labels in draw.io, missing links). Ask and Observability About pages mention the draw.io editor, draw.io Desktop and your own shape libraries. |
 | 2026-11-22 | Saved prompts: up to **30** `{variables}` per prompt (was 8, `saved.MAX_VARS`); the fill-in window scrolls. |
 | 2026-11-22 | draw.io shape libraries: **automatic tidy layout** (`drawio_libs.tidy`, `ASK_DRAWIO_TIDY`, default on): icons reset to 64 x 64, rows on a 140 px grid with room for names, containers resized to fit, top-level containers kept apart. Starter layouts untouched. Test `TidyLayout` in `ask/tests/test_drawio_libs.py`. |

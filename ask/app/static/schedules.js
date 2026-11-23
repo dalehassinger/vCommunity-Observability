@@ -46,6 +46,7 @@
         only_changed: f.only_changed.checked, enabled: f.enabled.checked,
         include_prompt: f.include_prompt.checked, include_sources: f.include_sources.checked,
         avoid_repeats: f.avoid_repeats.checked, send_email: f.send_email.checked, send_webhook: f.send_webhook.checked,
+        send_notes: f.send_notes ? f.send_notes.checked : false,
         webhook_name: f.webhook_name ? f.webhook_name.value : '', homeview: f.homeview.checked
       };
     }

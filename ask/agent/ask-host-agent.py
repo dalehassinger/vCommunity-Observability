@@ -24,6 +24,10 @@ draw.io Desktop (0.4.0): POST /drawio/open {"name": "<file>.drawio", "xml": "...
 diagram Ask made into ~/Documents/vCommunity-Ask/Diagrams (--diagrams-dir) and opens it with
 `open -a draw.io` (--drawio-app), so "Open in draw.io Desktop" in the chat opens the app.
 
+Apple Notes (0.5.0): POST /notes/create {"title": "...", "html": "<p>...</p>", "folder": "vCommunity Ask"}
+makes a new note in Notes (default account; the folder is created when missing) with
+osascript. macOS asks once to let the agent control Notes.
+
   python3 ask-host-agent.py --token-file ~/.config/ask-host-agent/token [--port 9101]
 
 Install it as a LaunchAgent with ask/agent/Install-AskAgent.ps1 or install.sh."""
@@ -44,7 +48,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 MAC = sys.platform == "darwin"
 
 
@@ -569,6 +573,51 @@ class McpHub:
         return s
 
 
+NOTES_SCRIPT = """on run argv
+  set noteTitle to item 1 of argv
+  set folderName to item 2 of argv
+  set noteBody to read (POSIX file (item 3 of argv)) as «class utf8»
+  tell application "Notes"
+    set acc to default account
+    if not (exists folder folderName of acc) then make new folder at acc with properties {name:folderName}
+    set n to make new note at folder folderName of acc with properties {name:noteTitle, body:noteBody}
+    return id of n
+  end tell
+end run"""
+
+
+def note_body(title: str, html: str) -> str:
+    """Notes shows the first line of the body as the note's title, so the body starts with it."""
+    from html import escape
+    return f"<h1>{escape(title)}</h1>{html}"
+
+
+def create_note(title: str, html: str, folder: str) -> tuple[bool, str]:
+    """Make the note with osascript; the body goes through a temporary file (no quoting trouble,
+    no argument length limit). Returns (ok, note id or error)."""
+    import tempfile
+    fd, path = tempfile.mkstemp(prefix="ask-note-", suffix=".html")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(note_body(title, html))
+        r = subprocess.run(["osascript", "-e", NOTES_SCRIPT, title, folder, path],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, f"osascript failed: {e}"
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    if r.returncode != 0:
+        err = (r.stderr or r.stdout).strip()[:300]
+        if "-1743" in err or "not allowed" in err.lower():
+            err = ("macOS did not allow the agent to control Notes. Allow it in System Settings > "
+                   "Privacy & Security > Automation (python3 > Notes), then try again. (" + err + ")")
+        return False, err
+    return True, r.stdout.strip()
+
+
 def make_handler(collector: Collector, token: str, hub: "McpHub | None" = None,
                  diagrams_dir: str = os.path.expanduser("~/Documents/vCommunity-Ask/Diagrams"),
                  drawio_app: str = "draw.io"):
@@ -598,6 +647,8 @@ def make_handler(collector: Collector, token: str, hub: "McpHub | None" = None,
         def do_POST(self):
             if self.path.split("?")[0] == "/drawio/open":
                 return self._drawio_open()
+            if self.path.split("?")[0] == "/notes/create":
+                return self._notes_create()
             # MCP bridge: POST /mcp/<server>/call {"tool", "arguments", "timeout"} and /mcp/<server>/reload
             parts = self.path.split("?")[0].strip("/").split("/")
             if len(parts) != 3 or parts[0] != "mcp" or parts[2] not in ("call", "reload"):
@@ -667,6 +718,25 @@ def make_handler(collector: Collector, token: str, hub: "McpHub | None" = None,
                 err = (r.stderr or r.stdout).strip()[:300]
             return self._send(200, {"ok": False, "path": path,
                                     "error": f"draw.io Desktop could not be opened ({err}). Is it installed in /Applications?"})
+
+        def _notes_create(self):
+            # POST /notes/create {"title", "html", "folder"}: a new note in Apple Notes.
+            if not self._authorized():
+                return
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(min(n, 5_000_000)) or b"{}") if n else {}
+            except ValueError:
+                return self._send(400, {"error": "body is not JSON"})
+            title = " ".join(str(body.get("title") or "").split())[:200]
+            html = str(body.get("html") or "")
+            folder = " ".join(str(body.get("folder") or "vCommunity Ask").split())[:80] or "vCommunity Ask"
+            if not title or not html.strip():
+                return self._send(400, {"error": "title and html are needed"})
+            if not MAC:
+                return self._send(200, {"ok": False, "error": "Apple Notes is on macOS only"})
+            ok, out = create_note(title, html, folder)
+            return self._send(200, {"ok": True, "id": out, "folder": folder} if ok else {"ok": False, "error": out})
 
         def do_GET(self):
             path = self.path.split("?")[0]

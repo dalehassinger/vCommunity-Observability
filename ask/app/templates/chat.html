@@ -98,7 +98,8 @@
   window.ASK = {
     chatId: {{ (chat.id if chat else "") | tojson }},
     messages: {{ messages | tojson }},
-    model: {{ settings.chat_model | tojson }}
+    model: {{ settings.chat_model | tojson }},
+    notes: {{ 'true' if (settings.notes_enabled and settings.agent_url) else 'false' }}
   };
 </script>
 <script defer src="/shared/vendor/marked/marked.umd.js?v={{ asset_v }}"></script>

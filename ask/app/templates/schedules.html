@@ -64,6 +64,7 @@
       <div><div class="sched-sendto">
           <label class="switch"><input type="checkbox" role="switch" name="send_email" {{ 'checked' if c.send_email is not defined or c.send_email else '' }}><span></span>Email</label>
           <label class="switch"><input type="checkbox" role="switch" name="send_webhook" {{ 'checked' if c.send_webhook else '' }}><span></span>Webhook</label>
+          <label class="switch" title="A new note in Apple Notes on your Mac (Settings > Notes folder), made by the host agent"><input type="checkbox" role="switch" name="send_notes" {{ 'checked' if c.send_notes else '' }}><span></span>Apple Notes</label>
           <select name="webhook_name" id="f-webhook" data-hook aria-label="Which webhook">
             <option value="">Default webhook</option>
             {% for w in webhooks or [] %}<option value="{{ w }}" {{ 'selected' if c.webhook_name == w else '' }}>{{ w }}</option>{% endfor %}
@@ -128,7 +129,8 @@
         </td>
         <td class="sched-meta sched-sendto-cell">
           {% if s.send_email is not defined or s.send_email %}<span class="sendto" title="Email to {{ s.recipients }}"><svg class="sendto-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v12H3z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3 7l9 6 9-6" fill="none" stroke="currentColor" stroke-width="1.8"/></svg><span class="sendto-text">{{ s.recipients | truncate(40) }}</span></span>{% endif %}
-          {% if s.send_webhook %}<span class="sendto" title="Webhook: {{ s.webhook_name or 'default' }}"><svg class="sendto-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span class="sendto-text">{{ s.webhook_name or 'Webhook' }}</span></span>{% endif %}</td>
+          {% if s.send_webhook %}<span class="sendto" title="Webhook: {{ s.webhook_name or 'default' }}"><svg class="sendto-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span class="sendto-text">{{ s.webhook_name or 'Webhook' }}</span></span>{% endif %}
+          {% if s.send_notes %}<span class="sendto" title="Apple Notes on the Mac"><svg class="sendto-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9 11h7M9 15h7" fill="none" stroke="currentColor" stroke-width="1.8"/></svg><span class="sendto-text">Apple Notes</span></span>{% endif %}</td>
         <td><label class="switch"><input type="checkbox" role="switch" data-enable="{{ s.id }}" aria-label="Run {{ s.name }} on its schedule" {{ 'checked' if s.enabled else '' }}><span></span></label></td>
         <td class="sched-acts">
           <button class="link-btn" type="button" data-run="{{ s.id }}" {{ 'disabled' if s.running else '' }}>Run now</button> ·
